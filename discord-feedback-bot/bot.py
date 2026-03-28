@@ -1661,6 +1661,9 @@ class FeedbackBot(discord.Client):
 
     async def on_ready(self) -> None:
         if not self.synced:
+            # Clear global commands to remove duplicates
+            self.tree.clear_commands(guild=None)
+            await self.tree.sync()
             if GUILD_ID:
                 guild = discord.Object(id=int(GUILD_ID))
                 self.tree.copy_global_to(guild=guild)
