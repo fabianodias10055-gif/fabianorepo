@@ -14,6 +14,8 @@ jobs:
     env:
       DUB_API_KEY: ${{ secrets.DUB_API_KEY }}
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+      DISCORD_DM_USER_ID: ${{ secrets.DISCORD_DM_USER_ID }}
       DUB_TIMEZONE: America/Sao_Paulo
       DUB_REPORT_LIMIT: "5"
       DISCORD_WEBHOOK_USERNAME: Dub Daily Report
@@ -26,8 +28,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependency
-        run: pip install python-dotenv
+      - name: Install dependencies
+        run: pip install python-dotenv discord.py
 
       - name: Send last 24 hours report
         run: python scripts/dub_daily_report.py --window last-24h
