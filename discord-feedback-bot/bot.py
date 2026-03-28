@@ -1644,6 +1644,8 @@ class FeedbackBot(discord.Client):
             # Clear global commands to remove duplicates
             self.tree.clear_commands(guild=None)
             await self.tree.sync()
+            # Re-add commands and sync to guild
+            self.tree.add_command(report_command_slash)
             if GUILD_ID:
                 guild = discord.Object(id=int(GUILD_ID))
                 self.tree.copy_global_to(guild=guild)
