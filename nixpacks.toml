@@ -1,5 +1,5 @@
 [phases.install]
-cmds = ["pip install -r discord-feedback-bot/requirements.txt"]
+cmds = ["pip3 install -r discord-feedback-bot/requirements.txt"]
 
 [start]
-cmd = "python discord-feedback-bot/bot.py"
+cmd = "python3 discord-feedback-bot/bot.py"
