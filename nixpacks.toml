@@ -1,8 +1,11 @@
 [phases.setup]
-aptPkgs = ["python3", "python3-pip"]
+aaptPkgs = ["python3", "python3-pip", "python3-venv"]
 
 [phases.install]
-cmds = ["pip3 install -r discord-feedback-bot/requirements.txt"]
+cmds = [
+  "python3 -m venv /opt/venv",
+  "/opt/venv/bin/pip install -r discord-feedback-bot/requirements.txt"
+]
 
 [start]
-cmd = "python3 discord-feedback-bot/bot.py"
+cmd = "/opt/venv/bin/python3 discord-feedback-bot/bot.py"
