@@ -2,6 +2,5 @@
   builder = "NIXPACKS"
 
 [deploy]
-  startCommand = "python3 discord-feedback-bot/bot.py"
   restartPolicyType = "ON_FAILURE"
   restartPolicyMaxRetries = 10
