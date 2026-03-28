@@ -1525,7 +1525,12 @@ def _http_get_report(url: str, headers: dict | None = None) -> dict:
 
 def _build_dub_embed() -> discord.Embed:
     from urllib import parse as _parse
-    now = datetime.now(timezone.utc)
+    try:
+        from zoneinfo import ZoneInfo
+        _tz = ZoneInfo("America/Sao_Paulo")
+    except Exception:
+        _tz = timezone(timedelta(hours=-3))
+    now = datetime.now(_tz)
     start = (now - timedelta(hours=24)).isoformat()
     end = now.isoformat()
     query = _parse.urlencode({
