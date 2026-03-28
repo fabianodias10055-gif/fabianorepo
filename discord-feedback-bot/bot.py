@@ -776,7 +776,7 @@ async def run_appreciation_scan(
         await interaction.response.send_message("Use this command inside a server.", ephemeral=True)
         return
 
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    await interaction.response.defer(thinking=True)
     results, skipped = await scan_text_channels(
         guild,
         channels,
@@ -1099,7 +1099,7 @@ async def save_testimonial(interaction: discord.Interaction, message_link: str) 
         )
         return
 
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    await interaction.response.defer(thinking=True)
     try:
         channel = guild.get_channel(channel_id) or await guild.fetch_channel(channel_id)
         if not isinstance(channel, (discord.TextChannel, discord.Thread)):
@@ -1201,7 +1201,7 @@ async def create_project_post(
         )
         return
 
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    await interaction.response.defer(thinking=True)
     try:
         create_kwargs = {
             "name": title.strip(),
@@ -1280,7 +1280,7 @@ async def edit_project_post(
         )
         return
 
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    await interaction.response.defer(thinking=True)
 
     try:
         if title is not None and title.strip():
@@ -1348,7 +1348,7 @@ async def digest_weekly(
         return
 
     bounded_days = max(1, min(days, 365))
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    await interaction.response.defer(thinking=True)
     after = datetime.now(timezone.utc) - timedelta(days=bounded_days)
     results, skipped = await scan_text_channels(
         guild,
@@ -1389,7 +1389,7 @@ async def scan_bug_praise_split(
     if guild is None:
         return
 
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    await interaction.response.defer(thinking=True)
     praise, issues, skipped = await scan_bug_praise_channels(
         guild,
         guild.text_channels,
@@ -1431,7 +1431,7 @@ async def scan_creator_mentions(
     if guild is None:
         return
 
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    await interaction.response.defer(thinking=True)
     results, skipped = await scan_text_channels(
         guild,
         guild.text_channels,
@@ -1474,7 +1474,7 @@ async def sentiment_report(
         return
 
     bounded_days = max(1, min(days, 365))
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    await interaction.response.defer(thinking=True)
     after = datetime.now(timezone.utc) - timedelta(days=bounded_days)
     results, skipped = await scan_text_channels(
         guild,
@@ -1609,22 +1609,22 @@ async def report_command_slash(
     interaction: discord.Interaction,
     type: app_commands.Choice[str],
 ) -> None:
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    await interaction.response.defer(thinking=True)
     try:
         loop = asyncio.get_event_loop()
         if type.value == "dub":
             if not DUB_API_KEY:
-                await interaction.followup.send("DUB_API_KEY is not configured.", ephemeral=True)
+                await interaction.followup.send("DUB_API_KEY is not configured.")
                 return
             embed = await loop.run_in_executor(None, _build_dub_embed)
         else:
             if not YOUTUBE_API_KEY:
-                await interaction.followup.send("YOUTUBE_API_KEY is not configured.", ephemeral=True)
+                await interaction.followup.send("YOUTUBE_API_KEY is not configured.")
                 return
             embed = await loop.run_in_executor(None, _build_ue5_embed)
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed)
     except Exception as exc:
-        await interaction.followup.send(f"Error generating report: {exc}", ephemeral=True)
+        await interaction.followup.send(f"Error generating report: {exc}")
 
 class FeedbackBot(discord.Client):
     def __init__(self) -> None:
