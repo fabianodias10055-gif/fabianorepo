@@ -2,7 +2,7 @@ name: Dub Daily Top 5 Report
 
 on:
   schedule:
-    - cron: "0 12 * * *"
+    - cron: "4 13 * * *"
   workflow_dispatch:
 
 jobs:
