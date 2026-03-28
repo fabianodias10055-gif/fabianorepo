@@ -1531,7 +1531,7 @@ def _build_dub_embed() -> discord.Embed:
     except Exception:
         _tz = timezone(timedelta(hours=-3))
     now = datetime.now(_tz)
-    start = (now - timedelta(hours=24)).isoformat()
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     end = now.isoformat()
     query = _parse.urlencode({
         "event": "clicks", "groupBy": "top_links",
@@ -1543,16 +1543,17 @@ def _build_dub_embed() -> discord.Embed:
         {"Authorization": f"Bearer {DUB_API_KEY}", "Accept": "application/json"},
     )
     if not data:
-        return discord.Embed(title="Dub Click Report", description="No clicks in the last 24 hours.", color=0xF97316)
+        return discord.Embed(title="Dub Click Report", description="No clicks today.", color=0xF97316)
     lines = []
     for i, entry in enumerate(data[:5], 1):
         label = entry.get("label") or entry.get("key") or f"Link {i}"
         clicks = int(entry.get("clicks") or 0)
         lines.append(f"{i}. **{label}** — {clicks} click{'s' if clicks != 1 else ''}")
     total = sum(int(e.get("clicks") or 0) for e in data[:5])
+    today_str = now.strftime("%b %d, %Y")
     embed = discord.Embed(
         title="Dub Click Report",
-        description="Top 5 clicked links in the last 24 hours\n\n" + "\n".join(lines),
+        description=f"Top 5 clicked links today ({today_str})\n\n" + "\n".join(lines),
         color=0xF97316,
     )
     embed.add_field(name="Total Clicks", value=str(total), inline=True)
