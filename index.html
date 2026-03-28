@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Snake</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="app">
+    <section class="card" aria-label="Snake game">
+      <header class="game-header">
+        <div>
+          <h1>Snake</h1>
+          <p class="subtitle">Classic Snake in a fully 3D arena with one AI rival.</p>
+        </div>
+        <div class="scoreboard" aria-live="polite">
+          <div class="score-item">
+            <span class="score-label">You</span>
+            <strong id="player-score">0</strong>
+          </div>
+          <div class="score-item">
+            <span class="score-label">AI</span>
+            <strong id="ai-score">0</strong>
+          </div>
+        </div>
+      </header>
+
+      <div class="status-row">
+        <p id="status">Press Start or use an arrow key to begin.</p>
+        <div class="actions">
+          <button id="start-button" type="button">Start</button>
+          <button id="restart-button" type="button">Restart</button>
+        </div>
+      </div>
+
+      <div class="board-shell">
+        <canvas
+          id="game-board"
+          class="board-stage"
+          aria-label="3D snake game board"
+        ></canvas>
+      </div>
+
+      <section class="controls" aria-label="On-screen controls">
+        <button class="control-button" data-direction="up" type="button" aria-label="Move up">Up</button>
+        <div class="controls-row">
+          <button class="control-button" data-direction="left" type="button" aria-label="Move left">Left</button>
+          <button class="control-button" data-direction="down" type="button" aria-label="Move down">Down</button>
+          <button class="control-button" data-direction="right" type="button" aria-label="Move right">Right</button>
+        </div>
+      </section>
+
+      <section class="help">
+        <p>Controls: Arrow keys, WASD, or Space to pause</p>
+        <p>Reach food before the AI and avoid walls, snakes, and the arena edge</p>
+      </section>
+    </section>
+  </main>
+
+  <script src="./script.js"></script>
+</body>
+</html>

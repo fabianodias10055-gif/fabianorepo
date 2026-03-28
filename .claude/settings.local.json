@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell.exe -Command \"Get-WmiObject Win32_Process -Filter \"\"Name=''python.exe''\"\" | Select-Object ProcessId, CommandLine | Format-List\")",
+      "Bash(powershell.exe -Command \"Get-WmiObject Win32_Process -Filter \"\"ProcessId=22140\"\" | Select-Object ProcessId, ParentProcessId, CommandLine | Format-List\")",
+      "Bash(powershell.exe -Command \"Get-WmiObject Win32_Process -Filter \"\"ProcessId=59924\"\" | Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-List\")",
+      "Bash(powershell.exe -Command \"Get-WmiObject Win32_Process -Filter \"\"ProcessId=43384\"\" | Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-List\")"
+    ]
+  }
+}
