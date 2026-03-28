@@ -1637,26 +1637,6 @@ class FeedbackBot(discord.Client):
         self.synced = False
 
     async def setup_hook(self) -> None:
-        self.tree.add_command(scan_feedback)
-        self.tree.add_command(scan_thanks)
-        self.tree.add_command(scan_channel)
-        self.tree.add_command(summary_thanks)
-        self.tree.add_command(top_comments)
-        self.tree.add_command(search_praise)
-        self.tree.add_command(export_csv_command)
-        self.tree.add_command(stats_thanks)
-        self.tree.add_command(recent_thanks)
-        self.tree.add_command(user_love)
-        self.tree.add_command(channel_leaderboard)
-        self.tree.add_command(quote_testimonials)
-        self.tree.add_command(save_testimonial)
-        self.tree.add_command(draft_post)
-        self.tree.add_command(create_project_post)
-        self.tree.add_command(edit_project_post)
-        self.tree.add_command(digest_weekly)
-        self.tree.add_command(scan_bug_praise_split)
-        self.tree.add_command(scan_creator_mentions)
-        self.tree.add_command(sentiment_report)
         self.tree.add_command(report_command_slash)
 
     async def on_ready(self) -> None:
