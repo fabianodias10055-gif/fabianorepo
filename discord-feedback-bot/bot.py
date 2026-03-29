@@ -1736,6 +1736,95 @@ async def check_patron_slash(interaction: discord.Interaction, user: discord.Mem
         await interaction.followup.send(f"Error checking Patreon: {exc}", ephemeral=True)
 
 
+def _fetch_top_patrons(limit: int = 10) -> list[dict]:
+    from urllib import request as _req, parse as _parse
+    req = _req.Request(
+        "https://www.patreon.com/api/oauth2/v2/campaigns",
+        headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
+    )
+    with _req.urlopen(req, timeout=30) as resp:
+        campaigns = json.load(resp)
+    campaign_id = campaigns["data"][0]["id"]
+
+    members = []
+    cursor = None
+    while True:
+        params: dict = {
+            "include": "currently_entitled_tiers",
+            "fields[member]": "patron_status,currently_entitled_amount_cents,full_name,lifetime_support_cents",
+            "fields[tier]": "title",
+            "page[count]": "1000",
+        }
+        if cursor:
+            params["page[cursor]"] = cursor
+        req = _req.Request(
+            f"https://www.patreon.com/api/oauth2/v2/campaigns/{campaign_id}/members?{_parse.urlencode(params)}",
+            headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
+        )
+        with _req.urlopen(req, timeout=30) as resp:
+            data = json.load(resp)
+
+        tier_map = {
+            inc["id"]: inc.get("attributes", {}).get("title", "Unknown")
+            for inc in data.get("included", [])
+            if inc.get("type") == "tier"
+        }
+
+        for member in data.get("data", []):
+            attrs = member.get("attributes", {})
+            if attrs.get("patron_status") != "active_patron":
+                continue
+            tiers = [
+                tier_map.get(t["id"], "Unknown")
+                for t in member.get("relationships", {}).get("currently_entitled_tiers", {}).get("data", [])
+            ]
+            members.append({
+                "full_name": attrs.get("full_name", "Unknown"),
+                "amount_cents": attrs.get("currently_entitled_amount_cents") or 0,
+                "lifetime_cents": attrs.get("lifetime_support_cents") or 0,
+                "tiers": ", ".join(tiers) if tiers else "None",
+            })
+
+        next_cursor = data.get("meta", {}).get("pagination", {}).get("cursors", {}).get("next")
+        if not next_cursor:
+            break
+        cursor = next_cursor
+
+    members.sort(key=lambda m: m["amount_cents"], reverse=True)
+    return members[:limit]
+
+
+@app_commands.command(name="top_patrons", description="Show top Patreon members by pledge amount.")
+async def top_patrons_slash(interaction: discord.Interaction) -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    if not PATREON_ACCESS_TOKEN:
+        await interaction.followup.send("PATREON_ACCESS_TOKEN is not configured.", ephemeral=True)
+        return
+    try:
+        loop = asyncio.get_event_loop()
+        patrons = await loop.run_in_executor(None, _fetch_top_patrons)
+        if not patrons:
+            await interaction.followup.send("No active patrons found.", ephemeral=True)
+            return
+        lines = [
+            f"{i}. **{p['full_name']}** — ${p['amount_cents']/100:.2f}/month | {p['tiers']} | lifetime: ${p['lifetime_cents']/100:.2f}"
+            for i, p in enumerate(patrons, 1)
+        ]
+        embed = discord.Embed(
+            title="Top Patrons by Pledge Amount",
+            description="\n".join(lines),
+            color=0xF96854,
+        )
+        embed.set_footer(text="Active patrons only • Data from Patreon API")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except Exception as exc:
+        await interaction.followup.send(f"Error fetching patrons: {exc}", ephemeral=True)
+
+
 class FeedbackBot(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.default()
@@ -1750,6 +1839,7 @@ class FeedbackBot(discord.Client):
     async def setup_hook(self) -> None:
         self.tree.add_command(report_command_slash)
         self.tree.add_command(check_patron_slash)
+        self.tree.add_command(top_patrons_slash)
 
     async def on_ready(self) -> None:
         if not self.synced:
@@ -1759,6 +1849,7 @@ class FeedbackBot(discord.Client):
             # Re-add commands and sync to guild
             self.tree.add_command(report_command_slash)
             self.tree.add_command(check_patron_slash)
+            self.tree.add_command(top_patrons_slash)
             if GUILD_ID:
                 guild = discord.Object(id=int(GUILD_ID))
                 self.tree.copy_global_to(guild=guild)
