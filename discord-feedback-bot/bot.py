@@ -1957,8 +1957,8 @@ async def patreon_webhook_handler(request):
         if inc.get("type") == "tier":
             tier_title = inc.get("attributes", {}).get("title")
 
-    # Only mention if Discord is linked, otherwise use plain Patreon name
-    name = f"<@{discord_id}>" if discord_id else f"**{full_name}**"
+    # If Discord linked: show "@DiscordMention/Patreon Name", otherwise just Patreon name
+    name = f"<@{discord_id}>/**{full_name}**" if discord_id else f"**{full_name}**"
     tier_str = f" (**{tier_title}**)" if tier_title else ""
     dollars = amount_cents / 100
 
