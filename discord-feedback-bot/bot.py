@@ -1858,7 +1858,8 @@ def _fetch_recent_posts(tier_name: str = "LocoStandard", limit: int = 5) -> list
         published_at = (attrs.get("published_at") or "")[:10]
         posts.append({"title": title, "url": url, "published_at": published_at})
 
-    # Already ordered by newest first from API
+    # Sort by published date newest first
+    posts.sort(key=lambda p: p["published_at"], reverse=True)
     return posts[:limit]
 
 
