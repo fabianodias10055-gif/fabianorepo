@@ -1638,6 +1638,7 @@ class FeedbackBot(discord.Client):
         intents.guilds = True
         intents.guild_messages = True
         intents.message_content = True
+        intents.members = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.synced = False
@@ -1664,6 +1665,13 @@ class FeedbackBot(discord.Client):
 
         assert self.user is not None
         logger.info("Logged in as %s (%s)", self.user, self.user.id)
+
+    async def on_member_join(self, member: discord.Member) -> None:
+        try:
+            await member.send(f"Welcome to the server! 👋 {member.display_name}")
+            logger.info("Sent welcome DM to %s", member)
+        except discord.Forbidden:
+            logger.warning("Could not DM %s (DMs disabled)", member)
 
 
 client = FeedbackBot()
