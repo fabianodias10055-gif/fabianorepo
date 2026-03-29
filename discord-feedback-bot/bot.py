@@ -1667,8 +1667,41 @@ class FeedbackBot(discord.Client):
         logger.info("Logged in as %s (%s)", self.user, self.user.id)
 
     async def on_member_join(self, member: discord.Member) -> None:
+        message = (
+            f"Hey {member.mention}! 👋\n\n"
+            "Welcome to the **LocoDev UE5 Discord Server** 🚀\n"
+            "Glad to have you here!\n\n"
+            "This server is focused on high-quality **Unreal Engine 5** gameplay systems, especially Blueprint-driven AAA mechanics like locomotion, climbing, animation logic, and debugging workflows.\n\n"
+            "───────────────────\n\n"
+            "🔥 **START HERE**\n\n"
+            "📺 **Free UE5 Tutorials (YouTube)**\n"
+            "Learn real production systems, explained step-by-step:\n"
+            "> https://www.youtube.com/@LocoDev/videos\n\n"
+            "💎 **Premium Systems & Full Projects (Patreon)**\n"
+            "Ready-to-use systems, clean Blueprints, docs, and continuous updates:\n"
+            "> https://www.patreon.com/LocoDev\n\n"
+            "**Patreon includes:**\n"
+            "> ⚙️ Advanced locomotion & traversal systems\n"
+            "> 🧱 Clean, scalable Blueprint architecture\n"
+            "> 🎬 Animation-driven gameplay logic\n"
+            "> 🐛 Debug tools & AAA-style polish\n"
+            "> 📁 Exclusive projects and updates\n"
+            "> 📄 Documents to follow along\n"
+            "> 👕 Physical merch rewards\n\n"
+            "───────────────────\n\n"
+            "💬 **NEED HELP?**\n"
+            "> • Ask questions in the Discord channels\n"
+            "> • Share your work and get feedback\n"
+            "> • Learn from other devs building real systems\n"
+            "> • This community is about learning by building, not shortcuts\n\n"
+            "🔗 **ALREADY A PATREON MEMBER?**\n"
+            "> Go to your Patreon → connect your Discord account → unlock exclusive text channels here on the server.\n\n"
+            "───────────────────\n\n"
+            "Happy developing 🔧\n"
+            "— **LocoDev** 🚀"
+        )
         try:
-            await member.send(f"Welcome to the server! 👋 {member.display_name}")
+            await member.send(message)
             logger.info("Sent welcome DM to %s", member)
         except discord.Forbidden:
             logger.warning("Could not DM %s (DMs disabled)", member)
