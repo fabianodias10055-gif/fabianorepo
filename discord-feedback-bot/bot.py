@@ -30,7 +30,8 @@ load_dotenv(BASE_DIR / ".env")
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GUILD_ID = os.getenv("DISCORD_GUILD_ID")
 PATREON_WEBHOOK_SECRET = os.getenv("PATREON_WEBHOOK_SECRET", "")
-PATREON_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("PATREON_ANNOUNCEMENT_CHANNEL_ID", "1487894861834359027"))
+PATREON_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("PATREON_ANNOUNCEMENT_CHANNEL_ID", "1487222304277663794"))
+PATREON_PUBLIC_CHANNEL_ID = int(os.getenv("PATREON_PUBLIC_CHANNEL_ID", "1487894861834359027"))
 MAX_MESSAGES_PER_CHANNEL = int(os.getenv("MAX_MESSAGES_PER_CHANNEL", "250"))
 PROJECTS_FORUM_CHANNEL_ID = os.getenv("PROJECTS_FORUM_CHANNEL_ID")
 CREATOR_ALIASES = tuple(
@@ -1997,12 +1998,21 @@ async def patreon_webhook_handler(request):
         msg = None
 
     if msg:
+        # Send full message to #bot-reports
         channel = client.get_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID)
         if channel:
             await channel.send(msg)
             logger.info("Posted Patreon announcement: %s", msg)
         else:
             logger.warning("Announcement channel %s not found", PATREON_ANNOUNCEMENT_CHANNEL_ID)
+
+        # Send short public message to #patreon-members for new paid subscriptions
+        if event == "members:pledge:create" and tier_title:
+            public_name = f"<@{discord_id}>/**{full_name}**" if discord_id else f"**{full_name}**"
+            public_msg = f"💎 {public_name} joined **{tier_title}**\n> 👉 patreon.com/LocoDev"
+            public_channel = client.get_channel(PATREON_PUBLIC_CHANNEL_ID)
+            if public_channel:
+                await public_channel.send(public_msg)
 
     return web.Response(status=200, text="OK")
 
