@@ -1913,6 +1913,66 @@ class FeedbackBot(discord.Client):
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.synced = False
+        self._status_task: asyncio.Task | None = None
+
+    def _clean_post_title(self, title: str) -> str:
+        import re
+        # Remove common suffixes from Patreon post titles
+        noise = [
+            r"\s*[-–]\s*(Premium|Standard|Basic)\s+Project\s+Files?",
+            r"\s*[-–]\s*(Premium|Standard|Basic)\s+Animations?\s+Pack",
+            r"\s*[-–]\s*Project\s+Files?",
+            r"\s*[-–]\s*Animations?\s+Pack",
+            r"\s*(Premium|Standard|Basic)\s+Project\s+Files?",
+        ]
+        for pattern in noise:
+            title = re.sub(pattern, "", title, flags=re.IGNORECASE)
+        return title.strip()
+
+    async def _rotate_status(self) -> None:
+        import random
+        await self.wait_until_ready()
+        while not self.is_closed():
+            try:
+                statuses = []
+
+                # 1. Latest Patreon post title
+                if PATREON_ACCESS_TOKEN:
+                    try:
+                        loop = asyncio.get_event_loop()
+                        posts = await loop.run_in_executor(None, _fetch_recent_posts, "LocoStandard", 1)
+                        if posts:
+                            clean = self._clean_post_title(posts[0]["title"])
+                            statuses.append(discord.Activity(type=discord.ActivityType.playing, name=clean))
+                    except Exception:
+                        pass
+
+                # 2. Live patron count
+                if PATREON_ACCESS_TOKEN:
+                    try:
+                        loop = asyncio.get_event_loop()
+                        patrons = await loop.run_in_executor(None, _fetch_top_patrons, 1000)
+                        statuses.append(discord.Activity(type=discord.ActivityType.watching, name=f"{len(patrons)} patrons"))
+                    except Exception:
+                        pass
+
+                # 3. Live server member count
+                if GUILD_ID:
+                    guild = self.get_guild(int(GUILD_ID))
+                    if guild:
+                        statuses.append(discord.Activity(type=discord.ActivityType.watching, name=f"{guild.member_count} devs"))
+
+                # 4. Fixed statuses
+                statuses.append(discord.Activity(type=discord.ActivityType.listening, name="LocoDev"))
+                statuses.append(discord.Activity(type=discord.ActivityType.watching, name="UE5 Devs build"))
+                statuses.append(discord.Game(name="Unreal Engine 5"))
+
+                if statuses:
+                    await self.change_presence(activity=random.choice(statuses))
+            except Exception as exc:
+                logger.warning("Status rotation error: %s", exc)
+
+            await asyncio.sleep(600)  # 10 minutes
 
     async def setup_hook(self) -> None:
         self.tree.add_command(report_command_slash)
@@ -1939,6 +1999,9 @@ class FeedbackBot(discord.Client):
                 await self.tree.sync()
                 logger.info("Synced global commands")
             self.synced = True
+
+        if self._status_task is None or self._status_task.done():
+            self._status_task = asyncio.create_task(self._rotate_status())
 
         assert self.user is not None
         logger.info("Logged in as %s (%s)", self.user, self.user.id)
