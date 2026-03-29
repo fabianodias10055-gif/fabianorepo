@@ -29,6 +29,8 @@ load_dotenv(BASE_DIR / ".env")
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GUILD_ID = os.getenv("DISCORD_GUILD_ID")
+PATREON_WEBHOOK_SECRET = os.getenv("PATREON_WEBHOOK_SECRET", "")
+PATREON_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("PATREON_ANNOUNCEMENT_CHANNEL_ID", "1487222304277663794"))
 MAX_MESSAGES_PER_CHANNEL = int(os.getenv("MAX_MESSAGES_PER_CHANNEL", "250"))
 PROJECTS_FORUM_CHANNEL_ID = os.getenv("PROJECTS_FORUM_CHANNEL_ID")
 CREATOR_ALIASES = tuple(
@@ -1716,6 +1718,71 @@ class FeedbackBot(discord.Client):
             logger.warning("Role 'Member' not found in guild %s", member.guild.name)
 
 
+async def patreon_webhook_handler(request):
+    import hmac, hashlib
+    from aiohttp import web
+    body = await request.read()
+    sig = request.headers.get("X-Patreon-Signature", "")
+    if PATREON_WEBHOOK_SECRET:
+        expected = hmac.new(PATREON_WEBHOOK_SECRET.encode(), body, hashlib.md5).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return web.Response(status=403, text="Invalid signature")
+    event = request.headers.get("X-Patreon-Event", "")
+    try:
+        data = json.loads(body)
+    except Exception:
+        return web.Response(status=400, text="Invalid JSON")
+
+    if event in ("members:create", "members:pledge:create", "members:pledge:update"):
+        attrs = data.get("data", {}).get("attributes", {})
+        included = data.get("included", [])
+
+        full_name = attrs.get("full_name", "Someone")
+        patron_status = attrs.get("patron_status")
+        amount_cents = attrs.get("currently_entitled_amount_cents") or attrs.get("will_pay_amount_cents") or 0
+
+        # Try to find Discord ID from included user social_connections
+        discord_id = None
+        tier_title = None
+        for inc in included:
+            if inc.get("type") == "user":
+                social = inc.get("attributes", {}).get("social_connections", {})
+                if social and social.get("discord"):
+                    discord_id = social["discord"].get("user_id")
+            if inc.get("type") == "tier":
+                tier_title = inc.get("attributes", {}).get("title")
+
+        # Build message
+        mention = f"<@{discord_id}>" if discord_id else f"**{full_name}**"
+
+        if amount_cents == 0 or patron_status is None:
+            msg = f"🎉 {mention} just joined **LocoDev** on Patreon for free!"
+        else:
+            dollars = amount_cents / 100
+            tier_str = f" (**{tier_title}**)" if tier_title else ""
+            msg = f"💎 {mention} just subscribed to LocoDev on Patreon{tier_str} for **${dollars:.2f}/month**! Welcome!"
+
+        channel = client.get_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID)
+        if channel:
+            await channel.send(msg)
+            logger.info("Posted Patreon announcement: %s", msg)
+        else:
+            logger.warning("Announcement channel %s not found", PATREON_ANNOUNCEMENT_CHANNEL_ID)
+
+    return web.Response(status=200, text="OK")
+
+
+async def start_webhook_server():
+    from aiohttp import web
+    app = web.Application()
+    app.router.add_post("/patreon/webhook", patreon_webhook_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    await site.start()
+    logger.info("Patreon webhook server listening on port 8080")
+
+
 client = FeedbackBot()
 
 
@@ -1723,4 +1790,8 @@ if __name__ == "__main__":
     if not TOKEN:
         raise RuntimeError("Missing DISCORD_BOT_TOKEN in .env")
 
-    client.run(TOKEN, log_handler=None)
+    async def main():
+        await start_webhook_server()
+        await client.start(TOKEN)
+
+    asyncio.run(main())
