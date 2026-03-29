@@ -1790,7 +1790,7 @@ def _fetch_top_patrons(limit: int = 10) -> list[dict]:
             break
         cursor = next_cursor
 
-    members.sort(key=lambda m: m["amount_cents"], reverse=True)
+    members.sort(key=lambda m: m["lifetime_cents"], reverse=True)
     return members[:limit]
 
 
