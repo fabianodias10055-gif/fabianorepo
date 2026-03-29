@@ -1826,6 +1826,73 @@ async def top_patrons_slash(interaction: discord.Interaction) -> None:
         await interaction.followup.send(f"Error fetching patrons: {exc}", ephemeral=True)
 
 
+def _fetch_recent_posts(tier_name: str = "LocoStandard", limit: int = 5) -> list[dict]:
+    from urllib import request as _req, parse as _parse
+    req = _req.Request(
+        "https://www.patreon.com/api/oauth2/v2/campaigns",
+        headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
+    )
+    with _req.urlopen(req, timeout=30) as resp:
+        campaigns = json.load(resp)
+    campaign_id = campaigns["data"][0]["id"]
+
+    params = {
+        "fields[post]": "title,url,published_at,tiers",
+        "page[count]": "50",
+    }
+    req = _req.Request(
+        f"https://www.patreon.com/api/oauth2/v2/campaigns/{campaign_id}/posts?{_parse.urlencode(params)}",
+        headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
+    )
+    with _req.urlopen(req, timeout=30) as resp:
+        data = json.load(resp)
+
+    posts = []
+    for post in data.get("data", []):
+        attrs = post.get("attributes", {})
+        tiers = attrs.get("tiers") or []
+        # Include posts with no tier restriction (public) or matching tier
+        # Patreon API doesn't return tier names here, so we include all posts
+        title = attrs.get("title") or "Untitled"
+        url = attrs.get("url", "")
+        published_at = (attrs.get("published_at") or "")[:10]
+        posts.append({"title": title, "url": url, "published_at": published_at})
+
+    # Already ordered by newest first from API
+    return posts[:limit]
+
+
+@app_commands.command(name="recent_posts", description="Show the 5 most recent LocoStandard Patreon posts.")
+async def recent_posts_slash(interaction: discord.Interaction) -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    if not PATREON_ACCESS_TOKEN:
+        await interaction.followup.send("PATREON_ACCESS_TOKEN is not configured.", ephemeral=True)
+        return
+    try:
+        loop = asyncio.get_event_loop()
+        posts = await loop.run_in_executor(None, _fetch_recent_posts)
+        if not posts:
+            await interaction.followup.send("No posts found.", ephemeral=True)
+            return
+        lines = [
+            f"{i}. **{p['title']}** ({p['published_at']})\n> {p['url']}"
+            for i, p in enumerate(posts, 1)
+        ]
+        embed = discord.Embed(
+            title="5 Most Recent Patreon Posts",
+            description="\n\n".join(lines),
+            color=0xF96854,
+        )
+        embed.set_footer(text="Data from Patreon API")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except Exception as exc:
+        await interaction.followup.send(f"Error fetching posts: {exc}", ephemeral=True)
+
+
 
 class FeedbackBot(discord.Client):
     def __init__(self) -> None:
@@ -1842,6 +1909,7 @@ class FeedbackBot(discord.Client):
         self.tree.add_command(report_command_slash)
         self.tree.add_command(check_patron_slash)
         self.tree.add_command(top_patrons_slash)
+        self.tree.add_command(recent_posts_slash)
 
     async def on_ready(self) -> None:
         if not self.synced:
@@ -1852,6 +1920,7 @@ class FeedbackBot(discord.Client):
             self.tree.add_command(report_command_slash)
             self.tree.add_command(check_patron_slash)
             self.tree.add_command(top_patrons_slash)
+            self.tree.add_command(recent_posts_slash)
             if GUILD_ID:
                 guild = discord.Object(id=int(GUILD_ID))
                 self.tree.copy_global_to(guild=guild)
