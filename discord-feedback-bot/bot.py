@@ -1914,8 +1914,12 @@ class FeedbackBot(discord.Client):
             logger.warning("Role 'Member' not found in guild %s", member.guild.name)
 
 
+# Dedup cache: (member_id, event) -> timestamp, to avoid duplicate announcements
+_patreon_event_cache: dict[tuple, float] = {}
+_PATREON_DEDUP_SECONDS = 30
+
 async def patreon_webhook_handler(request):
-    import hmac, hashlib
+    import hmac, hashlib, time
     from aiohttp import web
     body = await request.read()
     sig = request.headers.get("X-Patreon-Signature", "")
@@ -1930,9 +1934,18 @@ async def patreon_webhook_handler(request):
         return web.Response(status=400, text="Invalid JSON")
 
     attrs = data.get("data", {}).get("attributes", {})
+    member_id = data.get("data", {}).get("id", "")
     included = data.get("included", [])
     full_name = attrs.get("full_name", "Someone")
     amount_cents = attrs.get("currently_entitled_amount_cents") or attrs.get("will_pay_amount_cents") or 0
+
+    # Dedup check
+    cache_key = (member_id, event)
+    now = time.monotonic()
+    if now - _patreon_event_cache.get(cache_key, 0) < _PATREON_DEDUP_SECONDS:
+        logger.info("Skipping duplicate Patreon event %s for %s", event, member_id)
+        return web.Response(status=200, text="OK")
+    _patreon_event_cache[cache_key] = now
 
     discord_id = None
     tier_title = None
@@ -1944,26 +1957,27 @@ async def patreon_webhook_handler(request):
         if inc.get("type") == "tier":
             tier_title = inc.get("attributes", {}).get("title")
 
-    mention = f"<@{discord_id}>" if discord_id else f"**{full_name}**"
+    # Only mention if Discord is linked, otherwise use plain Patreon name
+    name = f"<@{discord_id}>" if discord_id else f"**{full_name}**"
     tier_str = f" (**{tier_title}**)" if tier_title else ""
     dollars = amount_cents / 100
 
     if event == "members:create":
-        msg = f"🎉 {mention} just joined **LocoDev** on Patreon for free!"
+        msg = f"🎉 {name} just joined **LocoDev** on Patreon for free!"
     elif event == "members:delete":
-        msg = f"👋 {mention} just left **LocoDev** on Patreon."
+        msg = f"👋 {name} just left **LocoDev** on Patreon."
     elif event == "members:pledge:create":
-        msg = f"💎 {mention} just subscribed to LocoDev on Patreon{tier_str} for **${dollars:.2f}/month**! Welcome!"
+        msg = f"💎 {name} just subscribed to LocoDev on Patreon{tier_str} for **${dollars:.2f}/month**! Welcome!"
     elif event == "members:pledge:delete":
-        msg = f"❌ {mention} just cancelled their Patreon pledge{tier_str}."
+        msg = f"❌ {name} just cancelled their Patreon pledge{tier_str}."
     elif event == "members:pledge:update":
-        msg = f"🔄 {mention} updated their Patreon pledge{tier_str} — now **${dollars:.2f}/month**."
+        msg = f"🔄 {name} updated their Patreon pledge{tier_str} — now **${dollars:.2f}/month**."
     elif event == "members:update":
         patron_status = attrs.get("patron_status")
         if patron_status == "declined_patron":
-            msg = f"⚠️ {mention}'s Patreon payment was declined."
+            msg = f"⚠️ {name}'s Patreon payment was declined."
         elif patron_status == "active_patron":
-            msg = f"✅ {mention}'s Patreon payment was successful{tier_str}."
+            msg = f"✅ {name}'s Patreon payment was successful{tier_str}."
         else:
             msg = None
     elif event == "posts:publish":
