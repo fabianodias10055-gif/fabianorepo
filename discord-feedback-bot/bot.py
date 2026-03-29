@@ -1856,6 +1856,8 @@ def _fetch_recent_posts(tier_name: str = "LocoStandard", limit: int = 5) -> list
             attrs = post.get("attributes", {})
             title = attrs.get("title") or "Untitled"
             url = attrs.get("url", "")
+            if url and not url.startswith("http"):
+                url = f"https://www.patreon.com{url}"
             published_at = (attrs.get("published_at") or "")[:10]
             if published_at:
                 posts.append({"title": title, "url": url, "published_at": published_at})
