@@ -1733,35 +1733,56 @@ async def patreon_webhook_handler(request):
     except Exception:
         return web.Response(status=400, text="Invalid JSON")
 
-    if event in ("members:create", "members:pledge:create", "members:pledge:update"):
-        attrs = data.get("data", {}).get("attributes", {})
-        included = data.get("included", [])
+    attrs = data.get("data", {}).get("attributes", {})
+    included = data.get("included", [])
+    full_name = attrs.get("full_name", "Someone")
+    amount_cents = attrs.get("currently_entitled_amount_cents") or attrs.get("will_pay_amount_cents") or 0
 
-        full_name = attrs.get("full_name", "Someone")
+    discord_id = None
+    tier_title = None
+    for inc in included:
+        if inc.get("type") == "user":
+            social = inc.get("attributes", {}).get("social_connections", {})
+            if social and social.get("discord"):
+                discord_id = social["discord"].get("user_id")
+        if inc.get("type") == "tier":
+            tier_title = inc.get("attributes", {}).get("title")
+
+    mention = f"<@{discord_id}>" if discord_id else f"**{full_name}**"
+    tier_str = f" (**{tier_title}**)" if tier_title else ""
+    dollars = amount_cents / 100
+
+    if event == "members:create":
+        msg = f"🎉 {mention} just joined **LocoDev** on Patreon for free!"
+    elif event == "members:delete":
+        msg = f"👋 {mention} just left **LocoDev** on Patreon."
+    elif event == "members:pledge:create":
+        msg = f"💎 {mention} just subscribed to LocoDev on Patreon{tier_str} for **${dollars:.2f}/month**! Welcome!"
+    elif event == "members:pledge:delete":
+        msg = f"❌ {mention} just cancelled their Patreon pledge{tier_str}."
+    elif event == "members:pledge:update":
+        msg = f"🔄 {mention} updated their Patreon pledge{tier_str} — now **${dollars:.2f}/month**."
+    elif event == "members:update":
         patron_status = attrs.get("patron_status")
-        amount_cents = attrs.get("currently_entitled_amount_cents") or attrs.get("will_pay_amount_cents") or 0
-
-        # Try to find Discord ID from included user social_connections
-        discord_id = None
-        tier_title = None
-        for inc in included:
-            if inc.get("type") == "user":
-                social = inc.get("attributes", {}).get("social_connections", {})
-                if social and social.get("discord"):
-                    discord_id = social["discord"].get("user_id")
-            if inc.get("type") == "tier":
-                tier_title = inc.get("attributes", {}).get("title")
-
-        # Build message
-        mention = f"<@{discord_id}>" if discord_id else f"**{full_name}**"
-
-        if amount_cents == 0 or patron_status is None:
-            msg = f"🎉 {mention} just joined **LocoDev** on Patreon for free!"
+        if patron_status == "declined_patron":
+            msg = f"⚠️ {mention}'s Patreon payment was declined."
+        elif patron_status == "active_patron":
+            msg = f"✅ {mention}'s Patreon payment was successful{tier_str}."
         else:
-            dollars = amount_cents / 100
-            tier_str = f" (**{tier_title}**)" if tier_title else ""
-            msg = f"💎 {mention} just subscribed to LocoDev on Patreon{tier_str} for **${dollars:.2f}/month**! Welcome!"
+            msg = None
+    elif event == "posts:publish":
+        title = attrs.get("title") or "New post"
+        url = attrs.get("url", "")
+        msg = f"📢 New post published on Patreon: **{title}** {url}"
+    elif event == "posts:update":
+        title = attrs.get("title") or "A post"
+        msg = f"✏️ Patreon post updated: **{title}**"
+    elif event == "posts:delete":
+        msg = f"🗑️ A Patreon post was deleted."
+    else:
+        msg = None
 
+    if msg:
         channel = client.get_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID)
         if channel:
             await channel.send(msg)
