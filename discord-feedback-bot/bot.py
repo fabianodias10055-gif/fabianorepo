@@ -30,7 +30,7 @@ load_dotenv(BASE_DIR / ".env")
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GUILD_ID = os.getenv("DISCORD_GUILD_ID")
 PATREON_WEBHOOK_SECRET = os.getenv("PATREON_WEBHOOK_SECRET", "")
-PATREON_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("PATREON_ANNOUNCEMENT_CHANNEL_ID", "1487222304277663794"))
+PATREON_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("PATREON_ANNOUNCEMENT_CHANNEL_ID", "1487894861834359027"))
 MAX_MESSAGES_PER_CHANNEL = int(os.getenv("MAX_MESSAGES_PER_CHANNEL", "250"))
 PROJECTS_FORUM_CHANNEL_ID = os.getenv("PROJECTS_FORUM_CHANNEL_ID")
 CREATOR_ALIASES = tuple(
@@ -1971,7 +1971,7 @@ async def patreon_webhook_handler(request):
     elif event == "members:delete":
         msg = f"👋 {name} just left **LocoDev** on Patreon."
     elif event == "members:pledge:create":
-        msg = f"💎 {name} just subscribed to LocoDev on Patreon{tier_str} for **${dollars:.2f}/month**! Welcome!{returning_str}"
+        msg = f"💎 {name} just subscribed to LocoDev on Patreon{tier_str} for **${dollars:.2f}/month**! Welcome!{returning_str}\n> 👉 Join them at patreon.com/LocoDev"
     elif event == "members:pledge:delete":
         msg = f"❌ {name} just cancelled their Patreon pledge{tier_str}."
     elif event == "members:pledge:update":
