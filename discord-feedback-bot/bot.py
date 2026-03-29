@@ -1511,6 +1511,7 @@ async def sentiment_report(
 
 DUB_API_KEY = os.getenv("DUB_API_KEY", "")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
+PATREON_ACCESS_TOKEN = os.getenv("PATREON_ACCESS_TOKEN", "")
 _REPORT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -1634,6 +1635,107 @@ async def report_command_slash(
     except Exception as exc:
         await interaction.followup.send(f"Error generating report: {exc}")
 
+
+def _fetch_patreon_member_by_discord_id(discord_user_id: str) -> dict | None:
+    from urllib import request as _req, parse as _parse
+    # Get campaign ID
+    req = _req.Request(
+        "https://www.patreon.com/api/oauth2/v2/campaigns",
+        headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
+    )
+    with _req.urlopen(req, timeout=30) as resp:
+        campaigns = json.load(resp)
+    campaign_id = campaigns["data"][0]["id"]
+
+    # Paginate through members
+    cursor = None
+    while True:
+        params: dict = {
+            "include": "user,currently_entitled_tiers",
+            "fields[member]": "patron_status,currently_entitled_amount_cents,full_name,last_charge_status",
+            "fields[user]": "social_connections,full_name",
+            "fields[tier]": "title",
+            "page[count]": "1000",
+        }
+        if cursor:
+            params["page[cursor]"] = cursor
+        req = _req.Request(
+            f"https://www.patreon.com/api/oauth2/v2/campaigns/{campaign_id}/members?{_parse.urlencode(params)}",
+            headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
+        )
+        with _req.urlopen(req, timeout=30) as resp:
+            data = json.load(resp)
+
+        # Map patreon user id -> discord user id and tier
+        user_discord_map: dict = {}
+        tier_map: dict = {}
+        for inc in data.get("included", []):
+            if inc.get("type") == "user":
+                social = inc.get("attributes", {}).get("social_connections") or {}
+                disc = social.get("discord") or {}
+                uid = disc.get("user_id")
+                if uid:
+                    user_discord_map[inc["id"]] = uid
+            if inc.get("type") == "tier":
+                tier_map[inc["id"]] = inc.get("attributes", {}).get("title", "Unknown")
+
+        for member in data.get("data", []):
+            patreon_uid = member.get("relationships", {}).get("user", {}).get("data", {}).get("id")
+            if user_discord_map.get(patreon_uid) == discord_user_id:
+                tiers = [
+                    tier_map.get(t["id"], "Unknown")
+                    for t in member.get("relationships", {}).get("currently_entitled_tiers", {}).get("data", [])
+                ]
+                return {
+                    "full_name": member["attributes"].get("full_name", "Unknown"),
+                    "patron_status": member["attributes"].get("patron_status"),
+                    "amount_cents": member["attributes"].get("currently_entitled_amount_cents") or 0,
+                    "last_charge_status": member["attributes"].get("last_charge_status"),
+                    "tiers": tiers,
+                }
+
+        next_cursor = data.get("meta", {}).get("pagination", {}).get("cursors", {}).get("next")
+        if not next_cursor:
+            break
+        cursor = next_cursor
+    return None
+
+
+@app_commands.command(name="check_patron", description="Check if a Discord user has an active Patreon subscription.")
+@app_commands.describe(user="The Discord user to check.")
+async def check_patron_slash(interaction: discord.Interaction, user: discord.Member) -> None:
+    # Restrict to LocoDev role only
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    if not PATREON_ACCESS_TOKEN:
+        await interaction.followup.send("PATREON_ACCESS_TOKEN is not configured.", ephemeral=True)
+        return
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, _fetch_patreon_member_by_discord_id, str(user.id))
+        if result is None:
+            await interaction.followup.send(
+                f"**{user.display_name}** was not found on Patreon or hasn't linked their Discord account.",
+                ephemeral=True,
+            )
+            return
+        status = result["patron_status"] or "unknown"
+        amount = result["amount_cents"] / 100
+        tiers = ", ".join(result["tiers"]) if result["tiers"] else "None"
+        charge = result["last_charge_status"] or "N/A"
+        embed = discord.Embed(title=f"Patreon — {result['full_name']}", color=0xF96854)
+        embed.add_field(name="Status", value=status.replace("_", " ").title(), inline=True)
+        embed.add_field(name="Tier(s)", value=tiers, inline=True)
+        embed.add_field(name="Amount", value=f"${amount:.2f}/month", inline=True)
+        embed.add_field(name="Last Charge", value=charge, inline=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except Exception as exc:
+        await interaction.followup.send(f"Error checking Patreon: {exc}", ephemeral=True)
+
+
 class FeedbackBot(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.default()
@@ -1647,6 +1749,7 @@ class FeedbackBot(discord.Client):
 
     async def setup_hook(self) -> None:
         self.tree.add_command(report_command_slash)
+        self.tree.add_command(check_patron_slash)
 
     async def on_ready(self) -> None:
         if not self.synced:
@@ -1655,6 +1758,7 @@ class FeedbackBot(discord.Client):
             await self.tree.sync()
             # Re-add commands and sync to guild
             self.tree.add_command(report_command_slash)
+            self.tree.add_command(check_patron_slash)
             if GUILD_ID:
                 guild = discord.Object(id=int(GUILD_ID))
                 self.tree.copy_global_to(guild=guild)
