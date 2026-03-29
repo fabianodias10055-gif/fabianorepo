@@ -1836,29 +1836,35 @@ def _fetch_recent_posts(tier_name: str = "LocoStandard", limit: int = 5) -> list
         campaigns = json.load(resp)
     campaign_id = campaigns["data"][0]["id"]
 
-    params = {
-        "fields[post]": "title,url,published_at,tiers",
-        "page[count]": "50",
-    }
-    req = _req.Request(
-        f"https://www.patreon.com/api/oauth2/v2/campaigns/{campaign_id}/posts?{_parse.urlencode(params)}",
-        headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
-    )
-    with _req.urlopen(req, timeout=30) as resp:
-        data = json.load(resp)
-
     posts = []
-    for post in data.get("data", []):
-        attrs = post.get("attributes", {})
-        tiers = attrs.get("tiers") or []
-        # Include posts with no tier restriction (public) or matching tier
-        # Patreon API doesn't return tier names here, so we include all posts
-        title = attrs.get("title") or "Untitled"
-        url = attrs.get("url", "")
-        published_at = (attrs.get("published_at") or "")[:10]
-        posts.append({"title": title, "url": url, "published_at": published_at})
+    cursor = None
+    while True:
+        params: dict = {
+            "fields[post]": "title,url,published_at",
+            "page[count]": "500",
+        }
+        if cursor:
+            params["page[cursor]"] = cursor
+        req = _req.Request(
+            f"https://www.patreon.com/api/oauth2/v2/campaigns/{campaign_id}/posts?{_parse.urlencode(params)}",
+            headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
+        )
+        with _req.urlopen(req, timeout=30) as resp:
+            data = json.load(resp)
 
-    # Sort by published date newest first
+        for post in data.get("data", []):
+            attrs = post.get("attributes", {})
+            title = attrs.get("title") or "Untitled"
+            url = attrs.get("url", "")
+            published_at = (attrs.get("published_at") or "")[:10]
+            if published_at:
+                posts.append({"title": title, "url": url, "published_at": published_at})
+
+        next_cursor = data.get("meta", {}).get("pagination", {}).get("cursors", {}).get("next")
+        if not next_cursor:
+            break
+        cursor = next_cursor
+
     posts.sort(key=lambda p: p["published_at"], reverse=True)
     return posts[:limit]
 
