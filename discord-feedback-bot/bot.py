@@ -1825,96 +1825,6 @@ async def top_patrons_slash(interaction: discord.Interaction) -> None:
         await interaction.followup.send(f"Error fetching patrons: {exc}", ephemeral=True)
 
 
-def _fetch_merch_patrons(tier_name: str = "LocoPremium") -> list[dict]:
-    from urllib import request as _req, parse as _parse
-    req = _req.Request(
-        "https://www.patreon.com/api/oauth2/v2/campaigns",
-        headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
-    )
-    with _req.urlopen(req, timeout=30) as resp:
-        campaigns = json.load(resp)
-    campaign_id = campaigns["data"][0]["id"]
-
-    members = []
-    cursor = None
-    while True:
-        params: dict = {
-            "include": "currently_entitled_tiers",
-            "fields[member]": "patron_status,full_name,lifetime_support_cents,pledge_relationship_start",
-            "fields[tier]": "title",
-            "page[count]": "1000",
-        }
-        if cursor:
-            params["page[cursor]"] = cursor
-        req = _req.Request(
-            f"https://www.patreon.com/api/oauth2/v2/campaigns/{campaign_id}/members?{_parse.urlencode(params)}",
-            headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
-        )
-        with _req.urlopen(req, timeout=30) as resp:
-            data = json.load(resp)
-
-        tier_map = {
-            inc["id"]: inc.get("attributes", {}).get("title", "")
-            for inc in data.get("included", [])
-            if inc.get("type") == "tier"
-        }
-
-        for member in data.get("data", []):
-            attrs = member.get("attributes", {})
-            tiers = [
-                tier_map.get(t["id"], "")
-                for t in member.get("relationships", {}).get("currently_entitled_tiers", {}).get("data", [])
-            ]
-            if tier_name in tiers:
-                members.append({
-                    "full_name": attrs.get("full_name", "Unknown"),
-                    "patron_status": attrs.get("patron_status", "unknown"),
-                    "lifetime_cents": attrs.get("lifetime_support_cents") or 0,
-                    "since": (attrs.get("pledge_relationship_start") or "")[:10],
-                })
-
-        next_cursor = data.get("meta", {}).get("pagination", {}).get("cursors", {}).get("next")
-        if not next_cursor:
-            break
-        cursor = next_cursor
-
-    members.sort(key=lambda m: m["lifetime_cents"], reverse=True)
-    return members
-
-
-@app_commands.command(name="merch_list", description="List all LocoPremium patrons who should receive merch.")
-async def merch_list_slash(interaction: discord.Interaction) -> None:
-    roles = [r.name for r in getattr(interaction.user, "roles", [])]
-    if "LocoDev" not in roles:
-        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
-        return
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    if not PATREON_ACCESS_TOKEN:
-        await interaction.followup.send("PATREON_ACCESS_TOKEN is not configured.", ephemeral=True)
-        return
-    try:
-        loop = asyncio.get_event_loop()
-        members = await loop.run_in_executor(None, _fetch_merch_patrons)
-        if not members:
-            await interaction.followup.send("No LocoPremium patrons found.", ephemeral=True)
-            return
-        # Build CSV file
-        import io, csv
-        buf = io.StringIO()
-        writer = csv.writer(buf)
-        writer.writerow(["#", "Name", "Status", "Lifetime ($)", "Patron Since"])
-        for i, m in enumerate(members, 1):
-            writer.writerow([i, m["full_name"], m["patron_status"], f"{m['lifetime_cents']/100:.2f}", m["since"]])
-        buf.seek(0)
-        file = discord.File(fp=io.BytesIO(buf.getvalue().encode()), filename="merch_list.csv")
-        await interaction.followup.send(
-            f"**LocoPremium merch list** — {len(members)} patrons total",
-            file=file,
-            ephemeral=True,
-        )
-    except Exception as exc:
-        await interaction.followup.send(f"Error fetching merch list: {exc}", ephemeral=True)
-
 
 class FeedbackBot(discord.Client):
     def __init__(self) -> None:
@@ -1931,7 +1841,6 @@ class FeedbackBot(discord.Client):
         self.tree.add_command(report_command_slash)
         self.tree.add_command(check_patron_slash)
         self.tree.add_command(top_patrons_slash)
-        self.tree.add_command(merch_list_slash)
 
     async def on_ready(self) -> None:
         if not self.synced:
@@ -1942,7 +1851,6 @@ class FeedbackBot(discord.Client):
             self.tree.add_command(report_command_slash)
             self.tree.add_command(check_patron_slash)
             self.tree.add_command(top_patrons_slash)
-            self.tree.add_command(merch_list_slash)
             if GUILD_ID:
                 guild = discord.Object(id=int(GUILD_ID))
                 self.tree.copy_global_to(guild=guild)
