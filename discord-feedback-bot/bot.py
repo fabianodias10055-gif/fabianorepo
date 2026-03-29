@@ -1938,6 +1938,8 @@ async def patreon_webhook_handler(request):
     included = data.get("included", [])
     full_name = attrs.get("full_name", "Someone")
     amount_cents = attrs.get("currently_entitled_amount_cents") or attrs.get("will_pay_amount_cents") or 0
+    lifetime_cents = attrs.get("lifetime_support_cents") or 0
+    is_returning = lifetime_cents > amount_cents
 
     # Dedup check
     cache_key = (member_id, event)
@@ -1962,12 +1964,14 @@ async def patreon_webhook_handler(request):
     tier_str = f" (**{tier_title}**)" if tier_title else ""
     dollars = amount_cents / 100
 
+    returning_str = f" *(returning patron — ${lifetime_cents/100:.2f} lifetime)*" if is_returning else ""
+
     if event == "members:create":
-        msg = f"🎉 {name} just joined **LocoDev** on Patreon for free!"
+        msg = f"🎉 {name} just joined **LocoDev** on Patreon for free!{returning_str}"
     elif event == "members:delete":
         msg = f"👋 {name} just left **LocoDev** on Patreon."
     elif event == "members:pledge:create":
-        msg = f"💎 {name} just subscribed to LocoDev on Patreon{tier_str} for **${dollars:.2f}/month**! Welcome!"
+        msg = f"💎 {name} just subscribed to LocoDev on Patreon{tier_str} for **${dollars:.2f}/month**! Welcome!{returning_str}"
     elif event == "members:pledge:delete":
         msg = f"❌ {name} just cancelled their Patreon pledge{tier_str}."
     elif event == "members:pledge:update":
