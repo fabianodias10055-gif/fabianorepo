@@ -1705,7 +1705,7 @@ class FeedbackBot(discord.Client):
             logger.info("Sent welcome DM to %s", member)
         except discord.Forbidden:
             logger.warning("Could not DM %s (DMs disabled)", member)
-        role = discord.utils.get(member.guild.roles, name="member")
+        role = discord.utils.get(member.guild.roles, name="Member")
         if role:
             try:
                 await member.add_roles(role)
