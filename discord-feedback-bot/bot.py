@@ -2231,7 +2231,7 @@ async def patreon_webhook_handler(request):
                 public_msg = f"💎 {public_name} joined **{tier_title}**\n> 👉 patreon.com/LocoDev"
                 await public_channel.send(public_msg)
             elif event == "members:create":
-                public_msg = f"👋 {public_name} just joined **LocoDev** on Patreon for free!\n> 👉 patreon.com/LocoDev"
+                public_msg = f"👋 {public_name} just joined **LocoDev** on Patreon!"
                 await public_channel.send(public_msg)
 
     return web.Response(status=200, text="OK")
