@@ -1976,8 +1976,66 @@ async def meta_conversion_slash(
         await interaction.followup.send(f"Error sending to Meta: {exc}", ephemeral=True)
 
 
+@app_commands.command(name="test_reports", description="Send daily summary and weekly leaderboard now (test).")
+async def test_reports_slash(interaction: discord.Interaction) -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
 
-class FeedbackBot(discord.Client):
+    channel = client.get_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID)
+    if not channel:
+        await interaction.followup.send("Announcement channel not found.", ephemeral=True)
+        return
+
+    # --- Daily summary ---
+    events = list(_daily_events)
+    free_joins = [e for e in events if e["event"] == "members:create"]
+    paid_subs = [e for e in events if e["event"] == "members:pledge:create"]
+    cancels = [e for e in events if e["event"] in ("members:pledge:delete", "members:delete")]
+    total_new = len(free_joins) + len(paid_subs)
+    total_cancel = len(cancels)
+
+    if total_new == 0 and total_cancel == 0:
+        await channel.send("📊 **Daily Patreon Summary** — No activity today.")
+    else:
+        lines = ["📊 **Daily Patreon Summary**\n"]
+        if paid_subs:
+            lines.append(f"💎 **{len(paid_subs)}** new paid subscriber(s):")
+            for e in paid_subs:
+                tier = f" ({e['tier']})" if e["tier"] else ""
+                lines.append(f"  • **{e['name']}**{tier} — ${e['amount']:.2f}/mo")
+        if free_joins:
+            lines.append(f"👋 **{len(free_joins)}** new free member(s):")
+            for e in free_joins:
+                lines.append(f"  • **{e['name']}**")
+        if cancels:
+            lines.append(f"❌ **{len(cancels)}** cancellation(s):")
+            for e in cancels:
+                lines.append(f"  • **{e['name']}**")
+        lines.append(f"\n**Net change: {total_new - total_cancel:+d}**")
+        await channel.send("\n".join(lines))
+
+    # --- Weekly leaderboard ---
+    if PATREON_ACCESS_TOKEN:
+        try:
+            loop = asyncio.get_event_loop()
+            patrons = await loop.run_in_executor(None, _fetch_top_patrons, 10)
+            medals = ["🥇", "🥈", "🥉"]
+            lines = ["🏆 **Weekly Top Patrons Leaderboard**\n"]
+            for i, p in enumerate(patrons):
+                medal = medals[i] if i < 3 else f"**{i+1}.**"
+                lines.append(f"{medal} **{p['full_name']}** — ${p['lifetime_cents']/100:.2f} lifetime")
+            lines.append("\n👉 Join them at patreon.com/LocoDev")
+            await channel.send("\n".join(lines))
+        except Exception as exc:
+            await channel.send(f"⚠️ Could not fetch top patrons: {exc}")
+
+    await interaction.followup.send("✅ Reports sent!", ephemeral=True)
+
+
+
     def __init__(self) -> None:
         intents = discord.Intents.default()
         intents.guilds = True
@@ -2159,6 +2217,7 @@ class FeedbackBot(discord.Client):
         self.tree.add_command(top_patrons_slash)
         self.tree.add_command(recent_posts_slash)
         self.tree.add_command(meta_conversion_slash)
+        self.tree.add_command(test_reports_slash)
 
     async def on_ready(self) -> None:
         if not self.synced:
@@ -2171,6 +2230,7 @@ class FeedbackBot(discord.Client):
             self.tree.add_command(top_patrons_slash)
             self.tree.add_command(recent_posts_slash)
             self.tree.add_command(meta_conversion_slash)
+            self.tree.add_command(test_reports_slash)
             if GUILD_ID:
                 guild = discord.Object(id=int(GUILD_ID))
                 self.tree.copy_global_to(guild=guild)
