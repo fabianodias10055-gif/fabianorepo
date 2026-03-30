@@ -1902,6 +1902,75 @@ async def recent_posts_slash(interaction: discord.Interaction) -> None:
         await interaction.followup.send(f"Error fetching posts: {exc}", ephemeral=True)
 
 
+META_PIXEL_ID = os.getenv("META_PIXEL_ID", "")
+META_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN", "")
+
+
+def _send_meta_conversion(name: str, phone: str, email: str, value: float) -> str:
+    import hmac, hashlib, time
+    from urllib import request as _req, parse as _parse
+
+    def _hash(val: str) -> str:
+        return hashlib.sha256(val.strip().lower().encode()).hexdigest()
+
+    payload = json.dumps({
+        "data": [{
+            "event_name": "Purchase",
+            "event_time": int(time.time()),
+            "action_source": "other",
+            "user_data": {
+                "em": [_hash(email)] if email else [],
+                "ph": [_hash(phone.replace("+", "").replace(" ", ""))] if phone else [],
+                "fn": [_hash(name.split()[0])] if name else [],
+                "ln": [_hash(name.split()[-1])] if name and len(name.split()) > 1 else [],
+            },
+            "custom_data": {
+                "value": value,
+                "currency": "BRL",
+            },
+        }]
+    }).encode()
+
+    url = f"https://graph.facebook.com/v19.0/{META_PIXEL_ID}/events?access_token={META_ACCESS_TOKEN}"
+    req = _req.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+    with _req.urlopen(req, timeout=30) as resp:
+        result = json.load(resp)
+    return str(result.get("events_received", 0))
+
+
+@app_commands.command(name="meta_conversion", description="Send a purchase conversion event to Meta Ads.")
+@app_commands.describe(
+    name="Full name of the customer",
+    phone="Phone number (e.g. +5511999999999)",
+    email="Email address",
+    value="Purchase value in BRL (default 50)",
+)
+async def meta_conversion_slash(
+    interaction: discord.Interaction,
+    name: str,
+    phone: str,
+    email: str,
+    value: float = 50.0,
+) -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    if not META_PIXEL_ID or not META_ACCESS_TOKEN:
+        await interaction.followup.send("META_PIXEL_ID or META_ACCESS_TOKEN is not configured.", ephemeral=True)
+        return
+    try:
+        loop = asyncio.get_event_loop()
+        received = await loop.run_in_executor(None, _send_meta_conversion, name, phone, email, value)
+        await interaction.followup.send(
+            f"✅ Purchase event sent to Meta!\n**Name:** {name}\n**Phone:** {phone}\n**Email:** {email}\n**Value:** R${value:.2f}\n**Events received:** {received}",
+            ephemeral=True,
+        )
+    except Exception as exc:
+        await interaction.followup.send(f"Error sending to Meta: {exc}", ephemeral=True)
+
+
 
 class FeedbackBot(discord.Client):
     def __init__(self) -> None:
@@ -1979,6 +2048,7 @@ class FeedbackBot(discord.Client):
         self.tree.add_command(check_patron_slash)
         self.tree.add_command(top_patrons_slash)
         self.tree.add_command(recent_posts_slash)
+        self.tree.add_command(meta_conversion_slash)
 
     async def on_ready(self) -> None:
         if not self.synced:
@@ -1990,6 +2060,7 @@ class FeedbackBot(discord.Client):
             self.tree.add_command(check_patron_slash)
             self.tree.add_command(top_patrons_slash)
             self.tree.add_command(recent_posts_slash)
+            self.tree.add_command(meta_conversion_slash)
             if GUILD_ID:
                 guild = discord.Object(id=int(GUILD_ID))
                 self.tree.copy_global_to(guild=guild)
