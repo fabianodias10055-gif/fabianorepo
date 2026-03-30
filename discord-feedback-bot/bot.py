@@ -2017,21 +2017,6 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
         lines.append(f"\n**Net change: {total_new - total_cancel:+d}**")
         await channel.send("\n".join(lines))
 
-    # --- Weekly leaderboard ---
-    if PATREON_ACCESS_TOKEN:
-        try:
-            loop = asyncio.get_event_loop()
-            patrons = await loop.run_in_executor(None, _fetch_top_patrons, 10)
-            medals = ["🥇", "🥈", "🥉"]
-            lines = ["🏆 **Weekly Top Patrons Leaderboard**\n"]
-            for i, p in enumerate(patrons):
-                medal = medals[i] if i < 3 else f"**{i+1}.**"
-                lines.append(f"{medal} **{p['full_name']}** — ${p['lifetime_cents']/100:.2f} lifetime")
-            lines.append("\n👉 Join them at patreon.com/LocoDev")
-            await channel.send("\n".join(lines))
-        except Exception as exc:
-            await channel.send(f"⚠️ Could not fetch top patrons: {exc}")
-
     await interaction.followup.send("✅ Reports sent!", ephemeral=True)
 
 
@@ -2047,7 +2032,6 @@ class FeedbackBot(discord.Client):
         self.synced = False
         self._status_task: asyncio.Task | None = None
         self._daily_task: asyncio.Task | None = None
-        self._weekly_task: asyncio.Task | None = None
 
     def _clean_post_title(self, title: str) -> str:
         import re
@@ -2168,51 +2152,6 @@ class FeedbackBot(discord.Client):
                 logger.warning("Daily summary error: %s", exc)
                 await asyncio.sleep(60)
 
-    async def _weekly_leaderboard(self) -> None:
-        """Every Monday at 9 AM Sao Paulo, post the top patrons leaderboard."""
-        from zoneinfo import ZoneInfo
-        await self.wait_until_ready()
-        sp = ZoneInfo("America/Sao_Paulo")
-        while not self.is_closed():
-            try:
-                now = datetime.now(sp)
-                # Calculate seconds until next Monday 9 AM SP
-                days_until_monday = (7 - now.weekday()) % 7
-                if days_until_monday == 0 and now.hour >= 9:
-                    days_until_monday = 7
-                next_monday = (now + timedelta(days=days_until_monday)).replace(
-                    hour=9, minute=0, second=0, microsecond=0
-                )
-                wait_secs = (next_monday - now).total_seconds()
-                await asyncio.sleep(wait_secs)
-
-                channel = self.get_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID)
-                if not channel or not PATREON_ACCESS_TOKEN:
-                    await asyncio.sleep(3600)
-                    continue
-
-                loop = asyncio.get_event_loop()
-                patrons = await loop.run_in_executor(None, _fetch_top_patrons, 10)
-
-                if not patrons:
-                    await channel.send("🏆 **Weekly Top Patrons** — No active patrons found.")
-                    continue
-
-                lines = ["🏆 **Weekly Top Patrons Leaderboard**\n"]
-                medals = ["🥇", "🥈", "🥉"]
-                for i, p in enumerate(patrons):
-                    medal = medals[i] if i < 3 else f"**{i+1}.**"
-                    lines.append(
-                        f"{medal} **{p['full_name']}** — ${p['lifetime_cents']/100:.2f} lifetime"
-                    )
-
-                lines.append(f"\n👉 Join them at patreon.com/LocoDev")
-                await channel.send("\n".join(lines))
-
-            except Exception as exc:
-                logger.warning("Weekly leaderboard error: %s", exc)
-                await asyncio.sleep(60)
-
     async def setup_hook(self) -> None:
         self.tree.add_command(report_command_slash)
         self.tree.add_command(check_patron_slash)
@@ -2247,9 +2186,6 @@ class FeedbackBot(discord.Client):
             self._status_task = asyncio.create_task(self._rotate_status())
         if self._daily_task is None or self._daily_task.done():
             self._daily_task = asyncio.create_task(self._daily_summary())
-        if self._weekly_task is None or self._weekly_task.done():
-            self._weekly_task = asyncio.create_task(self._weekly_leaderboard())
-
         assert self.user is not None
         logger.info("Logged in as %s (%s)", self.user, self.user.id)
 
