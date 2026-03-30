@@ -2017,6 +2017,34 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
         lines.append(f"\n**Net change: {total_new - total_cancel:+d}**")
         await channel.send("\n".join(lines))
 
+    # --- Weekly summary ---
+    w_events = list(_weekly_events)
+    w_paid = [e for e in w_events if e["event"] == "members:pledge:create"]
+    w_free = [e for e in w_events if e["event"] == "members:create"]
+    w_cancels = [e for e in w_events if e["event"] in ("members:pledge:delete", "members:delete")]
+    w_new = len(w_paid) + len(w_free)
+    w_cancel = len(w_cancels)
+
+    if w_new == 0 and w_cancel == 0:
+        await channel.send("📅 **Weekly Patreon Summary** — No activity this week.")
+    else:
+        lines = ["📅 **Weekly Patreon Summary**\n"]
+        if w_paid:
+            lines.append(f"💎 **{len(w_paid)}** new paid subscriber(s):")
+            for e in w_paid:
+                tier = f" ({e['tier']})" if e["tier"] else ""
+                lines.append(f"  • **{e['name']}**{tier} — ${e['amount']:.2f}/mo")
+        if w_free:
+            lines.append(f"👋 **{len(w_free)}** new free member(s):")
+            for e in w_free:
+                lines.append(f"  • **{e['name']}**")
+        if w_cancels:
+            lines.append(f"❌ **{len(w_cancels)}** cancellation(s):")
+            for e in w_cancels:
+                lines.append(f"  • **{e['name']}**")
+        lines.append(f"\n**Net change this week: {w_new - w_cancel:+d}**")
+        await channel.send("\n".join(lines))
+
     await interaction.followup.send("✅ Reports sent!", ephemeral=True)
 
 
