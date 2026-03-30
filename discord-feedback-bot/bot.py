@@ -1960,7 +1960,7 @@ class FeedbackBot(discord.Client):
                 if GUILD_ID:
                     guild = self.get_guild(int(GUILD_ID))
                     if guild:
-                        statuses.append(discord.Activity(type=discord.ActivityType.watching, name=f"{guild.member_count} devs"))
+                        statuses.append(discord.Activity(type=discord.ActivityType.watching, name=f"{guild.member_count} devs 🎮"))
 
                 # 4. Fixed statuses
                 statuses.append(discord.Activity(type=discord.ActivityType.listening, name="LocoDev"))
