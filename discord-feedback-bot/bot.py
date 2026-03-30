@@ -2032,6 +2032,7 @@ class FeedbackBot(discord.Client):
         self.synced = False
         self._status_task: asyncio.Task | None = None
         self._daily_task: asyncio.Task | None = None
+        self._weekly_task: asyncio.Task | None = None
 
     def _clean_post_title(self, title: str) -> str:
         import re
@@ -2152,6 +2153,65 @@ class FeedbackBot(discord.Client):
                 logger.warning("Daily summary error: %s", exc)
                 await asyncio.sleep(60)
 
+    async def _weekly_summary(self) -> None:
+        """Every Monday at 9 AM Sao Paulo, post a weekly Patreon summary."""
+        from zoneinfo import ZoneInfo
+        await self.wait_until_ready()
+        sp = ZoneInfo("America/Sao_Paulo")
+        while not self.is_closed():
+            try:
+                now = datetime.now(sp)
+                days_until_monday = (7 - now.weekday()) % 7
+                if days_until_monday == 0 and now.hour >= 9:
+                    days_until_monday = 7
+                next_monday = (now + timedelta(days=days_until_monday)).replace(
+                    hour=9, minute=0, second=0, microsecond=0
+                )
+                wait_secs = (next_monday - now).total_seconds()
+                await asyncio.sleep(wait_secs)
+
+                events = list(_weekly_events)
+                _weekly_events.clear()
+
+                channel = self.get_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID)
+                if not channel:
+                    continue
+
+                paid_subs = [e for e in events if e["event"] == "members:pledge:create"]
+                free_joins = [e for e in events if e["event"] == "members:create"]
+                cancels = [e for e in events if e["event"] in ("members:pledge:delete", "members:delete")]
+                total_new = len(paid_subs) + len(free_joins)
+                total_cancel = len(cancels)
+
+                if total_new == 0 and total_cancel == 0:
+                    await channel.send("📅 **Weekly Patreon Summary** — No activity this week.")
+                    continue
+
+                lines = ["📅 **Weekly Patreon Summary**\n"]
+
+                if paid_subs:
+                    lines.append(f"💎 **{len(paid_subs)}** new paid subscriber(s):")
+                    for e in paid_subs:
+                        tier = f" ({e['tier']})" if e["tier"] else ""
+                        lines.append(f"  • **{e['name']}**{tier} — ${e['amount']:.2f}/mo")
+
+                if free_joins:
+                    lines.append(f"👋 **{len(free_joins)}** new free member(s):")
+                    for e in free_joins:
+                        lines.append(f"  • **{e['name']}**")
+
+                if cancels:
+                    lines.append(f"❌ **{len(cancels)}** cancellation(s):")
+                    for e in cancels:
+                        lines.append(f"  • **{e['name']}**")
+
+                lines.append(f"\n**Net change this week: {total_new - total_cancel:+d}**")
+                await channel.send("\n".join(lines))
+
+            except Exception as exc:
+                logger.warning("Weekly summary error: %s", exc)
+                await asyncio.sleep(60)
+
     async def setup_hook(self) -> None:
         self.tree.add_command(report_command_slash)
         self.tree.add_command(check_patron_slash)
@@ -2186,6 +2246,8 @@ class FeedbackBot(discord.Client):
             self._status_task = asyncio.create_task(self._rotate_status())
         if self._daily_task is None or self._daily_task.done():
             self._daily_task = asyncio.create_task(self._daily_summary())
+        if self._weekly_task is None or self._weekly_task.done():
+            self._weekly_task = asyncio.create_task(self._weekly_summary())
         assert self.user is not None
         logger.info("Logged in as %s (%s)", self.user, self.user.id)
 
@@ -2243,8 +2305,9 @@ class FeedbackBot(discord.Client):
 _patreon_event_cache: dict[tuple, float] = {}
 _PATREON_DEDUP_SECONDS = 30
 
-# Daily event tracker for scheduled summaries
-_daily_events: list[dict] = []  # {"event": str, "name": str, "tier": str|None, "amount": float}
+# Event trackers for scheduled summaries
+_daily_events: list[dict] = []   # {"event": str, "name": str, "tier": str|None, "amount": float}
+_weekly_events: list[dict] = []  # same structure, cleared weekly
 
 async def patreon_webhook_handler(request):
     import hmac, hashlib, time
@@ -2277,13 +2340,15 @@ async def patreon_webhook_handler(request):
         return web.Response(status=200, text="OK")
     _patreon_event_cache[cache_key] = now
 
-    # Track event for daily summary
-    _daily_events.append({
+    # Track event for daily and weekly summaries
+    _entry = {
         "event": event,
         "name": full_name,
         "tier": None,  # filled below
         "amount": amount_cents / 100,
-    })
+    }
+    _daily_events.append(_entry)
+    _weekly_events.append(_entry)
 
     discord_id = None
     tier_title = None
@@ -2296,8 +2361,7 @@ async def patreon_webhook_handler(request):
             tier_title = inc.get("attributes", {}).get("title")
 
     # Update tier in tracked event
-    if _daily_events:
-        _daily_events[-1]["tier"] = tier_title
+    _entry["tier"] = tier_title
 
     # If Discord linked: show "@DiscordMention/Patreon Name", otherwise just Patreon name
     name = f"<@{discord_id}>/**{full_name}**" if discord_id else f"**{full_name}**"
