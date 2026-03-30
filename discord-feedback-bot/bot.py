@@ -2218,12 +2218,15 @@ async def patreon_webhook_handler(request):
         else:
             logger.warning("Announcement channel %s not found", PATREON_ANNOUNCEMENT_CHANNEL_ID)
 
-        # Send short public message to #patreon-members for new paid subscriptions
-        if event == "members:pledge:create" and tier_title:
+        # Send short public message to #patreon-members for new members (free or paid)
+        public_channel = client.get_channel(PATREON_PUBLIC_CHANNEL_ID)
+        if public_channel:
             public_name = f"<@{discord_id}>/**{full_name}**" if discord_id else f"**{full_name}**"
-            public_msg = f"💎 {public_name} joined **{tier_title}**\n> 👉 patreon.com/LocoDev"
-            public_channel = client.get_channel(PATREON_PUBLIC_CHANNEL_ID)
-            if public_channel:
+            if event == "members:pledge:create" and tier_title:
+                public_msg = f"💎 {public_name} joined **{tier_title}**\n> 👉 patreon.com/LocoDev"
+                await public_channel.send(public_msg)
+            elif event == "members:create":
+                public_msg = f"👋 {public_name} just joined **LocoDev** on Patreon for free!\n> 👉 patreon.com/LocoDev"
                 await public_channel.send(public_msg)
 
     return web.Response(status=200, text="OK")
