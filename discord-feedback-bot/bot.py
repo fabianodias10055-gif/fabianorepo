@@ -2116,9 +2116,11 @@ class FeedbackBot(discord.Client):
         while not self.is_closed():
             try:
                 now = datetime.now(sp)
-                # Calculate seconds until next midnight SP
-                tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-                wait_secs = (tomorrow - now).total_seconds()
+                # Calculate seconds until next 9 AM SP
+                next_9am = now.replace(hour=9, minute=0, second=0, microsecond=0)
+                if now >= next_9am:
+                    next_9am += timedelta(days=1)
+                wait_secs = (next_9am - now).total_seconds()
                 await asyncio.sleep(wait_secs)
 
                 # Collect and clear events
