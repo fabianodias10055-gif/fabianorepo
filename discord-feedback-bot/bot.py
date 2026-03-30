@@ -1931,11 +1931,16 @@ def _send_meta_conversion(name: str, phone: str, email: str, value: float) -> st
         }]
     }).encode()
 
-    url = f"https://graph.facebook.com/v19.0/{META_PIXEL_ID}/events?access_token={META_ACCESS_TOKEN}"
+    url = f"https://graph.facebook.com/v21.0/{META_PIXEL_ID}/events?access_token={META_ACCESS_TOKEN}"
+    from urllib.error import HTTPError
     req = _req.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
-    with _req.urlopen(req, timeout=30) as resp:
-        result = json.load(resp)
-    return str(result.get("events_received", 0))
+    try:
+        with _req.urlopen(req, timeout=30) as resp:
+            result = json.load(resp)
+        return str(result.get("events_received", 0))
+    except HTTPError as e:
+        error_body = e.read().decode()
+        raise Exception(f"Meta API error {e.code}: {error_body}")
 
 
 @app_commands.command(name="meta_conversion", description="Send a purchase conversion event to Meta Ads.")
