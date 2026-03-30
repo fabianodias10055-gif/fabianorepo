@@ -2035,7 +2035,7 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
     await interaction.followup.send("✅ Reports sent!", ephemeral=True)
 
 
-
+class FeedbackBot(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.default()
         intents.guilds = True
