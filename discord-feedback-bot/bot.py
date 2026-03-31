@@ -32,6 +32,7 @@ GUILD_ID = os.getenv("DISCORD_GUILD_ID")
 PATREON_WEBHOOK_SECRET = os.getenv("PATREON_WEBHOOK_SECRET", "")
 PATREON_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("PATREON_ANNOUNCEMENT_CHANNEL_ID", "1487222304277663794"))
 PATREON_PUBLIC_CHANNEL_ID = int(os.getenv("PATREON_PUBLIC_CHANNEL_ID", "1158395982485147689"))
+YOUTUBE_NOTIFY_CHANNEL_ID = int(os.getenv("YOUTUBE_NOTIFY_CHANNEL_ID", "1481432850212585655"))
 MAX_MESSAGES_PER_CHANNEL = int(os.getenv("MAX_MESSAGES_PER_CHANNEL", "250"))
 PROJECTS_FORUM_CHANNEL_ID = os.getenv("PROJECTS_FORUM_CHANNEL_ID")
 CREATOR_ALIASES = tuple(
@@ -2061,6 +2062,8 @@ class FeedbackBot(discord.Client):
         self._status_task: asyncio.Task | None = None
         self._daily_task: asyncio.Task | None = None
         self._weekly_task: asyncio.Task | None = None
+        self._youtube_task: asyncio.Task | None = None
+        self._ue_last_video_id: str | None = None
 
     def _clean_post_title(self, title: str) -> str:
         import re
@@ -2181,6 +2184,46 @@ class FeedbackBot(discord.Client):
                 logger.warning("Daily summary error: %s", exc)
                 await asyncio.sleep(60)
 
+    async def _watch_unreal_engine_youtube(self) -> None:
+        """Poll Unreal Engine YouTube RSS feed every 10 minutes and post new videos."""
+        import xml.etree.ElementTree as ET
+        from urllib import request as _req
+        await self.wait_until_ready()
+        RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id=UCBobmJyzsJ6Ll7UbfhI4iwQ"
+        while not self.is_closed():
+            try:
+                loop = asyncio.get_event_loop()
+                def _fetch_rss():
+                    req = _req.Request(RSS_URL, headers={"User-Agent": "LocoDev Bot"})
+                    with _req.urlopen(req, timeout=15) as resp:
+                        return resp.read()
+                xml_data = await loop.run_in_executor(None, _fetch_rss)
+                root = ET.fromstring(xml_data)
+                ns = {"atom": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015"}
+                entries = root.findall("atom:entry", ns)
+                if not entries:
+                    await asyncio.sleep(600)
+                    continue
+                latest = entries[0]
+                video_id = latest.findtext("yt:videoId", namespaces=ns)
+                title = latest.findtext("atom:title", namespaces=ns, default="New video")
+                link_el = latest.find("atom:link", ns)
+                url = link_el.get("href", "") if link_el is not None else f"https://www.youtube.com/watch?v={video_id}"
+
+                if self._ue_last_video_id is None:
+                    # On first run just store the latest, don't announce
+                    self._ue_last_video_id = video_id
+                elif video_id != self._ue_last_video_id:
+                    self._ue_last_video_id = video_id
+                    channel = self.get_channel(YOUTUBE_NOTIFY_CHANNEL_ID)
+                    if channel:
+                        await channel.send(
+                            f"🎮 **Unreal Engine** just posted a new video!\n**{title}**\n{url}"
+                        )
+            except Exception as exc:
+                logger.warning("YouTube watcher error: %s", exc)
+            await asyncio.sleep(600)  # check every 10 minutes
+
     async def _weekly_summary(self) -> None:
         """Every Monday at 9 AM Sao Paulo, post a weekly Patreon summary."""
         from zoneinfo import ZoneInfo
@@ -2276,6 +2319,8 @@ class FeedbackBot(discord.Client):
             self._daily_task = asyncio.create_task(self._daily_summary())
         if self._weekly_task is None or self._weekly_task.done():
             self._weekly_task = asyncio.create_task(self._weekly_summary())
+        if self._youtube_task is None or self._youtube_task.done():
+            self._youtube_task = asyncio.create_task(self._watch_unreal_engine_youtube())
         assert self.user is not None
         logger.info("Logged in as %s (%s)", self.user, self.user.id)
 
