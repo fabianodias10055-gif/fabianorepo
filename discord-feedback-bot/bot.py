@@ -33,6 +33,7 @@ PATREON_WEBHOOK_SECRET = os.getenv("PATREON_WEBHOOK_SECRET", "")
 PATREON_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("PATREON_ANNOUNCEMENT_CHANNEL_ID", "1487222304277663794"))
 PATREON_PUBLIC_CHANNEL_ID = int(os.getenv("PATREON_PUBLIC_CHANNEL_ID", "1158395982485147689"))
 YOUTUBE_NOTIFY_CHANNEL_ID = int(os.getenv("YOUTUBE_NOTIFY_CHANNEL_ID", "1481432850212585655"))
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 MAX_MESSAGES_PER_CHANNEL = int(os.getenv("MAX_MESSAGES_PER_CHANNEL", "250"))
 PROJECTS_FORUM_CHANNEL_ID = os.getenv("PROJECTS_FORUM_CHANNEL_ID")
 CREATOR_ALIASES = tuple(
@@ -2049,6 +2050,48 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
     await interaction.followup.send("✅ Reports sent!", ephemeral=True)
 
 
+@app_commands.command(name="analyze_lead", description="Paste a WhatsApp conversation to analyze why the lead didn't convert.")
+@app_commands.describe(conversation="Paste the full WhatsApp conversation text here.")
+async def analyze_lead_slash(interaction: discord.Interaction, conversation: str) -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    if not ANTHROPIC_API_KEY:
+        await interaction.response.send_message("ANTHROPIC_API_KEY is not configured.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    try:
+        import anthropic as _anthropic
+        loop = asyncio.get_event_loop()
+        def _call_claude():
+            client_ai = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            response = client_ai.messages.create(
+                model="claude-opus-4-6",
+                max_tokens=1024,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        "You are a sales coach for a Brazilian Unreal Engine 5 course called LocoDev. "
+                        "Analyze the following WhatsApp conversation between the seller (Fabiano) and a lead. "
+                        "Identify exactly why the lead didn't convert and give 2-3 specific actionable improvements. "
+                        "Be direct and concise. Reply in Portuguese (Brazil).\n\n"
+                        f"CONVERSA:\n{conversation}"
+                    )
+                }]
+            )
+            return response.content[0].text
+        analysis = await loop.run_in_executor(None, _call_claude)
+        # Discord has 2000 char limit per message, split if needed
+        if len(analysis) <= 1900:
+            await interaction.followup.send(f"🧠 **Análise do Lead:**\n\n{analysis}", ephemeral=True)
+        else:
+            await interaction.followup.send(f"🧠 **Análise do Lead:**\n\n{analysis[:1900]}", ephemeral=True)
+            await interaction.followup.send(analysis[1900:], ephemeral=True)
+    except Exception as exc:
+        await interaction.followup.send(f"Error analyzing conversation: {exc}", ephemeral=True)
+
+
 class FeedbackBot(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.default()
@@ -2290,6 +2333,7 @@ class FeedbackBot(discord.Client):
         self.tree.add_command(recent_posts_slash)
         self.tree.add_command(meta_conversion_slash)
         self.tree.add_command(test_reports_slash)
+        self.tree.add_command(analyze_lead_slash)
 
     async def on_ready(self) -> None:
         if not self.synced:
@@ -2303,6 +2347,7 @@ class FeedbackBot(discord.Client):
             self.tree.add_command(recent_posts_slash)
             self.tree.add_command(meta_conversion_slash)
             self.tree.add_command(test_reports_slash)
+            self.tree.add_command(analyze_lead_slash)
             if GUILD_ID:
                 guild = discord.Object(id=int(GUILD_ID))
                 self.tree.copy_global_to(guild=guild)
