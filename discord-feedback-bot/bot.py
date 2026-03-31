@@ -2436,6 +2436,20 @@ async def patreon_webhook_handler(request):
     # Update tier in tracked event
     _entry["tier"] = tier_title
 
+    # Correct tier name based on amount paid (Patreon sometimes sends wrong tier name)
+    def _correct_tier(title, cents):
+        if cents <= 0:
+            return title
+        if cents <= 700:       # up to $7 → Basic
+            return "LocoBasic"
+        elif cents <= 1500:    # up to $15 → Standard
+            return "LocoStandard"
+        else:                  # $16+ → Premium
+            return "LocoPremium"
+
+    if amount_cents > 0:
+        tier_title = _correct_tier(tier_title, amount_cents)
+
     # If Discord linked: show "@DiscordMention/Patreon Name", otherwise just Patreon name
     name = f"<@{discord_id}>/**{full_name}**" if discord_id else f"**{full_name}**"
     tier_str = f" (**{tier_title}**)" if tier_title else ""
