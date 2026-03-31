@@ -2063,7 +2063,7 @@ class FeedbackBot(discord.Client):
         self._daily_task: asyncio.Task | None = None
         self._weekly_task: asyncio.Task | None = None
         self._youtube_task: asyncio.Task | None = None
-        self._ue_last_video_id: str | None = None
+        self._ue_seen_video_ids: set[str] = set()
 
     def _clean_post_title(self, title: str) -> str:
         import re
@@ -2210,16 +2210,26 @@ class FeedbackBot(discord.Client):
                 link_el = latest.find("atom:link", ns)
                 url = link_el.get("href", "") if link_el is not None else f"https://www.youtube.com/watch?v={video_id}"
 
-                if self._ue_last_video_id is None:
-                    # On first run just store the latest, don't announce
-                    self._ue_last_video_id = video_id
-                elif video_id != self._ue_last_video_id:
-                    self._ue_last_video_id = video_id
-                    channel = self.get_channel(YOUTUBE_NOTIFY_CHANNEL_ID)
-                    if channel:
-                        await channel.send(
-                            f"🎮 **Unreal Engine** just posted a new video!\n**{title}**\n{url}"
-                        )
+                if not self._ue_seen_video_ids:
+                    # On first run seed with all current videos, don't announce
+                    for entry in entries:
+                        vid = entry.findtext("yt:videoId", namespaces=ns)
+                        if vid:
+                            self._ue_seen_video_ids.add(vid)
+                else:
+                    for entry in entries:
+                        vid = entry.findtext("yt:videoId", namespaces=ns)
+                        if not vid or vid in self._ue_seen_video_ids:
+                            continue
+                        self._ue_seen_video_ids.add(vid)
+                        t = entry.findtext("atom:title", namespaces=ns, default="New video")
+                        l_el = entry.find("atom:link", ns)
+                        u = l_el.get("href", "") if l_el is not None else f"https://www.youtube.com/watch?v={vid}"
+                        channel = self.get_channel(YOUTUBE_NOTIFY_CHANNEL_ID)
+                        if channel:
+                            await channel.send(
+                                f"🎮 **Unreal Engine** just posted a new video!\n**{t}**\n{u}"
+                            )
             except Exception as exc:
                 logger.warning("YouTube watcher error: %s", exc)
             await asyncio.sleep(600)  # check every 10 minutes
