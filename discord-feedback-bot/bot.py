@@ -2211,7 +2211,7 @@ class FeedbackBot(discord.Client):
                 statuses.append(discord.Activity(type=discord.ActivityType.listening, name="LocoDev"))
                 statuses.append(discord.Activity(type=discord.ActivityType.watching, name="UE5 Devs build"))
                 statuses.append(discord.Game(name="Unreal Engine 5"))
-                statuses.append(discord.Activity(type=discord.ActivityType.listening, name="ask me anything"))
+                statuses.append(discord.Activity(type=discord.ActivityType.listening, name="Ask me anything! :)"))
 
                 if statuses:
                     await self.change_presence(activity=random.choice(statuses))
