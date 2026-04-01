@@ -1739,6 +1739,19 @@ async def check_patron_slash(interaction: discord.Interaction, user: discord.Mem
         await interaction.followup.send(f"Error checking Patreon: {exc}", ephemeral=True)
 
 
+async def _send_chunked(channel, lines: list[str]) -> None:
+    """Send lines as Discord messages, splitting at 1900 chars."""
+    chunk = ""
+    for line in lines:
+        if len(chunk) + len(line) + 1 > 1900:
+            await channel.send(chunk)
+            chunk = line
+        else:
+            chunk = (chunk + "\n" + line).strip()
+    if chunk:
+        await channel.send(chunk)
+
+
 def _fetch_patreon_daily_activity() -> dict:
     """Fetch members who joined or have declined status in last 24h from Patreon API."""
     from urllib import request as _req, parse as _parse
@@ -2095,9 +2108,9 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
             await channel.send("📊 **Daily Patreon Summary** — No activity in the last 24h.")
         else:
             lines.append(f"\n**Net change: {len(joined) - len(cancels):+d}**")
-            await channel.send("\n".join(lines))
+            await _send_chunked(channel, lines)
     except Exception as exc:
-        await channel.send(f"📊 **Daily Patreon Summary** — Error fetching data: {exc}")
+        await channel.send(f"📊 **Daily Patreon Summary** — Error: {exc}"[:1900])
 
     # --- Weekly summary ---
     w_events = list(_weekly_events)
@@ -2257,7 +2270,7 @@ class FeedbackBot(discord.Client):
                 else:
                     net = len(joined) - len(cancels)
                     lines.append(f"\n**Net change: {net:+d}**")
-                    await channel.send("\n".join(lines))
+                    await _send_chunked(channel, lines)
 
             except Exception as exc:
                 logger.warning("Daily summary error: %s", exc)
