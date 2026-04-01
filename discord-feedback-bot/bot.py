@@ -2509,7 +2509,17 @@ class FeedbackBot(discord.Client):
                             img_bytes = await resp.read()
                             import base64 as _base64
                             img_b64 = _base64.b64encode(img_bytes).decode("utf-8")
-                            media_type = attachment.content_type.split(";")[0].strip()
+                            # Detect actual image type from bytes (Discord may report wrong content_type)
+                            if img_bytes[:8] == b'\x89PNG\r\n\x1a\n':
+                                media_type = "image/png"
+                            elif img_bytes[:3] == b'\xff\xd8\xff':
+                                media_type = "image/jpeg"
+                            elif img_bytes[:4] == b'GIF8':
+                                media_type = "image/gif"
+                            elif img_bytes[:4] == b'RIFF' and img_bytes[8:12] == b'WEBP':
+                                media_type = "image/webp"
+                            else:
+                                media_type = attachment.content_type.split(";")[0].strip()
                             user_content.append({
                                 "type": "image",
                                 "source": {
