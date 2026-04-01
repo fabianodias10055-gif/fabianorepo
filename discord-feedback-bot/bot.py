@@ -2406,9 +2406,9 @@ class FeedbackBot(discord.Client):
                         model="claude-haiku-4-5-20251001",
                         max_tokens=500,
                         system=(
-                            "Você é o LocoBOT, assistente oficial do servidor Discord da LocoDev. "
-                            "Responda sempre em português brasileiro de forma amigável e direta. "
-                            "Fale sobre a LocoDev como se fosse parte da equipe.\n\n"
+                            "You are LocoBOT, the official assistant of the LocoDev Discord server. "
+                            "Always reply in English in a friendly and direct tone. "
+                            "Talk about LocoDev as if you are part of the team.\n\n"
                             "SOBRE A LOCODEV:\n"
                             "- Criador: Fabiano, desenvolvedor com 4+ anos de experiência em Unreal Engine 5\n"
                             "- Foco: sistemas de gameplay AAA com Blueprints (locomoção, escalada, combate, animação, IA)\n"
@@ -2438,8 +2438,8 @@ class FeedbackBot(discord.Client):
                     await message.reply(answer[:1900])
                     await message.channel.send(answer[1900:])
             except Exception as exc:
-                logger.warning("AI responder error: %s", exc)
-                await message.reply("Desculpe, não consegui processar sua pergunta agora. Tente novamente! 🙏")
+                logger.warning("AI responder error: %s", exc, exc_info=True)
+                await message.reply(f"Sorry, I couldn't process your question right now. Try again! 🙏")
 
 
 # Dedup cache: (member_id, event) -> timestamp, to avoid duplicate announcements
