@@ -2591,6 +2591,8 @@ class FeedbackBot(discord.Client):
                             "- Lifetime access to tier content\n"
                             "- Exclusive Discord community\n"
                             "- Support from experienced devs\n\n"
+                            "IMPORTANT: Only mention Patreon or the plans if someone specifically asks about them. "
+                            "Focus on actually helping with the question. Do not add Patreon plugs at the end of replies.\n\n"
                             "If you don't know the answer, say so honestly and suggest contacting LocoDev."
                         ),
                         messages=msgs
