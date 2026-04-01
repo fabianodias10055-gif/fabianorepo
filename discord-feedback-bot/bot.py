@@ -2650,8 +2650,41 @@ class FeedbackBot(discord.Client):
                 except Exception as _te:
                     logger.warning("youtube-transcript-api also failed for %s: %s", video_id, _te)
 
+        # Detect non-YouTube URLs and fetch their content
+        _url_pattern = r'https?://[^\s<>\"\']+'
+        _all_urls = _re.findall(_url_pattern, _all_text)
+        # Filter out YouTube URLs (already handled above)
+        _other_urls = [u for u in _all_urls if not _re.search(_yt_pattern, u)]
+        web_context = ""
+        if _other_urls and not _yt_match:
+            url_to_fetch = _other_urls[0]  # fetch the first non-YT URL
+            try:
+                import aiohttp as _aiohttp
+                async with _aiohttp.ClientSession() as session:
+                    async with session.get(url_to_fetch, timeout=_aiohttp.ClientTimeout(total=10),
+                                           headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                        if resp.status == 200:
+                            html = await resp.text()
+                            from bs4 import BeautifulSoup
+                            soup = BeautifulSoup(html, "html.parser")
+                            # Remove script and style elements
+                            for tag in soup(["script", "style", "nav", "footer", "header"]):
+                                tag.decompose()
+                            page_title = soup.title.string.strip() if soup.title and soup.title.string else ""
+                            text = soup.get_text(separator="\n", strip=True)
+                            # Clean up excessive whitespace
+                            lines = [l.strip() for l in text.splitlines() if l.strip()]
+                            web_context = "\n".join(lines)[:4000]
+                            if page_title:
+                                web_context = f"Page title: {page_title}\n\n{web_context}"
+                            logger.info("Fetched web content from %s (%d chars)", url_to_fetch, len(web_context))
+            except Exception as _we:
+                logger.warning("Failed to fetch URL %s: %s", url_to_fetch, _we)
+
         # Build the final text prompt, including context from replied-to message
         parts = []
+        if web_context:
+            parts.append(f"[Web page content from {url_to_fetch}:\n{web_context}\n]")
         if transcript_context:
             header = f"[YouTube video: {yt_url}"
             if yt_title:
