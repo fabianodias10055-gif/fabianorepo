@@ -2232,7 +2232,7 @@ class FeedbackBot(discord.Client):
                             )
             except Exception as exc:
                 logger.warning("YouTube watcher error: %s", exc)
-            await asyncio.sleep(600)  # check every 10 minutes
+            await asyncio.sleep(1800)  # check every 30 minutes
 
     async def _weekly_summary(self) -> None:
         """Every Monday at 9 AM Sao Paulo, post a weekly Patreon summary."""
