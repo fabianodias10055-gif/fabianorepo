@@ -33,6 +33,7 @@ PATREON_WEBHOOK_SECRET = os.getenv("PATREON_WEBHOOK_SECRET", "")
 PATREON_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("PATREON_ANNOUNCEMENT_CHANNEL_ID", "1487222304277663794"))
 PATREON_PUBLIC_CHANNEL_ID = int(os.getenv("PATREON_PUBLIC_CHANNEL_ID", "1158395982485147689"))
 YOUTUBE_NOTIFY_CHANNEL_ID = int(os.getenv("YOUTUBE_NOTIFY_CHANNEL_ID", "1481432850212585655"))
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 MAX_MESSAGES_PER_CHANNEL = int(os.getenv("MAX_MESSAGES_PER_CHANNEL", "250"))
 PROJECTS_FORUM_CHANNEL_ID = os.getenv("PROJECTS_FORUM_CHANNEL_ID")
 CREATOR_ALIASES = tuple(
@@ -2381,6 +2382,64 @@ class FeedbackBot(discord.Client):
                 logger.warning("Missing permissions to assign 'Member' role to %s", member)
         else:
             logger.warning("Role 'Member' not found in guild %s", member.guild.name)
+
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot:
+            return
+        if self.user not in message.mentions:
+            return
+        if not ANTHROPIC_API_KEY:
+            return
+
+        question = message.content.replace(f"<@{self.user.id}>", "").strip()
+        if not question:
+            await message.reply("Oi! Como posso ajudar? 😊")
+            return
+
+        async with message.channel.typing():
+            try:
+                import anthropic as _anthropic
+                loop = asyncio.get_event_loop()
+                def _ask():
+                    ai = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+                    resp = ai.messages.create(
+                        model="claude-haiku-4-5-20251001",
+                        max_tokens=500,
+                        system=(
+                            "Você é o LocoBOT, assistente oficial do servidor Discord da LocoDev. "
+                            "Responda sempre em português brasileiro de forma amigável e direta. "
+                            "Fale sobre a LocoDev como se fosse parte da equipe.\n\n"
+                            "SOBRE A LOCODEV:\n"
+                            "- Criador: Fabiano, desenvolvedor com 4+ anos de experiência em Unreal Engine 5\n"
+                            "- Foco: sistemas de gameplay AAA com Blueprints (locomoção, escalada, combate, animação, IA)\n"
+                            "- YouTube gratuito: youtube.com/@LocoDev/videos\n"
+                            "- Patreon (conteúdo premium): patreon.com/LocoDev\n\n"
+                            "PLANOS DO PATREON:\n"
+                            "- LocoBasic: R$5/mês — acesso a sistemas básicos\n"
+                            "- LocoStandard: R$10/mês — sistemas intermediários + projetos\n"
+                            "- LocoPremium: R$20/mês — tudo + projetos completos, PDFs, merch, suporte prioritário\n\n"
+                            "BENEFÍCIOS PATREON:\n"
+                            "- Acesso vitalício ao conteúdo do seu plano\n"
+                            "- PDFs e materiais exclusivos\n"
+                            "- Suporte direto com prioridade\n"
+                            "- Comunidade no Discord com devs experientes\n"
+                            "- Calls semanais com Fabiano e a comunidade\n"
+                            "- Merch físico (tier Premium)\n\n"
+                            "Se não souber a resposta, diga honestamente e sugira entrar em contato com Fabiano."
+                        ),
+                        messages=[{"role": "user", "content": question}]
+                    )
+                    return resp.content[0].text
+                answer = await loop.run_in_executor(None, _ask)
+                # Split if over Discord's 2000 char limit
+                if len(answer) <= 1900:
+                    await message.reply(answer)
+                else:
+                    await message.reply(answer[:1900])
+                    await message.channel.send(answer[1900:])
+            except Exception as exc:
+                logger.warning("AI responder error: %s", exc)
+                await message.reply("Desculpe, não consegui processar sua pergunta agora. Tente novamente! 🙏")
 
 
 # Dedup cache: (member_id, event) -> timestamp, to avoid duplicate announcements
