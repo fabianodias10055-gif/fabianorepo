@@ -2085,7 +2085,10 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
         loop = asyncio.get_event_loop()
         activity = await loop.run_in_executor(None, _fetch_patreon_daily_activity)
         joined = activity["joined"]
-        cancels = [e for e in _daily_events if e["event"] in ("members:pledge:delete", "members:delete")]
+        from datetime import timezone as _tz
+        cutoff_24h = (datetime.now(_tz.utc) - timedelta(hours=24)).isoformat()
+        all_logged = _load_events()
+        cancels = [e for e in all_logged if e["event"] in ("members:pledge:delete", "members:delete") and e.get("ts", "") >= cutoff_24h]
 
         lines = ["📊 **Daily Patreon Summary** (last 24h)\n"]
         if joined:
@@ -2106,8 +2109,10 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
     except Exception as exc:
         await channel.send(f"📊 **Daily Patreon Summary** — Error: {exc}"[:1900])
 
-    # --- Weekly summary ---
-    w_events = list(_weekly_events)
+    # --- Weekly summary (from persisted log) ---
+    from datetime import timezone as _tz
+    cutoff_7d = (datetime.now(_tz.utc) - timedelta(days=7)).isoformat()
+    w_events = [e for e in _load_events() if e.get("ts", "") >= cutoff_7d]
     w_paid = [e for e in w_events if e["event"] == "members:pledge:create"]
     w_free = [e for e in w_events if e["event"] == "members:create"]
     w_cancels = [e for e in w_events if e["event"] in ("members:pledge:delete", "members:delete")]
@@ -2238,7 +2243,10 @@ class FeedbackBot(discord.Client):
                 activity = await loop.run_in_executor(None, _fetch_patreon_daily_activity)
                 joined = activity["joined"]
 
-                cancels = [e for e in _daily_events if e["event"] in ("members:pledge:delete", "members:delete")]
+                from datetime import timezone as _tz
+                cutoff_24h = (datetime.now(_tz.utc) - timedelta(hours=24)).isoformat()
+                all_logged = _load_events()
+                cancels = [e for e in all_logged if e["event"] in ("members:pledge:delete", "members:delete") and e.get("ts", "") >= cutoff_24h]
                 _daily_events.clear()
 
                 lines = ["📊 **Daily Patreon Summary** (last 24h)\n"]
@@ -2331,7 +2339,9 @@ class FeedbackBot(discord.Client):
                 wait_secs = (next_monday - now).total_seconds()
                 await asyncio.sleep(wait_secs)
 
-                events = list(_weekly_events)
+                from datetime import timezone as _tz
+                cutoff_7d = (datetime.now(_tz.utc) - timedelta(days=7)).isoformat()
+                events = [e for e in _load_events() if e.get("ts", "") >= cutoff_7d]
                 _weekly_events.clear()
 
                 channel = self.get_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID)
@@ -2543,8 +2553,34 @@ _patreon_event_cache: dict[tuple, float] = {}
 _PATREON_DEDUP_SECONDS = 30
 
 # Event trackers for scheduled summaries
-_daily_events: list[dict] = []   # {"event": str, "name": str, "tier": str|None, "amount": float}
-_weekly_events: list[dict] = []  # same structure, cleared weekly
+_EVENTS_LOG_PATH = "/app/patreon_events.json"
+
+def _load_events() -> list[dict]:
+    """Load persisted events, dropping entries older than 8 days."""
+    from datetime import timezone
+    try:
+        with open(_EVENTS_LOG_PATH, "r") as f:
+            events = json.load(f)
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+        return [e for e in events if e.get("ts", "") >= cutoff]
+    except Exception:
+        return []
+
+def _save_events(events: list[dict]) -> None:
+    try:
+        with open(_EVENTS_LOG_PATH, "w") as f:
+            json.dump(events, f)
+    except Exception as exc:
+        logger.warning("Could not save events log: %s", exc)
+
+def _append_event(entry: dict) -> None:
+    events = _load_events()
+    events.append(entry)
+    _save_events(events)
+
+# In-memory lists still used for dedup, backed by file
+_daily_events: list[dict] = []   # {"event": str, "name": str, "tier": str|None, "amount": float, "ts": str}
+_weekly_events: list[dict] = []  # same structure
 
 async def patreon_webhook_handler(request):
     import hmac, hashlib, time
@@ -2579,11 +2615,13 @@ async def patreon_webhook_handler(request):
     _patreon_event_cache[cache_key] = now
 
     # Track event for daily and weekly summaries
+    from datetime import timezone as _tz
     _entry = {
         "event": event,
         "name": full_name,
-        "tier": None,  # filled below
+        "tier": None,  # filled below after tier extraction
         "amount": amount_cents / 100,
+        "ts": datetime.now(_tz.utc).isoformat(),
     }
     _daily_events.append(_entry)
     _weekly_events.append(_entry)
@@ -2598,8 +2636,9 @@ async def patreon_webhook_handler(request):
         if inc.get("type") == "tier":
             tier_title = inc.get("attributes", {}).get("title")
 
-    # Update tier in tracked event
+    # Update tier in tracked event and persist to file
     _entry["tier"] = tier_title
+    _append_event(_entry)
 
     # Correct tier name based on amount paid (Patreon sometimes sends wrong tier name)
     def _correct_tier(title, cents):
