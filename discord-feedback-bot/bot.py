@@ -2488,10 +2488,15 @@ class FeedbackBot(discord.Client):
             self._processed_messages.clear()
 
         question = message.content.replace(f"<@{self.user.id}>", "").strip()
-        has_images = any(
-            a.content_type and a.content_type.startswith("image/")
-            for a in message.attachments
-        )
+        _image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+        def _is_image_attachment(a):
+            if a.content_type and a.content_type.startswith("image/"):
+                return True
+            import os as _os
+            ext = _os.path.splitext(a.filename)[1].lower()
+            return ext in _image_exts
+
+        has_images = any(_is_image_attachment(a) for a in message.attachments)
         if not question and not has_images:
             await message.reply("Hey! How can I help? 😊")
             return
@@ -2501,7 +2506,7 @@ class FeedbackBot(discord.Client):
         if question:
             user_content.append({"type": "text", "text": question})
         for attachment in message.attachments:
-            if attachment.content_type and attachment.content_type.startswith("image/"):
+            if _is_image_attachment(attachment):
                 import aiohttp as _aiohttp
                 async with _aiohttp.ClientSession() as session:
                     async with session.get(attachment.url) as resp:
@@ -2519,7 +2524,8 @@ class FeedbackBot(discord.Client):
                             elif img_bytes[:4] == b'RIFF' and img_bytes[8:12] == b'WEBP':
                                 media_type = "image/webp"
                             else:
-                                media_type = attachment.content_type.split(";")[0].strip()
+                                ct = attachment.content_type or "image/png"
+                                media_type = ct.split(";")[0].strip()
                             user_content.append({
                                 "type": "image",
                                 "source": {
