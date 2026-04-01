@@ -1739,6 +1739,83 @@ async def check_patron_slash(interaction: discord.Interaction, user: discord.Mem
         await interaction.followup.send(f"Error checking Patreon: {exc}", ephemeral=True)
 
 
+def _fetch_patreon_daily_activity() -> dict:
+    """Fetch members who joined or have declined status in last 24h from Patreon API."""
+    from urllib import request as _req, parse as _parse
+    from datetime import timezone
+    req = _req.Request(
+        "https://www.patreon.com/api/oauth2/v2/campaigns",
+        headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
+    )
+    with _req.urlopen(req, timeout=30) as resp:
+        campaigns = json.load(resp)
+    campaign_id = campaigns["data"][0]["id"]
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    joined = []
+    declined = []
+    cursor = None
+
+    while True:
+        params: dict = {
+            "include": "currently_entitled_tiers",
+            "fields[member]": "patron_status,full_name,currently_entitled_amount_cents,lifetime_support_cents,pledge_relationship_start",
+            "fields[tier]": "title",
+            "page[count]": "1000",
+        }
+        if cursor:
+            params["page[cursor]"] = cursor
+        req = _req.Request(
+            f"https://www.patreon.com/api/oauth2/v2/campaigns/{campaign_id}/members?{_parse.urlencode(params)}",
+            headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
+        )
+        with _req.urlopen(req, timeout=30) as resp:
+            data = json.load(resp)
+
+        tier_map = {
+            inc["id"]: inc.get("attributes", {}).get("title", "Unknown")
+            for inc in data.get("included", [])
+            if inc.get("type") == "tier"
+        }
+
+        for member in data.get("data", []):
+            attrs = member.get("attributes", {})
+            status = attrs.get("patron_status")
+            name = attrs.get("full_name", "Unknown")
+            amount_cents = attrs.get("currently_entitled_amount_cents") or 0
+            tiers = [
+                tier_map.get(t["id"], "Unknown")
+                for t in member.get("relationships", {}).get("currently_entitled_tiers", {}).get("data", [])
+            ]
+            tier_str = ", ".join(tiers) if tiers else None
+            # Correct tier by amount
+            def _correct(t, c):
+                if c <= 700: return "LocoBasic"
+                elif c <= 1500: return "LocoStandard"
+                else: return "LocoPremium"
+            if amount_cents > 0:
+                tier_str = _correct(tier_str, amount_cents)
+
+            start_str = attrs.get("pledge_relationship_start")
+            if start_str:
+                try:
+                    start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+                    if start_dt >= cutoff and status == "active_patron":
+                        joined.append({"name": name, "tier": tier_str, "amount": amount_cents / 100})
+                except Exception:
+                    pass
+
+            if status == "declined_patron":
+                declined.append({"name": name, "tier": tier_str, "amount": amount_cents / 100})
+
+        next_cursor = data.get("meta", {}).get("pagination", {}).get("cursors", {}).get("next")
+        if not next_cursor:
+            break
+        cursor = next_cursor
+
+    return {"joined": joined, "declined": declined}
+
+
 def _fetch_top_patrons(limit: int = 10) -> list[dict]:
     from urllib import request as _req, parse as _parse
     req = _req.Request(
@@ -1990,33 +2067,37 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
         await interaction.followup.send("Announcement channel not found.", ephemeral=True)
         return
 
-    # --- Daily summary ---
-    events = list(_daily_events)
-    free_joins = [e for e in events if e["event"] == "members:create"]
-    paid_subs = [e for e in events if e["event"] == "members:pledge:create"]
-    cancels = [e for e in events if e["event"] in ("members:pledge:delete", "members:delete")]
-    total_new = len(free_joins) + len(paid_subs)
-    total_cancel = len(cancels)
+    # --- Daily summary (live from Patreon API) ---
+    try:
+        loop = asyncio.get_event_loop()
+        activity = await loop.run_in_executor(None, _fetch_patreon_daily_activity)
+        joined = activity["joined"]
+        declined = activity["declined"]
+        cancels = [e for e in _daily_events if e["event"] in ("members:pledge:delete", "members:delete")]
 
-    if total_new == 0 and total_cancel == 0:
-        await channel.send("📊 **Daily Patreon Summary** — No activity today.")
-    else:
-        lines = ["📊 **Daily Patreon Summary**\n"]
-        if paid_subs:
-            lines.append(f"💎 **{len(paid_subs)}** new paid subscriber(s):")
-            for e in paid_subs:
+        lines = ["📊 **Daily Patreon Summary** (last 24h)\n"]
+        if joined:
+            lines.append(f"💎 **{len(joined)}** new paid subscriber(s):")
+            for e in joined:
                 tier = f" ({e['tier']})" if e["tier"] else ""
                 lines.append(f"  • **{e['name']}**{tier} — ${e['amount']:.2f}/mo")
-        if free_joins:
-            lines.append(f"👋 **{len(free_joins)}** new free member(s):")
-            for e in free_joins:
-                lines.append(f"  • **{e['name']}**")
+        if declined:
+            lines.append(f"⚠️ **{len(declined)}** declined payment(s):")
+            for e in declined:
+                tier = f" ({e['tier']})" if e["tier"] else ""
+                lines.append(f"  • **{e['name']}**{tier}")
         if cancels:
             lines.append(f"❌ **{len(cancels)}** cancellation(s):")
             for e in cancels:
-                lines.append(f"  • **{e['name']}**")
-        lines.append(f"\n**Net change: {total_new - total_cancel:+d}**")
-        await channel.send("\n".join(lines))
+                tier = f" ({e['tier']})" if e["tier"] else ""
+                lines.append(f"  • **{e['name']}**{tier}")
+        if len(lines) == 1:
+            await channel.send("📊 **Daily Patreon Summary** — No activity in the last 24h.")
+        else:
+            lines.append(f"\n**Net change: {len(joined) - len(cancels):+d}**")
+            await channel.send("\n".join(lines))
+    except Exception as exc:
+        await channel.send(f"📊 **Daily Patreon Summary** — Error fetching data: {exc}")
 
     # --- Weekly summary ---
     w_events = list(_weekly_events)
@@ -2141,46 +2222,42 @@ class FeedbackBot(discord.Client):
                 wait_secs = (next_9am - now).total_seconds()
                 await asyncio.sleep(wait_secs)
 
-                # Collect and clear events
-                events = list(_daily_events)
-                _daily_events.clear()
-
                 channel = self.get_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID)
                 if not channel:
                     continue
 
-                # Count events
-                free_joins = [e for e in events if e["event"] == "members:create"]
-                paid_subs = [e for e in events if e["event"] == "members:pledge:create"]
-                cancels = [e for e in events if e["event"] in ("members:pledge:delete", "members:delete")]
+                # Fetch live data from Patreon API
+                loop = asyncio.get_event_loop()
+                activity = await loop.run_in_executor(None, _fetch_patreon_daily_activity)
+                joined = activity["joined"]
+                declined = activity["declined"]
 
-                total_new = len(free_joins) + len(paid_subs)
-                total_cancel = len(cancels)
-
-                if total_new == 0 and total_cancel == 0:
-                    await channel.send("📊 **Daily Patreon Summary** — No activity today.")
-                    continue
-
-                lines = ["📊 **Daily Patreon Summary**\n"]
-
-                if paid_subs:
-                    lines.append(f"💎 **{len(paid_subs)}** new paid subscriber(s):")
-                    for e in paid_subs:
+                lines = ["📊 **Daily Patreon Summary** (last 24h)\n"]
+                if joined:
+                    lines.append(f"💎 **{len(joined)}** new paid subscriber(s):")
+                    for e in joined:
                         tier = f" ({e['tier']})" if e["tier"] else ""
                         lines.append(f"  • **{e['name']}**{tier} — ${e['amount']:.2f}/mo")
-
-                if free_joins:
-                    lines.append(f"👋 **{len(free_joins)}** new free member(s):")
-                    for e in free_joins:
-                        lines.append(f"  • **{e['name']}**")
-
+                if declined:
+                    lines.append(f"⚠️ **{len(declined)}** declined payment(s):")
+                    for e in declined:
+                        tier = f" ({e['tier']})" if e["tier"] else ""
+                        lines.append(f"  • **{e['name']}**{tier}")
+                # Also include webhook-tracked cancellations from today
+                cancels = [e for e in _daily_events if e["event"] in ("members:pledge:delete", "members:delete")]
                 if cancels:
                     lines.append(f"❌ **{len(cancels)}** cancellation(s):")
                     for e in cancels:
-                        lines.append(f"  • **{e['name']}**")
+                        tier = f" ({e['tier']})" if e["tier"] else ""
+                        lines.append(f"  • **{e['name']}**{tier}")
+                _daily_events.clear()
 
-                lines.append(f"\n**Net change: {total_new - total_cancel:+d}**")
-                await channel.send("\n".join(lines))
+                if len(lines) == 1:
+                    await channel.send("📊 **Daily Patreon Summary** — No activity in the last 24h.")
+                else:
+                    net = len(joined) - len(cancels)
+                    lines.append(f"\n**Net change: {net:+d}**")
+                    await channel.send("\n".join(lines))
 
             except Exception as exc:
                 logger.warning("Daily summary error: %s", exc)
