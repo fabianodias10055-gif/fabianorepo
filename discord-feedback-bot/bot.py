@@ -2545,13 +2545,34 @@ class FeedbackBot(discord.Client):
                                 }
                             })
                             image_count += 1
+        # Detect YouTube URLs in current message or replied-to message
+        import re as _re
+        _yt_pattern = r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]{11})'
+        _all_text = (question or "") + " " + (replied_text or "")
+        _yt_match = _re.search(_yt_pattern, _all_text)
+        transcript_context = ""
+        if _yt_match:
+            video_id = _yt_match.group(1)
+            try:
+                from youtube_transcript_api import YouTubeTranscriptApi as _YTApi
+                loop = asyncio.get_event_loop()
+                def _get_transcript():
+                    transcript = _YTApi.get_transcript(video_id)
+                    text = " ".join(t["text"] for t in transcript)
+                    return text[:6000]  # limit to avoid token overload
+                transcript_context = await loop.run_in_executor(None, _get_transcript)
+            except Exception as _te:
+                logger.warning("Could not fetch transcript for %s: %s", video_id, _te)
+
         # Build the final text prompt, including context from replied-to message
         parts = []
-        if replied_text:
+        if transcript_context:
+            parts.append(f"[YouTube video transcript:\n{transcript_context}\n]")
+        if replied_text and not _yt_match:
             parts.append(f"[Replying to this message:\n{replied_text}\n]")
         if question:
             parts.append(question)
-        elif image_count > 0 and not replied_text:
+        elif image_count > 0 and not replied_text and not transcript_context:
             parts.append("Please describe and analyze what you see in this image.")
         full_prompt = "\n\n".join(parts) if parts else ""
         if full_prompt:
