@@ -2064,6 +2064,7 @@ class FeedbackBot(discord.Client):
         self._weekly_task: asyncio.Task | None = None
         self._youtube_task: asyncio.Task | None = None
         self._ue_seen_video_ids: set[str] = set()
+        self._conversation_history: dict[int, list[dict]] = {}
 
     def _clean_post_title(self, title: str) -> str:
         import re
@@ -2393,13 +2394,25 @@ class FeedbackBot(discord.Client):
 
         question = message.content.replace(f"<@{self.user.id}>", "").strip()
         if not question:
-            await message.reply("Oi! Como posso ajudar? 😊")
+            await message.reply("Hey! How can I help? 😊")
             return
+
+        # Build conversation history for this user (last 10 exchanges)
+        user_id = message.author.id
+        if user_id not in self._conversation_history:
+            self._conversation_history[user_id] = []
+        history = self._conversation_history[user_id]
+        history.append({"role": "user", "content": question})
+        # Keep only last 10 messages to avoid token limits
+        if len(history) > 10:
+            history = history[-10:]
+            self._conversation_history[user_id] = history
 
         async with message.channel.typing():
             try:
                 import anthropic as _anthropic
                 loop = asyncio.get_event_loop()
+                msgs = list(history)
                 def _ask():
                     ai = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
                     resp = ai.messages.create(
@@ -2409,29 +2422,27 @@ class FeedbackBot(discord.Client):
                             "You are LocoBOT, the official assistant of the LocoDev Discord server. "
                             "Always reply in English in a friendly and direct tone. "
                             "Talk about LocoDev as if you are part of the team.\n\n"
-                            "SOBRE A LOCODEV:\n"
-                            "- Criador: Fabiano, desenvolvedor com 4+ anos de experiência em Unreal Engine 5\n"
-                            "- Foco: sistemas de gameplay AAA com Blueprints (locomoção, escalada, combate, animação, IA)\n"
-                            "- YouTube gratuito: youtube.com/@LocoDev/videos\n"
-                            "- Patreon (conteúdo premium): patreon.com/LocoDev\n\n"
-                            "PLANOS DO PATREON:\n"
-                            "- LocoBasic: R$5/mês — acesso a sistemas básicos\n"
-                            "- LocoStandard: R$10/mês — sistemas intermediários + projetos\n"
-                            "- LocoPremium: R$20/mês — tudo + projetos completos, PDFs, merch, suporte prioritário\n\n"
-                            "BENEFÍCIOS PATREON:\n"
-                            "- Acesso vitalício ao conteúdo do seu plano\n"
-                            "- PDFs e materiais exclusivos\n"
-                            "- Suporte direto com prioridade\n"
-                            "- Comunidade no Discord com devs experientes\n"
-                            "- Calls semanais com Fabiano e a comunidade\n"
-                            "- Merch físico (tier Premium)\n\n"
-                            "Se não souber a resposta, diga honestamente e sugira entrar em contato com Fabiano."
+                            "ABOUT LOCODEV:\n"
+                            "- Creator: Fabiano, developer with 4+ years of Unreal Engine 5 experience\n"
+                            "- Focus: AAA gameplay systems with Blueprints (locomotion, climbing, combat, animation, AI)\n"
+                            "- Free YouTube: youtube.com/@LocoDev/videos\n"
+                            "- Premium content on Patreon: patreon.com/LocoDev\n\n"
+                            "PATREON PLANS:\n"
+                            "- LocoBasic: R$5/month — basic systems access\n"
+                            "- LocoStandard: R$10/month — intermediate systems + project files\n"
+                            "- LocoPremium: R$20/month — everything + complete projects, PDFs, merch, priority support, weekly calls\n\n"
+                            "ALL PLANS INCLUDE:\n"
+                            "- Lifetime access to tier content\n"
+                            "- Exclusive Discord community\n"
+                            "- Support from experienced devs\n\n"
+                            "If you don't know the answer, say so honestly and suggest contacting Fabiano."
                         ),
-                        messages=[{"role": "user", "content": question}]
+                        messages=msgs
                     )
                     return resp.content[0].text
                 answer = await loop.run_in_executor(None, _ask)
-                # Split if over Discord's 2000 char limit
+                # Store bot reply in history
+                self._conversation_history[user_id].append({"role": "assistant", "content": answer})
                 if len(answer) <= 1900:
                     await message.reply(answer)
                 else:
