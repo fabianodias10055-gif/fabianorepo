@@ -2562,6 +2562,13 @@ class FeedbackBot(discord.Client):
         _check_embeds_on = []
         if ref_msg is not None:
             _check_embeds_on.append(ref_msg)
+        # Wait briefly for Discord to populate embeds on the current message
+        if not message.embeds:
+            await asyncio.sleep(1.5)
+            try:
+                message = await message.channel.fetch_message(message.id)
+            except Exception:
+                pass
         _check_embeds_on.append(message)
         for _emsg in _check_embeds_on:
             for embed in getattr(_emsg, "embeds", []):
@@ -2697,6 +2704,10 @@ class FeedbackBot(discord.Client):
                             logger.warning("URL %s returned non-200 status: %s", url_to_fetch, resp.status)
             except Exception as _we:
                 logger.warning("Failed to fetch URL %s: %s", url_to_fetch, _we)
+            # If fetch failed, use Discord embed info as fallback
+            if not web_context and _embed_info:
+                web_context = f"Page: {url_to_fetch}\n{_embed_info.strip()}"
+                logger.info("Using Discord embed info as fallback for %s", url_to_fetch)
 
         # Build the final text prompt, including context from replied-to message
         parts = []
