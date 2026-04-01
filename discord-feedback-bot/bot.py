@@ -2496,7 +2496,14 @@ class FeedbackBot(discord.Client):
             ext = _os.path.splitext(a.filename)[1].lower()
             return ext in _image_exts
 
-        has_images = any(_is_image_attachment(a) for a in message.attachments)
+        # Collect attachments from this message AND the replied-to message
+        all_attachments = list(message.attachments)
+        if message.reference and message.reference.resolved:
+            ref_msg = message.reference.resolved
+            if hasattr(ref_msg, "attachments"):
+                all_attachments.extend(ref_msg.attachments)
+
+        has_images = any(_is_image_attachment(a) for a in all_attachments)
         if not question and not has_images:
             await message.reply("Hey! How can I help? 😊")
             return
@@ -2504,7 +2511,7 @@ class FeedbackBot(discord.Client):
         # Build user message content (text + images)
         user_content: list = []
         image_count = 0
-        for attachment in message.attachments:
+        for attachment in all_attachments:
             if _is_image_attachment(attachment):
                 import aiohttp as _aiohttp
                 async with _aiohttp.ClientSession() as session:
