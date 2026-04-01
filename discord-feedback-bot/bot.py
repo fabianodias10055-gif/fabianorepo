@@ -2500,8 +2500,16 @@ class FeedbackBot(discord.Client):
         # Collect attachments and text from this message AND the replied-to message
         all_attachments = list(message.attachments)
         replied_text = ""
-        if message.reference and message.reference.resolved:
+        ref_msg = None
+        if message.reference:
             ref_msg = message.reference.resolved
+            # Fetch the referenced message if Discord didn't cache it
+            if ref_msg is None and message.reference.message_id:
+                try:
+                    ref_msg = await message.channel.fetch_message(message.reference.message_id)
+                except Exception:
+                    pass
+        if ref_msg is not None:
             if hasattr(ref_msg, "attachments"):
                 all_attachments.extend(ref_msg.attachments)
             if hasattr(ref_msg, "content") and ref_msg.content:
@@ -2552,8 +2560,8 @@ class FeedbackBot(discord.Client):
         _embed_urls = ""
         _embed_info = ""  # title + description extracted from Discord embed
         _check_embeds_on = []
-        if message.reference and message.reference.resolved:
-            _check_embeds_on.append(message.reference.resolved)
+        if ref_msg is not None:
+            _check_embeds_on.append(ref_msg)
         _check_embeds_on.append(message)
         for _emsg in _check_embeds_on:
             for embed in getattr(_emsg, "embeds", []):
