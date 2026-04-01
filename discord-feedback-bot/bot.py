@@ -34,6 +34,7 @@ PATREON_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("PATREON_ANNOUNCEMENT_CHANNEL_ID
 PATREON_PUBLIC_CHANNEL_ID = int(os.getenv("PATREON_PUBLIC_CHANNEL_ID", "1158395982485147689"))
 YOUTUBE_NOTIFY_CHANNEL_ID = int(os.getenv("YOUTUBE_NOTIFY_CHANNEL_ID", "1481432850212585655"))
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+TENOR_API_KEY = os.getenv("TENOR_API_KEY", "")
 MAX_MESSAGES_PER_CHANNEL = int(os.getenv("MAX_MESSAGES_PER_CHANNEL", "250"))
 PROJECTS_FORUM_CHANNEL_ID = os.getenv("PROJECTS_FORUM_CHANNEL_ID")
 CREATOR_ALIASES = tuple(
@@ -2396,6 +2397,28 @@ class FeedbackBot(discord.Client):
         if not question:
             await message.reply("Hey! How can I help? 😊")
             return
+
+        # GIF request detection
+        import re as _re
+        gif_match = _re.search(r'(send|show|gif)\s+(a\s+)?(.*?gif.*|funny.*|.*)\s*$', question.lower())
+        gif_keywords = ["gif", "funny gif", "meme", "send a gif", "show a gif"]
+        is_gif_request = any(kw in question.lower() for kw in gif_keywords)
+        if is_gif_request and TENOR_API_KEY:
+            search_term = question.lower().replace("send", "").replace("a", "").replace("funny", "").replace("gif", "").strip() or "funny"
+            try:
+                from urllib import request as _req, parse as _parse
+                url = f"https://tenor.googleapis.com/v2/search?q={_parse.quote(search_term)}&key={TENOR_API_KEY}&limit=5&media_filter=gif"
+                with _req.urlopen(url, timeout=10) as resp:
+                    data = json.loads(resp.read())
+                results = data.get("results", [])
+                if results:
+                    import random
+                    gif = random.choice(results)
+                    gif_url = gif["media_formats"]["gif"]["url"]
+                    await message.reply(gif_url)
+                    return
+            except Exception as exc:
+                logger.warning("Tenor GIF error: %s", exc)
 
         # Build conversation history for this user (last 10 exchanges)
         user_id = message.author.id
