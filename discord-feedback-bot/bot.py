@@ -2488,7 +2488,37 @@ class FeedbackBot(discord.Client):
             self._processed_messages.clear()
 
         question = message.content.replace(f"<@{self.user.id}>", "").strip()
-        if not question:
+        has_images = any(
+            a.content_type and a.content_type.startswith("image/")
+            for a in message.attachments
+        )
+        if not question and not has_images:
+            await message.reply("Hey! How can I help? 😊")
+            return
+
+        # Build user message content (text + images)
+        user_content: list = []
+        if question:
+            user_content.append({"type": "text", "text": question})
+        for attachment in message.attachments:
+            if attachment.content_type and attachment.content_type.startswith("image/"):
+                import aiohttp as _aiohttp
+                async with _aiohttp.ClientSession() as session:
+                    async with session.get(attachment.url) as resp:
+                        if resp.status == 200:
+                            img_bytes = await resp.read()
+                            import base64 as _base64
+                            img_b64 = _base64.b64encode(img_bytes).decode("utf-8")
+                            media_type = attachment.content_type.split(";")[0].strip()
+                            user_content.append({
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": img_b64,
+                                }
+                            })
+        if not user_content:
             await message.reply("Hey! How can I help? 😊")
             return
 
@@ -2497,7 +2527,9 @@ class FeedbackBot(discord.Client):
         if user_id not in self._conversation_history:
             self._conversation_history[user_id] = []
         history = self._conversation_history[user_id]
-        history.append({"role": "user", "content": question})
+        # Store text-only version in history for context continuity
+        history_text = question if question else "[image]"
+        history.append({"role": "user", "content": user_content if has_images else history_text})
         # Keep only last 10 messages to avoid token limits
         if len(history) > 10:
             history = history[-10:]
