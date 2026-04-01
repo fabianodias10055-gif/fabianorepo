@@ -2548,15 +2548,26 @@ class FeedbackBot(discord.Client):
         # Detect YouTube URLs in current message, replied-to message, or embeds
         import re as _re
         _yt_pattern = r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]{11})'
-        # Also check embeds on the replied-to message (Discord stores link embeds there)
+        # Also check embeds on the replied-to and current message (Discord stores link embeds there)
         _embed_urls = ""
+        _embed_info = ""  # title + description extracted from Discord embed
+        _check_embeds_on = []
         if message.reference and message.reference.resolved:
-            ref = message.reference.resolved
-            for embed in getattr(ref, "embeds", []):
+            _check_embeds_on.append(message.reference.resolved)
+        _check_embeds_on.append(message)
+        for _emsg in _check_embeds_on:
+            for embed in getattr(_emsg, "embeds", []):
                 if embed.url:
                     _embed_urls += " " + embed.url
                 if embed.video and embed.video.url:
                     _embed_urls += " " + embed.video.url
+                # Capture title and description from the embed
+                if embed.title:
+                    _embed_info += f"Title: {embed.title}\n"
+                if embed.description:
+                    _embed_info += f"Description: {embed.description}\n"
+                if embed.author and embed.author.name:
+                    _embed_info += f"Channel: {embed.author.name}\n"
         _all_text = (question or "") + " " + (replied_text or "") + " " + _embed_urls
         _yt_match = _re.search(_yt_pattern, _all_text)
         transcript_context = ""
@@ -2571,7 +2582,6 @@ class FeedbackBot(discord.Client):
                     try:
                         transcript = _YTApi.get_transcript(video_id)
                     except Exception:
-                        # Try with auto-generated captions
                         transcript = _YTApi.get_transcript(video_id, languages=["en", "pt", "auto"])
                     text = " ".join(t["text"] for t in transcript)
                     return text[:6000]
@@ -2584,8 +2594,12 @@ class FeedbackBot(discord.Client):
         if transcript_context:
             parts.append(f"[YouTube video ({yt_url}) transcript:\n{transcript_context}\n]")
         elif yt_url:
-            # Transcript unavailable but we know the URL — tell Claude so it can try to help
-            parts.append(f"[The user shared this YouTube video: {yt_url} — transcript not available]")
+            # No transcript — use embed title/description if available
+            video_info = f"[YouTube video: {yt_url}"
+            if _embed_info:
+                video_info += f"\n{_embed_info.strip()}"
+            video_info += "\n(Transcript not available — answer based on the title/description above)]"
+            parts.append(video_info)
         if replied_text and not _yt_match:
             parts.append(f"[Replying to this message:\n{replied_text}\n]")
         if question:
