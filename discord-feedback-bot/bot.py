@@ -2545,21 +2545,36 @@ class FeedbackBot(discord.Client):
                                 }
                             })
                             image_count += 1
-        # Detect YouTube URLs in current message or replied-to message
+        # Detect YouTube URLs in current message, replied-to message, or embeds
         import re as _re
         _yt_pattern = r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]{11})'
-        _all_text = (question or "") + " " + (replied_text or "")
+        # Also check embeds on the replied-to message (Discord stores link embeds there)
+        _embed_urls = ""
+        if message.reference and message.reference.resolved:
+            ref = message.reference.resolved
+            for embed in getattr(ref, "embeds", []):
+                if embed.url:
+                    _embed_urls += " " + embed.url
+                if embed.video and embed.video.url:
+                    _embed_urls += " " + embed.video.url
+        _all_text = (question or "") + " " + (replied_text or "") + " " + _embed_urls
         _yt_match = _re.search(_yt_pattern, _all_text)
         transcript_context = ""
+        yt_url = ""
         if _yt_match:
             video_id = _yt_match.group(1)
+            yt_url = f"https://youtu.be/{video_id}"
             try:
                 from youtube_transcript_api import YouTubeTranscriptApi as _YTApi
                 loop = asyncio.get_event_loop()
                 def _get_transcript():
-                    transcript = _YTApi.get_transcript(video_id)
+                    try:
+                        transcript = _YTApi.get_transcript(video_id)
+                    except Exception:
+                        # Try with auto-generated captions
+                        transcript = _YTApi.get_transcript(video_id, languages=["en", "pt", "auto"])
                     text = " ".join(t["text"] for t in transcript)
-                    return text[:6000]  # limit to avoid token overload
+                    return text[:6000]
                 transcript_context = await loop.run_in_executor(None, _get_transcript)
             except Exception as _te:
                 logger.warning("Could not fetch transcript for %s: %s", video_id, _te)
@@ -2567,7 +2582,10 @@ class FeedbackBot(discord.Client):
         # Build the final text prompt, including context from replied-to message
         parts = []
         if transcript_context:
-            parts.append(f"[YouTube video transcript:\n{transcript_context}\n]")
+            parts.append(f"[YouTube video ({yt_url}) transcript:\n{transcript_context}\n]")
+        elif yt_url:
+            # Transcript unavailable but we know the URL — tell Claude so it can try to help
+            parts.append(f"[The user shared this YouTube video: {yt_url} — transcript not available]")
         if replied_text and not _yt_match:
             parts.append(f"[Replying to this message:\n{replied_text}\n]")
         if question:
