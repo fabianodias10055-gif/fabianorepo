@@ -2575,6 +2575,7 @@ class FeedbackBot(discord.Client):
         if _yt_match:
             video_id = _yt_match.group(1)
             yt_url = f"https://youtu.be/{video_id}"
+            # Try youtube-transcript-api first, then fall back to yt-dlp
             try:
                 from youtube_transcript_api import YouTubeTranscriptApi as _YTApi
                 loop = asyncio.get_event_loop()
@@ -2587,7 +2588,54 @@ class FeedbackBot(discord.Client):
                     return text[:6000]
                 transcript_context = await loop.run_in_executor(None, _get_transcript)
             except Exception as _te:
-                logger.warning("Could not fetch transcript for %s: %s", video_id, _te)
+                logger.warning("youtube-transcript-api failed for %s, trying yt-dlp: %s", video_id, _te)
+                # Fallback: use yt-dlp to extract auto-generated subtitles
+                try:
+                    import tempfile, subprocess
+                    loop = asyncio.get_event_loop()
+                    def _get_transcript_ytdlp():
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            sub_path = f"{tmpdir}/sub"
+                            result = subprocess.run(
+                                [
+                                    "yt-dlp",
+                                    "--skip-download",
+                                    "--write-auto-sub",
+                                    "--write-sub",
+                                    "--sub-lang", "en,pt",
+                                    "--sub-format", "vtt",
+                                    "-o", sub_path,
+                                    f"https://www.youtube.com/watch?v={video_id}",
+                                ],
+                                capture_output=True, text=True, timeout=30
+                            )
+                            # Find the subtitle file
+                            import glob
+                            sub_files = glob.glob(f"{tmpdir}/sub*.vtt")
+                            if not sub_files:
+                                return ""
+                            with open(sub_files[0], "r", encoding="utf-8") as f:
+                                vtt = f.read()
+                            # Parse VTT: extract text lines, skip timestamps and headers
+                            lines = []
+                            for line in vtt.split("\n"):
+                                line = line.strip()
+                                if not line or line.startswith("WEBVTT") or line.startswith("Kind:") or line.startswith("Language:"):
+                                    continue
+                                if "-->" in line:
+                                    continue
+                                if line.startswith("<"):
+                                    import re
+                                    line = re.sub(r"<[^>]+>", "", line)
+                                if line and line not in lines[-1:]:
+                                    lines.append(line)
+                            text = " ".join(lines)
+                            return text[:6000]
+                    transcript_context = await loop.run_in_executor(None, _get_transcript_ytdlp)
+                    if transcript_context:
+                        logger.info("yt-dlp successfully extracted transcript for %s", video_id)
+                except Exception as _te2:
+                    logger.warning("yt-dlp also failed for %s: %s", video_id, _te2)
 
         # Build the final text prompt, including context from replied-to message
         parts = []
