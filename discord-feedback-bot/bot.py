@@ -2666,26 +2666,35 @@ class FeedbackBot(discord.Client):
         web_context = ""
         if _other_urls and not _yt_match:
             url_to_fetch = _other_urls[0]  # fetch the first non-YT URL
+            logger.info("Attempting to fetch web content from: %s", url_to_fetch)
             try:
                 import aiohttp as _aiohttp
                 async with _aiohttp.ClientSession() as session:
-                    async with session.get(url_to_fetch, timeout=_aiohttp.ClientTimeout(total=10),
-                                           headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                    async with session.get(
+                        url_to_fetch,
+                        timeout=_aiohttp.ClientTimeout(total=15),
+                        allow_redirects=True,
+                        headers={
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        }
+                    ) as resp:
+                        logger.info("URL %s returned status %s", url_to_fetch, resp.status)
                         if resp.status == 200:
                             html = await resp.text()
                             from bs4 import BeautifulSoup
                             soup = BeautifulSoup(html, "html.parser")
-                            # Remove script and style elements
                             for tag in soup(["script", "style", "nav", "footer", "header"]):
                                 tag.decompose()
                             page_title = soup.title.string.strip() if soup.title and soup.title.string else ""
                             text = soup.get_text(separator="\n", strip=True)
-                            # Clean up excessive whitespace
                             lines = [l.strip() for l in text.splitlines() if l.strip()]
                             web_context = "\n".join(lines)[:4000]
                             if page_title:
                                 web_context = f"Page title: {page_title}\n\n{web_context}"
                             logger.info("Fetched web content from %s (%d chars)", url_to_fetch, len(web_context))
+                        else:
+                            logger.warning("URL %s returned non-200 status: %s", url_to_fetch, resp.status)
             except Exception as _we:
                 logger.warning("Failed to fetch URL %s: %s", url_to_fetch, _we)
 
