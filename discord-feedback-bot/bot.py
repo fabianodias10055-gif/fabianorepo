@@ -2503,8 +2503,7 @@ class FeedbackBot(discord.Client):
 
         # Build user message content (text + images)
         user_content: list = []
-        if question:
-            user_content.append({"type": "text", "text": question})
+        image_count = 0
         for attachment in message.attachments:
             if _is_image_attachment(attachment):
                 import aiohttp as _aiohttp
@@ -2534,6 +2533,13 @@ class FeedbackBot(discord.Client):
                                     "data": img_b64,
                                 }
                             })
+                            image_count += 1
+        # Add text after images so Claude sees the image first
+        prompt_text = question if question else ("Please describe and analyze what you see in this image." if image_count > 0 else "")
+        if image_count > 0 and not question:
+            user_content.append({"type": "text", "text": "Please describe and analyze what you see in this image."})
+        elif question:
+            user_content.append({"type": "text", "text": question})
         if not user_content:
             await message.reply("Hey! How can I help? 😊")
             return
@@ -2543,9 +2549,9 @@ class FeedbackBot(discord.Client):
         if user_id not in self._conversation_history:
             self._conversation_history[user_id] = []
         history = self._conversation_history[user_id]
-        # Store text-only version in history for context continuity
-        history_text = question if question else "[image]"
-        history.append({"role": "user", "content": user_content if has_images else history_text})
+        # Store text-only summary in history (no base64) to keep memory light
+        history_text = (f"[User shared {image_count} image(s)] " if image_count > 0 else "") + (question or "")
+        history.append({"role": "user", "content": user_content if image_count > 0 else history_text.strip()})
         # Keep only last 10 messages to avoid token limits
         if len(history) > 10:
             history = history[-10:]
@@ -2560,7 +2566,7 @@ class FeedbackBot(discord.Client):
                     ai = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
                     resp = ai.messages.create(
                         model="claude-haiku-4-5-20251001",
-                        max_tokens=500,
+                        max_tokens=1024,
                         system=(
                             "You are LocoBOT, the official assistant of the LocoDev Discord server. "
                             "Always reply in English in a friendly and direct tone. "
