@@ -2085,7 +2085,6 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
         loop = asyncio.get_event_loop()
         activity = await loop.run_in_executor(None, _fetch_patreon_daily_activity)
         joined = activity["joined"]
-        declined = activity["declined"]
         cancels = [e for e in _daily_events if e["event"] in ("members:pledge:delete", "members:delete")]
 
         lines = ["📊 **Daily Patreon Summary** (last 24h)\n"]
@@ -2094,18 +2093,13 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
             for e in joined:
                 tier = f" ({e['tier']})" if e["tier"] else ""
                 lines.append(f"  • **{e['name']}**{tier} — ${e['amount']:.2f}/mo")
-        if declined:
-            lines.append(f"⚠️ **{len(declined)}** declined payment(s):")
-            for e in declined:
-                tier = f" ({e['tier']})" if e["tier"] else ""
-                lines.append(f"  • **{e['name']}**{tier}")
         if cancels:
             lines.append(f"❌ **{len(cancels)}** cancellation(s):")
             for e in cancels:
                 tier = f" ({e['tier']})" if e["tier"] else ""
                 lines.append(f"  • **{e['name']}**{tier}")
         if len(lines) == 1:
-            await channel.send("📊 **Daily Patreon Summary** — No activity in the last 24h.")
+            await channel.send("📊 **Daily Patreon Summary** — No new subscribers or cancellations in the last 24h.")
         else:
             lines.append(f"\n**Net change: {len(joined) - len(cancels):+d}**")
             await _send_chunked(channel, lines)
@@ -2243,7 +2237,9 @@ class FeedbackBot(discord.Client):
                 loop = asyncio.get_event_loop()
                 activity = await loop.run_in_executor(None, _fetch_patreon_daily_activity)
                 joined = activity["joined"]
-                declined = activity["declined"]
+
+                cancels = [e for e in _daily_events if e["event"] in ("members:pledge:delete", "members:delete")]
+                _daily_events.clear()
 
                 lines = ["📊 **Daily Patreon Summary** (last 24h)\n"]
                 if joined:
@@ -2251,22 +2247,14 @@ class FeedbackBot(discord.Client):
                     for e in joined:
                         tier = f" ({e['tier']})" if e["tier"] else ""
                         lines.append(f"  • **{e['name']}**{tier} — ${e['amount']:.2f}/mo")
-                if declined:
-                    lines.append(f"⚠️ **{len(declined)}** declined payment(s):")
-                    for e in declined:
-                        tier = f" ({e['tier']})" if e["tier"] else ""
-                        lines.append(f"  • **{e['name']}**{tier}")
-                # Also include webhook-tracked cancellations from today
-                cancels = [e for e in _daily_events if e["event"] in ("members:pledge:delete", "members:delete")]
                 if cancels:
                     lines.append(f"❌ **{len(cancels)}** cancellation(s):")
                     for e in cancels:
                         tier = f" ({e['tier']})" if e["tier"] else ""
                         lines.append(f"  • **{e['name']}**{tier}")
-                _daily_events.clear()
 
                 if len(lines) == 1:
-                    await channel.send("📊 **Daily Patreon Summary** — No activity in the last 24h.")
+                    await channel.send("📊 **Daily Patreon Summary** — No new subscribers or cancellations in the last 24h.")
                 else:
                     net = len(joined) - len(cancels)
                     lines.append(f"\n**Net change: {net:+d}**")
