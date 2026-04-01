@@ -2065,6 +2065,7 @@ class FeedbackBot(discord.Client):
         self._youtube_task: asyncio.Task | None = None
         self._ue_seen_video_ids: set[str] = set()
         self._conversation_history: dict[int, list[dict]] = {}
+        self._processed_messages: set[int] = set()
 
     def _clean_post_title(self, title: str) -> str:
         import re
@@ -2391,6 +2392,12 @@ class FeedbackBot(discord.Client):
             return
         if not ANTHROPIC_API_KEY:
             return
+        if message.id in self._processed_messages:
+            return
+        self._processed_messages.add(message.id)
+        # Keep set size bounded
+        if len(self._processed_messages) > 1000:
+            self._processed_messages.clear()
 
         question = message.content.replace(f"<@{self.user.id}>", "").strip()
         if not question:
