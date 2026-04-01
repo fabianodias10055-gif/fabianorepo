@@ -1971,7 +1971,6 @@ async def meta_conversion_slash(
         received = await loop.run_in_executor(None, _send_meta_conversion, name, phone, email, value)
         await interaction.followup.send(
             f"✅ Purchase event sent to Meta!\n**Name:** {name}\n**Phone:** {phone}\n**Email:** {email}\n**Value:** R${value:.2f}\n**Events received:** {received}",
-            ephemeral=True,
         )
     except Exception as exc:
         await interaction.followup.send(f"Error sending to Meta: {exc}", ephemeral=True)
