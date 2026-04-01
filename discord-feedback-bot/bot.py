@@ -2575,78 +2575,99 @@ class FeedbackBot(discord.Client):
         if _yt_match:
             video_id = _yt_match.group(1)
             yt_url = f"https://youtu.be/{video_id}"
-            # Try youtube-transcript-api first, then fall back to yt-dlp
-            try:
-                from youtube_transcript_api import YouTubeTranscriptApi as _YTApi
-                loop = asyncio.get_event_loop()
-                def _get_transcript():
-                    try:
-                        transcript = _YTApi.get_transcript(video_id)
-                    except Exception:
-                        transcript = _YTApi.get_transcript(video_id, languages=["en", "pt", "auto"])
-                    text = " ".join(t["text"] for t in transcript)
-                    return text[:6000]
-                transcript_context = await loop.run_in_executor(None, _get_transcript)
-            except Exception as _te:
-                logger.warning("youtube-transcript-api failed for %s, trying yt-dlp: %s", video_id, _te)
-                # Fallback: use yt-dlp to extract auto-generated subtitles
+            yt_title = ""
+            yt_description = ""
+
+            # Use yt-dlp to get metadata + subtitles in one call
+            loop = asyncio.get_event_loop()
+            def _get_yt_info():
+                import subprocess, json as _json
                 try:
-                    import tempfile, subprocess
-                    loop = asyncio.get_event_loop()
-                    def _get_transcript_ytdlp():
-                        with tempfile.TemporaryDirectory() as tmpdir:
-                            sub_path = f"{tmpdir}/sub"
-                            result = subprocess.run(
-                                [
-                                    "yt-dlp",
-                                    "--skip-download",
-                                    "--write-auto-sub",
-                                    "--write-sub",
-                                    "--sub-lang", "en,pt",
-                                    "--sub-format", "vtt",
-                                    "-o", sub_path,
-                                    f"https://www.youtube.com/watch?v={video_id}",
-                                ],
-                                capture_output=True, text=True, timeout=30
-                            )
-                            # Find the subtitle file
-                            import glob
-                            sub_files = glob.glob(f"{tmpdir}/sub*.vtt")
-                            if not sub_files:
-                                return ""
-                            with open(sub_files[0], "r", encoding="utf-8") as f:
-                                vtt = f.read()
-                            # Parse VTT: extract text lines, skip timestamps and headers
-                            lines = []
-                            for line in vtt.split("\n"):
-                                line = line.strip()
-                                if not line or line.startswith("WEBVTT") or line.startswith("Kind:") or line.startswith("Language:"):
-                                    continue
-                                if "-->" in line:
-                                    continue
-                                if line.startswith("<"):
-                                    import re
-                                    line = re.sub(r"<[^>]+>", "", line)
-                                if line and line not in lines[-1:]:
-                                    lines.append(line)
-                            text = " ".join(lines)
-                            return text[:6000]
-                    transcript_context = await loop.run_in_executor(None, _get_transcript_ytdlp)
-                    if transcript_context:
-                        logger.info("yt-dlp successfully extracted transcript for %s", video_id)
-                except Exception as _te2:
-                    logger.warning("yt-dlp also failed for %s: %s", video_id, _te2)
+                    result = subprocess.run(
+                        [
+                            "yt-dlp",
+                            "--skip-download",
+                            "--dump-json",
+                            "--write-auto-sub",
+                            "--write-sub",
+                            "--sub-lang", "en,pt",
+                            "--sub-format", "json3",
+                            f"https://www.youtube.com/watch?v={video_id}",
+                        ],
+                        capture_output=True, text=True, timeout=30
+                    )
+                    if result.returncode != 0:
+                        return {}, ""
+                    info = _json.loads(result.stdout)
+                    # Extract subtitles from the json3 format if downloaded
+                    subs_text = ""
+                    # Check requested_subtitles for the actual subtitle data
+                    req_subs = info.get("requested_subtitles") or {}
+                    for lang in ["en", "pt"]:
+                        sub_info = req_subs.get(lang)
+                        if sub_info and sub_info.get("filepath"):
+                            try:
+                                with open(sub_info["filepath"], "r", encoding="utf-8") as f:
+                                    sub_data = _json.load(f)
+                                events = sub_data.get("events", [])
+                                segments = []
+                                for evt in events:
+                                    segs = evt.get("segs", [])
+                                    text = "".join(s.get("utf8", "") for s in segs).strip()
+                                    if text and text != "\n":
+                                        segments.append(text)
+                                subs_text = " ".join(segments)
+                            except Exception:
+                                pass
+                            if subs_text:
+                                break
+                    return info, subs_text[:6000]
+                except Exception as e:
+                    logger.warning("yt-dlp failed for %s: %s", video_id, e)
+                    return {}, ""
+
+            try:
+                yt_info, subs = await loop.run_in_executor(None, _get_yt_info)
+                yt_title = yt_info.get("title", "")
+                yt_description = (yt_info.get("description") or "")[:1000]
+                if subs:
+                    transcript_context = subs
+                    logger.info("yt-dlp extracted transcript for %s (%d chars)", video_id, len(subs))
+            except Exception as _te:
+                logger.warning("yt-dlp error for %s: %s", video_id, _te)
+
+            # If yt-dlp failed, try youtube-transcript-api as fallback
+            if not transcript_context:
+                try:
+                    from youtube_transcript_api import YouTubeTranscriptApi as _YTApi
+                    def _get_transcript():
+                        try:
+                            transcript = _YTApi.get_transcript(video_id)
+                        except Exception:
+                            transcript = _YTApi.get_transcript(video_id, languages=["en", "pt", "auto"])
+                        return " ".join(t["text"] for t in transcript)[:6000]
+                    transcript_context = await loop.run_in_executor(None, _get_transcript)
+                except Exception as _te:
+                    logger.warning("youtube-transcript-api also failed for %s: %s", video_id, _te)
 
         # Build the final text prompt, including context from replied-to message
         parts = []
         if transcript_context:
-            parts.append(f"[YouTube video ({yt_url}) transcript:\n{transcript_context}\n]")
+            header = f"[YouTube video: {yt_url}"
+            if yt_title:
+                header += f"\nTitle: {yt_title}"
+            header += f"\n\nTranscript:\n{transcript_context}\n]"
+            parts.append(header)
         elif yt_url:
-            # No transcript — use embed title/description if available
+            # No transcript — use yt-dlp metadata or Discord embed info
             video_info = f"[YouTube video: {yt_url}"
-            if _embed_info:
+            if yt_title:
+                video_info += f"\nTitle: {yt_title}"
+            if yt_description:
+                video_info += f"\nDescription: {yt_description}"
+            if not yt_title and _embed_info:
                 video_info += f"\n{_embed_info.strip()}"
-            video_info += "\n(Transcript not available — answer based on the title/description above)]"
+            video_info += "\n(Answer based on the title/description above)]"
             parts.append(video_info)
         if replied_text and not _yt_match:
             parts.append(f"[Replying to this message:\n{replied_text}\n]")
