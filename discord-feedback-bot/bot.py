@@ -2497,15 +2497,18 @@ class FeedbackBot(discord.Client):
             ext = _os.path.splitext(a.filename)[1].lower()
             return ext in _image_exts
 
-        # Collect attachments from this message AND the replied-to message
+        # Collect attachments and text from this message AND the replied-to message
         all_attachments = list(message.attachments)
+        replied_text = ""
         if message.reference and message.reference.resolved:
             ref_msg = message.reference.resolved
             if hasattr(ref_msg, "attachments"):
                 all_attachments.extend(ref_msg.attachments)
+            if hasattr(ref_msg, "content") and ref_msg.content:
+                replied_text = ref_msg.content.strip()
 
         has_images = any(_is_image_attachment(a) for a in all_attachments)
-        if not question and not has_images:
+        if not question and not has_images and not replied_text:
             await message.reply("Hey! How can I help? 😊")
             return
 
@@ -2542,12 +2545,17 @@ class FeedbackBot(discord.Client):
                                 }
                             })
                             image_count += 1
-        # Add text after images so Claude sees the image first
-        prompt_text = question if question else ("Please describe and analyze what you see in this image." if image_count > 0 else "")
-        if image_count > 0 and not question:
-            user_content.append({"type": "text", "text": "Please describe and analyze what you see in this image."})
-        elif question:
-            user_content.append({"type": "text", "text": question})
+        # Build the final text prompt, including context from replied-to message
+        parts = []
+        if replied_text:
+            parts.append(f"[Replying to this message:\n{replied_text}\n]")
+        if question:
+            parts.append(question)
+        elif image_count > 0 and not replied_text:
+            parts.append("Please describe and analyze what you see in this image.")
+        full_prompt = "\n\n".join(parts) if parts else ""
+        if full_prompt:
+            user_content.append({"type": "text", "text": full_prompt})
         if not user_content:
             await message.reply("Hey! How can I help? 😊")
             return
@@ -2558,7 +2566,7 @@ class FeedbackBot(discord.Client):
             self._conversation_history[user_id] = []
         history = self._conversation_history[user_id]
         # Store text-only summary in history (no base64) to keep memory light
-        history_text = (f"[User shared {image_count} image(s)] " if image_count > 0 else "") + (question or "")
+        history_text = (f"[User shared {image_count} image(s)] " if image_count > 0 else "") + (full_prompt or "")
         history.append({"role": "user", "content": user_content if image_count > 0 else history_text.strip()})
         # Keep only last 10 messages to avoid token limits
         if len(history) > 10:
