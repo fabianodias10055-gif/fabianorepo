@@ -2414,10 +2414,11 @@ async def patreon_webhook_handler(request):
     lifetime_cents = attrs.get("lifetime_support_cents") or 0
     is_returning = lifetime_cents > amount_cents
 
-    # Dedup check
+    # Dedup check — use 6 hours for payment events, 30s for others
     cache_key = (member_id, event)
     now = time.monotonic()
-    if now - _patreon_event_cache.get(cache_key, 0) < _PATREON_DEDUP_SECONDS:
+    dedup_seconds = 21600 if event in ("members:update", "members:pledge:create", "members:pledge:delete") else 30
+    if now - _patreon_event_cache.get(cache_key, 0) < dedup_seconds:
         logger.info("Skipping duplicate Patreon event %s for %s", event, member_id)
         return web.Response(status=200, text="OK")
     _patreon_event_cache[cache_key] = now
