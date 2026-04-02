@@ -36,7 +36,6 @@ YOUTUBE_NOTIFY_CHANNEL_ID = int(os.getenv("YOUTUBE_NOTIFY_CHANNEL_ID", "14814328
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 PUSHOVER_USER_KEY = os.getenv("PUSHOVER_USER_KEY", "")
 PUSHOVER_API_TOKEN = os.getenv("PUSHOVER_API_TOKEN", "")
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "locodev-payments")
 MAX_MESSAGES_PER_CHANNEL = int(os.getenv("MAX_MESSAGES_PER_CHANNEL", "250"))
 PROJECTS_FORUM_CHANNEL_ID = os.getenv("PROJECTS_FORUM_CHANNEL_ID")
 CREATOR_ALIASES = tuple(
@@ -1757,44 +1756,27 @@ async def _send_chunked(channel, lines: list[str]) -> None:
 
 
 async def _send_pushover(title: str, message: str, sound: str = "cashregister") -> None:
-    """Send a push notification via Ntfy (and Pushover if configured)."""
+    """Send a push notification via Pushover to the owner's phone."""
+    if not PUSHOVER_USER_KEY or not PUSHOVER_API_TOKEN:
+        return
     import aiohttp as _aiohttp
-    # Send via Ntfy (primary)
-    if NTFY_TOPIC:
-        try:
-            async with _aiohttp.ClientSession() as session:
-                await session.post(
-                    f"https://ntfy.sh/{NTFY_TOPIC}",
-                    data=message.encode("utf-8"),
-                    headers={
-                        "Title": title,
-                        "Priority": "high",
-                        "Tags": "moneybag",
-                    },
-                    timeout=_aiohttp.ClientTimeout(total=10),
-                )
-                logger.info("Ntfy notification sent: %s", title)
-        except Exception as _ne:
-            logger.warning("Ntfy notification failed: %s", _ne)
-    # Also send via Pushover if configured
-    if PUSHOVER_USER_KEY and PUSHOVER_API_TOKEN:
-        try:
-            async with _aiohttp.ClientSession() as session:
-                await session.post(
-                    "https://api.pushover.net/1/messages.json",
-                    data={
-                        "token": PUSHOVER_API_TOKEN,
-                        "user": PUSHOVER_USER_KEY,
-                        "title": title,
-                        "message": message,
-                        "sound": sound,
-                        "priority": 1,
-                    },
-                    timeout=_aiohttp.ClientTimeout(total=10),
-                )
-                logger.info("Pushover notification sent: %s", title)
-        except Exception as _pe:
-            logger.warning("Pushover notification failed: %s", _pe)
+    try:
+        async with _aiohttp.ClientSession() as session:
+            await session.post(
+                "https://api.pushover.net/1/messages.json",
+                data={
+                    "token": PUSHOVER_API_TOKEN,
+                    "user": PUSHOVER_USER_KEY,
+                    "title": title,
+                    "message": message,
+                    "sound": sound,
+                    "priority": 1,
+                },
+                timeout=_aiohttp.ClientTimeout(total=10),
+            )
+            logger.info("Pushover notification sent: %s", title)
+    except Exception as _pe:
+        logger.warning("Pushover notification failed: %s", _pe)
 
 
 def _search_patreon_posts(query: str) -> list[dict]:
