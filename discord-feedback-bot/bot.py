@@ -2774,9 +2774,20 @@ class FeedbackBot(discord.Client):
             and any(kw in (question or "").lower() for kw in _patreon_keywords)
         )
         if _looks_like_patreon_search and PATREON_ACCESS_TOKEN:
-            # Extract meaningful search terms (remove common filler)
-            _filler = {"can", "you", "find", "the", "link", "for", "to", "a", "an", "of", "from", "locodev", "patreon", "post", "video", "please", "where", "is"}
-            search_terms = " ".join(w for w in (question or "").split() if w.lower() not in _filler).strip()
+            # Extract meaningful search terms (remove common stop words and punctuation)
+            _filler = {
+                "can", "you", "find", "the", "link", "for", "to", "a", "an", "of", "from",
+                "locodev", "patreon", "post", "posts", "video", "please", "where", "is",
+                "get", "on", "in", "at", "be", "do", "have", "about", "with", "it",
+                "this", "that", "me", "my", "i", "we", "us", "are", "was", "has",
+                "there", "some", "any", "what", "which", "how", "up", "out", "by",
+                "show", "give", "send", "share", "look", "search", "hey", "hi", "please"
+            }
+            import re as _re2
+            search_terms = " ".join(
+                _re2.sub(r'[^\w\s]', '', w) for w in (question or "").split()
+                if w.lower().rstrip("?!.,") not in _filler and len(w) > 2
+            ).strip()
             if search_terms:
                 try:
                     loop = asyncio.get_event_loop()
