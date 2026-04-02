@@ -2141,6 +2141,24 @@ async def meta_conversion_slash(
         await interaction.followup.send(f"Error sending to Meta: {exc}", ephemeral=True)
 
 
+@app_commands.command(name="test_pushover", description="Send a test Pushover notification to your phone.")
+async def test_pushover_slash(interaction: discord.Interaction) -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    if not PUSHOVER_USER_KEY or not PUSHOVER_API_TOKEN:
+        await interaction.followup.send("PUSHOVER_USER_KEY or PUSHOVER_API_TOKEN not configured.", ephemeral=True)
+        return
+    await _send_pushover(
+        title="💰 Test — New Patron!",
+        message="This is a test notification from LocoDev Bot. Cash register works!",
+        sound="cashregister",
+    )
+    await interaction.followup.send("Test notification sent to your phone!", ephemeral=True)
+
+
 @app_commands.command(name="test_reports", description="Send daily summary and weekly leaderboard now (test).")
 async def test_reports_slash(interaction: discord.Interaction) -> None:
     roles = [r.name for r in getattr(interaction.user, "roles", [])]
@@ -2465,6 +2483,7 @@ class FeedbackBot(discord.Client):
         self.tree.add_command(recent_posts_slash)
         self.tree.add_command(meta_conversion_slash)
         self.tree.add_command(test_reports_slash)
+        self.tree.add_command(test_pushover_slash)
 
     async def on_ready(self) -> None:
         if not self.synced:
