@@ -2756,6 +2756,7 @@ class FeedbackBot(discord.Client):
 
         # Patreon post search — when user asks to find a Patreon post/system
         patreon_search_results = ""
+        web_context = ""  # initialized here; populated later in URL fetch block
         _patreon_keywords = ["patreon", "post", "system", "project files", "download", "premium", "find", "link", "where"]
         _looks_like_patreon_search = (
             not _yt_match
@@ -2782,7 +2783,6 @@ class FeedbackBot(discord.Client):
         _all_urls = _re.findall(_url_pattern, _all_text)
         # Filter out YouTube URLs (already handled above)
         _other_urls = [u for u in _all_urls if not _re.search(_yt_pattern, u)]
-        web_context = ""
         if _other_urls and not _yt_match:
             url_to_fetch = _other_urls[0]  # fetch the first non-YT URL
             logger.info("Attempting to fetch web content from: %s", url_to_fetch)
