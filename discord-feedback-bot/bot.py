@@ -2525,7 +2525,17 @@ class FeedbackBot(discord.Client):
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
             return
-        if self.user not in message.mentions:
+        # Trigger if bot is @mentioned OR if someone replies to one of the bot's messages
+        is_mention = self.user in message.mentions
+        is_reply_to_bot = False
+        if message.reference and message.reference.message_id:
+            try:
+                ref = message.reference.resolved or await message.channel.fetch_message(message.reference.message_id)
+                if ref and ref.author and ref.author.id == self.user.id:
+                    is_reply_to_bot = True
+            except Exception:
+                pass
+        if not is_mention and not is_reply_to_bot:
             return
         if not ANTHROPIC_API_KEY:
             return
