@@ -1752,6 +1752,54 @@ async def _send_chunked(channel, lines: list[str]) -> None:
         await channel.send(chunk)
 
 
+
+def _search_patreon_posts(query: str) -> list[dict]:
+    """Search LocoDev's Patreon posts by title. Returns list of {title, url}."""
+    from urllib import request as _req, parse as _parse
+    if not PATREON_ACCESS_TOKEN:
+        return []
+    # Get campaign ID
+    req = _req.Request(
+        "https://www.patreon.com/api/oauth2/v2/campaigns",
+        headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
+    )
+    with _req.urlopen(req, timeout=30) as resp:
+        campaigns = json.load(resp)
+    campaign_id = campaigns["data"][0]["id"]
+
+    # Fetch posts with title and URL
+    results = []
+    cursor = None
+    query_lower = query.lower()
+    while True:
+        params: dict = {
+            "fields[post]": "title,url,published_at",
+            "page[count]": "200",
+        }
+        if cursor:
+            params["page[cursor]"] = cursor
+        url = "https://www.patreon.com/api/oauth2/v2/campaigns/" + campaign_id + "/posts?" + _parse.urlencode(params)
+        req = _req.Request(
+            url,
+            headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
+        )
+        with _req.urlopen(req, timeout=30) as resp:
+            data = json.load(resp)
+        for post in data.get("data", []):
+            title = post.get("attributes", {}).get("title") or ""
+            post_url = post.get("attributes", {}).get("url") or ""
+            if query_lower in title.lower() and post_url:
+                results.append({"title": title, "url": post_url})
+        # Paginate
+        next_cursor = data.get("meta", {}).get("pagination", {}).get("cursors", {}).get("next")
+        if not next_cursor or not data.get("meta", {}).get("pagination", {}).get("has_more"):
+            break
+        cursor = next_cursor
+        if len(results) >= 10:
+            break
+    return results[:5]
+
+
 def _fetch_patreon_daily_activity() -> dict:
     """Fetch members who joined or have declined status in last 24h from Patreon API."""
     from urllib import request as _req, parse as _parse
@@ -2706,6 +2754,29 @@ class FeedbackBot(discord.Client):
             except Exception as _se:
                 logger.warning("YouTube search failed: %s", _se)
 
+        # Patreon post search — when user asks to find a Patreon post/system
+        patreon_search_results = ""
+        _patreon_keywords = ["patreon", "post", "system", "project files", "download", "premium", "find", "link", "where"]
+        _looks_like_patreon_search = (
+            not _yt_match
+            and not web_context
+            and any(kw in (question or "").lower() for kw in _patreon_keywords)
+        )
+        if _looks_like_patreon_search and PATREON_ACCESS_TOKEN:
+            # Extract meaningful search terms (remove common filler)
+            _filler = {"can", "you", "find", "the", "link", "for", "to", "a", "an", "of", "from", "locodev", "patreon", "post", "video", "please", "where", "is"}
+            search_terms = " ".join(w for w in (question or "").split() if w.lower() not in _filler).strip()
+            if search_terms:
+                try:
+                    loop = asyncio.get_event_loop()
+                    posts = await loop.run_in_executor(None, _search_patreon_posts, search_terms)
+                    if posts:
+                        lines = [f"- {p['title']}: {p['url']}" for p in posts]
+                        patreon_search_results = "\n".join(lines)
+                        logger.info("Patreon search for '%s' returned %d results", search_terms, len(posts))
+                except Exception as _pe:
+                    logger.warning("Patreon post search failed: %s", _pe)
+
         # Detect non-YouTube URLs and fetch their content
         _url_pattern = r'https?://[^\s<>\"\']+'
         _all_urls = _re.findall(_url_pattern, _all_text)
@@ -2756,6 +2827,8 @@ class FeedbackBot(discord.Client):
             parts.append(f"[Web page content from {url_to_fetch}:\n{web_context}\n]")
         if yt_search_results:
             parts.append(f"[YouTube search results for '{search_query}':\n{yt_search_results}\n\nShare the most relevant link(s) from above to answer the user's request.]")
+        if patreon_search_results:
+            parts.append(f"[Patreon post search results for '{search_terms}':\n{patreon_search_results}\n\nShare the most relevant Patreon link(s) from above.]")
         if transcript_context:
             header = f"[YouTube video: {yt_url}"
             if yt_title:
