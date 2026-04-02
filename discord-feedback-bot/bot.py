@@ -3083,6 +3083,39 @@ async def patreon_webhook_handler(request):
     else:
         msg = None
 
+    # --- Assign/remove Discord tier roles based on event ---
+    _tier_roles = ["LocoBasic", "LocoStandard", "LocoPremium"]
+    if discord_id:
+        guild = client.get_guild(int(GUILD_ID))
+        if guild:
+            try:
+                member = guild.get_member(int(discord_id)) or await guild.fetch_member(int(discord_id))
+                if member:
+                    # Determine which role to assign
+                    new_role_name = None
+                    if event in ("members:pledge:create", "members:pledge:update"):
+                        new_role_name = tier_title  # e.g. "LocoStandard"
+                    elif event == "members:pledge:delete":
+                        new_role_name = None  # remove all tier roles
+
+                    # Remove all existing tier roles first
+                    roles_to_remove = [r for r in member.roles if r.name in _tier_roles]
+                    if roles_to_remove:
+                        await member.remove_roles(*roles_to_remove, reason="Patreon tier update")
+
+                    # Assign the new tier role
+                    if new_role_name and new_role_name in _tier_roles:
+                        role = discord.utils.get(guild.roles, name=new_role_name)
+                        if role:
+                            await member.add_roles(role, reason=f"Patreon {event}")
+                            logger.info("Assigned role '%s' to %s (Discord ID %s)", new_role_name, full_name, discord_id)
+                        else:
+                            logger.warning("Role '%s' not found in guild", new_role_name)
+            except discord.NotFound:
+                logger.warning("Discord member %s not found in guild for role assignment", discord_id)
+            except Exception as _re:
+                logger.warning("Failed to assign role for %s: %s", discord_id, _re)
+
     if msg:
         # Send full message to #bot-reports
         channel = client.get_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID)
