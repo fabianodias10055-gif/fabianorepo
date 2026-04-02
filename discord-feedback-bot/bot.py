@@ -2665,6 +2665,47 @@ class FeedbackBot(discord.Client):
                 except Exception as _te:
                     logger.warning("youtube-transcript-api also failed for %s: %s", video_id, _te)
 
+        # YouTube search — if no URL shared and question looks like a search request
+        yt_search_results = ""
+        _search_keywords = ["find", "search", "link", "where", "video", "tutorial", "show me", "can you find", "look for"]
+        _looks_like_search = (
+            not _yt_match
+            and any(kw in (question or "").lower() for kw in _search_keywords)
+        )
+        if _looks_like_search:
+            # Build search query — strip filler words and focus on content terms
+            search_query = (question or "").lower()
+            # Automatically scope to LocoDev if not already mentioned
+            if "locodev" not in search_query:
+                search_query = f"LocoDev {question}"
+            else:
+                search_query = question
+            try:
+                import subprocess, json as _json
+                loop = asyncio.get_event_loop()
+                def _yt_search():
+                    result = subprocess.run(
+                        ["yt-dlp", f"ytsearch5:{search_query}", "--dump-json",
+                         "--flat-playlist", "--skip-download", "--no-warnings"],
+                        capture_output=True, text=True, timeout=20
+                    )
+                    videos = []
+                    for line in result.stdout.strip().splitlines():
+                        try:
+                            v = _json.loads(line)
+                            title = v.get("title", "")
+                            url = v.get("webpage_url") or f"https://youtu.be/{v.get('id','')}"
+                            if title and url:
+                                videos.append(f"- {title}: {url}")
+                        except Exception:
+                            pass
+                    return "\n".join(videos)
+                yt_search_results = await loop.run_in_executor(None, _yt_search)
+                if yt_search_results:
+                    logger.info("YouTube search returned results for: %s", search_query)
+            except Exception as _se:
+                logger.warning("YouTube search failed: %s", _se)
+
         # Detect non-YouTube URLs and fetch their content
         _url_pattern = r'https?://[^\s<>\"\']+'
         _all_urls = _re.findall(_url_pattern, _all_text)
@@ -2713,6 +2754,8 @@ class FeedbackBot(discord.Client):
         parts = []
         if web_context:
             parts.append(f"[Web page content from {url_to_fetch}:\n{web_context}\n]")
+        if yt_search_results:
+            parts.append(f"[YouTube search results for '{search_query}':\n{yt_search_results}\n\nShare the most relevant link(s) from above to answer the user's request.]")
         if transcript_context:
             header = f"[YouTube video: {yt_url}"
             if yt_title:
