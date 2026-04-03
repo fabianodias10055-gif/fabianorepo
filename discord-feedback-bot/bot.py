@@ -2977,6 +2977,7 @@ class FeedbackBot(discord.Client):
 
         # Search knowledge base for relevant past Q&A
         kb_context = ""
+        kb_images: list[str] = []
         if question:
             kb_matches = _kb_search(question, top_n=3)
             if kb_matches:
@@ -2986,6 +2987,9 @@ class FeedbackBot(discord.Client):
                     for e in kb_matches
                 ]
                 kb_context = "\n\n".join(kb_lines)
+                # Collect all images from matching KB entries to send after the reply
+                for e in kb_matches:
+                    kb_images.extend(e.get("images") or [])
 
         # Build the final text prompt, including context from replied-to message
         parts = []
@@ -3083,6 +3087,9 @@ class FeedbackBot(discord.Client):
                     await message.reply(answer)
                 else:
                     await message.reply(answer[:1900])
+                # Send KB images as follow-up if any
+                if kb_images:
+                    await message.channel.send("\n".join(kb_images[:4]))
                     await message.channel.send(answer[1900:])
             except Exception as exc:
                 logger.warning("AI responder error: %s", exc, exc_info=True)
