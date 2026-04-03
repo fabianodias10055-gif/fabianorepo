@@ -36,6 +36,7 @@ YOUTUBE_NOTIFY_CHANNEL_ID = int(os.getenv("YOUTUBE_NOTIFY_CHANNEL_ID", "14814328
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 PUSHOVER_USER_KEY = os.getenv("PUSHOVER_USER_KEY", "")
 PUSHOVER_API_TOKEN = os.getenv("PUSHOVER_API_TOKEN", "")
+KB_CHANNEL_ID = int(os.getenv("KB_CHANNEL_ID", "1481100889757581434"))
 MAX_MESSAGES_PER_CHANNEL = int(os.getenv("MAX_MESSAGES_PER_CHANNEL", "250"))
 PROJECTS_FORUM_CHANNEL_ID = os.getenv("PROJECTS_FORUM_CHANNEL_ID")
 CREATOR_ALIASES = tuple(
@@ -2159,6 +2160,42 @@ async def test_pushover_slash(interaction: discord.Interaction) -> None:
     await interaction.followup.send("Test notification sent to your phone!", ephemeral=True)
 
 
+@app_commands.command(name="kb_scan", description="Scan the support channel and save approved (✅) Q&A pairs to the knowledge base.")
+@app_commands.describe(limit="How many messages to scan (default 500)")
+async def kb_scan_slash(interaction: discord.Interaction, limit: int = 500) -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    channel = interaction.client.get_channel(KB_CHANNEL_ID) or await interaction.client.fetch_channel(KB_CHANNEL_ID)
+    saved = 0
+    try:
+        async for msg in channel.history(limit=limit, oldest_first=False):
+            if not msg.reference:
+                continue
+            # Check if this message has ✅ reaction
+            approved = any(str(r.emoji) == _KB_APPROVE_EMOJI and r.count > 0 for r in msg.reactions)
+            if not approved:
+                continue
+            try:
+                question_msg = await channel.fetch_message(msg.reference.message_id)
+                question = question_msg.content.strip()
+                answer = msg.content.strip()
+                if question and answer:
+                    before = len(_kb_load())
+                    _kb_add(question, answer, msg.author.display_name)
+                    if len(_kb_load()) > before:
+                        saved += 1
+            except Exception:
+                continue
+    except Exception as _se:
+        await interaction.followup.send(f"Error scanning: {_se}", ephemeral=True)
+        return
+    total = len(_kb_load())
+    await interaction.followup.send(f"Scan complete — saved **{saved}** new Q&A pairs. Knowledge base has **{total}** entries total.", ephemeral=True)
+
+
 @app_commands.command(name="test_reports", description="Send daily summary and weekly leaderboard now (test).")
 async def test_reports_slash(interaction: discord.Interaction) -> None:
     roles = [r.name for r in getattr(interaction.user, "roles", [])]
@@ -2484,6 +2521,7 @@ class FeedbackBot(discord.Client):
         self.tree.add_command(meta_conversion_slash)
         self.tree.add_command(test_reports_slash)
         self.tree.add_command(test_pushover_slash)
+        self.tree.add_command(kb_scan_slash)
 
     async def on_ready(self) -> None:
         if not self.synced:
@@ -2498,6 +2536,7 @@ class FeedbackBot(discord.Client):
             self.tree.add_command(meta_conversion_slash)
             self.tree.add_command(test_reports_slash)
             self.tree.add_command(test_pushover_slash)
+        self.tree.add_command(kb_scan_slash)
             if GUILD_ID:
                 guild = discord.Object(id=int(GUILD_ID))
                 self.tree.copy_global_to(guild=guild)
@@ -2567,6 +2606,27 @@ class FeedbackBot(discord.Client):
                 logger.warning("Missing permissions to assign 'Member' role to %s", member)
         else:
             logger.warning("Role 'Member' not found in guild %s", member.guild.name)
+
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        """Save Q&A to knowledge base when ✅ is added to a message in KB channel."""
+        if str(payload.emoji) != _KB_APPROVE_EMOJI:
+            return
+        if payload.channel_id != KB_CHANNEL_ID:
+            return
+        try:
+            channel = self.get_channel(payload.channel_id) or await self.fetch_channel(payload.channel_id)
+            answer_msg = await channel.fetch_message(payload.message_id)
+            # The answer must be a reply to a question
+            if not answer_msg.reference:
+                return
+            question_msg = await channel.fetch_message(answer_msg.reference.message_id)
+            question = question_msg.content.strip()
+            answer = answer_msg.content.strip()
+            if question and answer:
+                _kb_add(question, answer, answer_msg.author.display_name)
+                await answer_msg.add_reaction("📚")  # confirm saved
+        except Exception as _ke:
+            logger.warning("KB reaction handler error: %s", _ke)
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
@@ -2905,8 +2965,18 @@ class FeedbackBot(discord.Client):
                 web_context = f"Page: {url_to_fetch}\n{_embed_info.strip()}"
                 logger.info("Using Discord embed info as fallback for %s", url_to_fetch)
 
+        # Search knowledge base for relevant past Q&A
+        kb_context = ""
+        if question:
+            kb_matches = _kb_search(question, top_n=3)
+            if kb_matches:
+                kb_lines = [f"Q: {e['question']}\nA: {e['answer']}" for e in kb_matches]
+                kb_context = "\n\n".join(kb_lines)
+
         # Build the final text prompt, including context from replied-to message
         parts = []
+        if kb_context:
+            parts.append(f"[Relevant past Q&A from community knowledge base:\n{kb_context}\n]")
         if channel_context:
             parts.append(f"[Recent channel messages for context:\n{channel_context}\n]")
         if web_context:
@@ -3009,7 +3079,50 @@ class FeedbackBot(discord.Client):
 _patreon_event_cache: dict[tuple, float] = {}
 _PATREON_DEDUP_SECONDS = 30
 
-# Event trackers for scheduled summaries
+# ── Knowledge Base ──────────────────────────────────────────────────────────
+_KB_PATH = "/app/knowledge_base.json"
+_KB_APPROVE_EMOJI = "✅"
+
+def _kb_load() -> list[dict]:
+    try:
+        with open(_KB_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def _kb_save(entries: list[dict]) -> None:
+    with open(_KB_PATH, "w", encoding="utf-8") as f:
+        json.dump(entries, f, ensure_ascii=False, indent=2)
+
+def _kb_add(question: str, answer: str, author: str) -> None:
+    entries = _kb_load()
+    # Avoid duplicates
+    for e in entries:
+        if e["question"].strip().lower() == question.strip().lower():
+            return
+    entries.append({
+        "question": question.strip(),
+        "answer": answer.strip(),
+        "author": author,
+        "ts": datetime.utcnow().isoformat(),
+    })
+    _kb_save(entries)
+    logger.info("KB: saved Q&A — %s", question[:60])
+
+def _kb_search(query: str, top_n: int = 3) -> list[dict]:
+    """Simple keyword search over the knowledge base."""
+    entries = _kb_load()
+    query_words = set(query.lower().split())
+    scored = []
+    for e in entries:
+        q_words = set(e["question"].lower().split())
+        score = len(query_words & q_words)
+        if score > 0:
+            scored.append((score, e))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [e for _, e in scored[:top_n]]
+
+# ── Event trackers for scheduled summaries ──────────────────────────────────
 _EVENTS_LOG_PATH = "/app/patreon_events.json"
 
 def _load_events() -> list[dict]:
