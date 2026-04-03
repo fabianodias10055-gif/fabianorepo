@@ -2182,9 +2182,14 @@ async def kb_scan_slash(interaction: discord.Interaction, limit: int = 500) -> N
                     question_msg = await channel.fetch_message(msg.reference.message_id)
                     question = question_msg.content.strip()
                     answer = msg.content.strip()
+                    images = [
+                        a.url for m in (question_msg, msg)
+                        for a in m.attachments
+                        if a.content_type and a.content_type.startswith("image/")
+                    ]
                     if question and answer:
                         before = len(_kb_load())
-                        _kb_add(question, answer, msg.author.display_name)
+                        _kb_add(question, answer, msg.author.display_name, images=images or None)
                         if len(_kb_load()) > before:
                             saved += 1
                 except Exception:
@@ -2621,8 +2626,14 @@ class FeedbackBot(discord.Client):
             question_msg = await channel.fetch_message(answer_msg.reference.message_id)
             question = question_msg.content.strip()
             answer = answer_msg.content.strip()
+            # Collect image URLs from both messages
+            images = [
+                a.url for m in (question_msg, answer_msg)
+                for a in m.attachments
+                if a.content_type and a.content_type.startswith("image/")
+            ]
             if question and answer:
-                _kb_add(question, answer, answer_msg.author.display_name)
+                _kb_add(question, answer, answer_msg.author.display_name, images=images or None)
                 await answer_msg.add_reaction("📚")  # confirm saved
         except Exception as _ke:
             logger.warning("KB reaction handler error: %s", _ke)
@@ -2969,7 +2980,11 @@ class FeedbackBot(discord.Client):
         if question:
             kb_matches = _kb_search(question, top_n=3)
             if kb_matches:
-                kb_lines = [f"Q: {e['question']}\nA: {e['answer']}" for e in kb_matches]
+                kb_lines = [
+                    f"Q: {e['question']}\nA: {e['answer']}" +
+                    (f"\nImages: {', '.join(e['images'])}" if e.get('images') else "")
+                    for e in kb_matches
+                ]
                 kb_context = "\n\n".join(kb_lines)
 
         # Build the final text prompt, including context from replied-to message
@@ -3093,20 +3108,23 @@ def _kb_save(entries: list[dict]) -> None:
     with open(_KB_PATH, "w", encoding="utf-8") as f:
         json.dump(entries, f, ensure_ascii=False, indent=2)
 
-def _kb_add(question: str, answer: str, author: str) -> None:
+def _kb_add(question: str, answer: str, author: str, images: list[str] | None = None) -> None:
     entries = _kb_load()
     # Avoid duplicates
     for e in entries:
         if e["question"].strip().lower() == question.strip().lower():
             return
-    entries.append({
+    entry: dict = {
         "question": question.strip(),
         "answer": answer.strip(),
         "author": author,
         "ts": datetime.utcnow().isoformat(),
-    })
+    }
+    if images:
+        entry["images"] = images
+    entries.append(entry)
     _kb_save(entries)
-    logger.info("KB: saved Q&A — %s", question[:60])
+    logger.info("KB: saved Q&A — %s (%d images)", question[:60], len(images or []))
 
 def _kb_search(query: str, top_n: int = 3) -> list[dict]:
     """Simple keyword search over the knowledge base."""
