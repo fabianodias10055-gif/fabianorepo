@@ -36,7 +36,7 @@ YOUTUBE_NOTIFY_CHANNEL_ID = int(os.getenv("YOUTUBE_NOTIFY_CHANNEL_ID", "14814328
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 PUSHOVER_USER_KEY = os.getenv("PUSHOVER_USER_KEY", "")
 PUSHOVER_API_TOKEN = os.getenv("PUSHOVER_API_TOKEN", "")
-KB_CHANNEL_ID = int(os.getenv("KB_CHANNEL_ID", "1481100889757581434"))
+KB_CHANNEL_IDS = {1158395982485147692, 1459914723330883727, 1460338435163164827}
 MAX_MESSAGES_PER_CHANNEL = int(os.getenv("MAX_MESSAGES_PER_CHANNEL", "250"))
 PROJECTS_FORUM_CHANNEL_ID = os.getenv("PROJECTS_FORUM_CHANNEL_ID")
 CREATOR_ALIASES = tuple(
@@ -2160,40 +2160,39 @@ async def test_pushover_slash(interaction: discord.Interaction) -> None:
     await interaction.followup.send("Test notification sent to your phone!", ephemeral=True)
 
 
-@app_commands.command(name="kb_scan", description="Scan the support channel and save approved (✅) Q&A pairs to the knowledge base.")
-@app_commands.describe(limit="How many messages to scan (default 500)")
+@app_commands.command(name="kb_scan", description="Scan all support channels and save approved (✅) Q&A pairs to the knowledge base.")
+@app_commands.describe(limit="How many messages to scan per channel (default 500)")
 async def kb_scan_slash(interaction: discord.Interaction, limit: int = 500) -> None:
     roles = [r.name for r in getattr(interaction.user, "roles", [])]
     if "LocoDev" not in roles:
         await interaction.response.send_message("You don't have permission.", ephemeral=True)
         return
     await interaction.response.defer(thinking=True, ephemeral=True)
-    channel = interaction.client.get_channel(KB_CHANNEL_ID) or await interaction.client.fetch_channel(KB_CHANNEL_ID)
     saved = 0
-    try:
-        async for msg in channel.history(limit=limit, oldest_first=False):
-            if not msg.reference:
-                continue
-            # Check if this message has ✅ reaction
-            approved = any(str(r.emoji) == _KB_APPROVE_EMOJI and r.count > 0 for r in msg.reactions)
-            if not approved:
-                continue
-            try:
-                question_msg = await channel.fetch_message(msg.reference.message_id)
-                question = question_msg.content.strip()
-                answer = msg.content.strip()
-                if question and answer:
-                    before = len(_kb_load())
-                    _kb_add(question, answer, msg.author.display_name)
-                    if len(_kb_load()) > before:
-                        saved += 1
-            except Exception:
-                continue
-    except Exception as _se:
-        await interaction.followup.send(f"Error scanning: {_se}", ephemeral=True)
-        return
+    for ch_id in KB_CHANNEL_IDS:
+        try:
+            channel = interaction.client.get_channel(ch_id) or await interaction.client.fetch_channel(ch_id)
+            async for msg in channel.history(limit=limit, oldest_first=False):
+                if not msg.reference:
+                    continue
+                approved = any(str(r.emoji) == _KB_APPROVE_EMOJI and r.count > 0 for r in msg.reactions)
+                if not approved:
+                    continue
+                try:
+                    question_msg = await channel.fetch_message(msg.reference.message_id)
+                    question = question_msg.content.strip()
+                    answer = msg.content.strip()
+                    if question and answer:
+                        before = len(_kb_load())
+                        _kb_add(question, answer, msg.author.display_name)
+                        if len(_kb_load()) > before:
+                            saved += 1
+                except Exception:
+                    continue
+        except Exception as _se:
+            logger.warning("KB scan error on channel %s: %s", ch_id, _se)
     total = len(_kb_load())
-    await interaction.followup.send(f"Scan complete — saved **{saved}** new Q&A pairs. Knowledge base has **{total}** entries total.", ephemeral=True)
+    await interaction.followup.send(f"Scan complete — saved **{saved}** new Q&A pairs across all channels. Knowledge base has **{total}** entries total.", ephemeral=True)
 
 
 @app_commands.command(name="test_reports", description="Send daily summary and weekly leaderboard now (test).")
@@ -2611,7 +2610,7 @@ class FeedbackBot(discord.Client):
         """Save Q&A to knowledge base when ✅ is added to a message in KB channel."""
         if str(payload.emoji) != _KB_APPROVE_EMOJI:
             return
-        if payload.channel_id != KB_CHANNEL_ID:
+        if payload.channel_id not in KB_CHANNEL_IDS:
             return
         try:
             channel = self.get_channel(payload.channel_id) or await self.fetch_channel(payload.channel_id)
