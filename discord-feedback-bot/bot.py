@@ -3214,12 +3214,6 @@ async def patreon_webhook_handler(request):
             message=f"{full_name} ({tier_title or 'patron'}) payment successful.",
             sound="cashregister",
         )
-    elif event == "members:create":
-        await _send_pushover(
-            title="👋 New Free Member",
-            message=f"{full_name} just joined LocoDev on Patreon for free!",
-            sound="magic",
-        )
 
     return web.Response(status=200, text="OK")
 
