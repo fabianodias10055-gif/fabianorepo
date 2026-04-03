@@ -2160,27 +2160,6 @@ async def test_pushover_slash(interaction: discord.Interaction) -> None:
     await interaction.followup.send("Test notification sent to your phone!", ephemeral=True)
 
 
-@app_commands.command(name="test_patron_dm", description="Send a test patron welcome DM to a Discord user ID.")
-@app_commands.describe(user_id="The Discord user ID to send the test DM to.")
-async def test_patron_dm_slash(interaction: discord.Interaction, user_id: str) -> None:
-    roles = [r.name for r in getattr(interaction.user, "roles", [])]
-    if "LocoDev" not in roles:
-        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
-        return
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    try:
-        user = interaction.client.get_user(int(user_id)) or await interaction.client.fetch_user(int(user_id))
-        dm_msg = (
-            f"🎉 Congrats, you've unlocked exclusive access to our Discord community! "
-            f"but I see you're not in it,\n\n"
-            f"Join here: https://www.discord.gg/ZB7SMbbxQz"
-        )
-        await user.send(dm_msg)
-        await interaction.followup.send(f"Test DM sent to {user} ({user_id})!", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"Failed to send DM: {e}", ephemeral=True)
-
-
 @app_commands.command(name="kb_scan", description="Scan all support channels and save approved (✅) Q&A pairs to the knowledge base.")
 @app_commands.describe(limit="How many messages to scan per channel (default 500)")
 async def kb_scan_slash(interaction: discord.Interaction, limit: int = 500) -> None:
@@ -2547,7 +2526,6 @@ class FeedbackBot(discord.Client):
         self.tree.add_command(test_reports_slash)
         self.tree.add_command(test_pushover_slash)
         self.tree.add_command(kb_scan_slash)
-        self.tree.add_command(test_patron_dm_slash)
 
     async def on_ready(self) -> None:
         if not self.synced:
@@ -2563,7 +2541,6 @@ class FeedbackBot(discord.Client):
             self.tree.add_command(test_reports_slash)
             self.tree.add_command(test_pushover_slash)
             self.tree.add_command(kb_scan_slash)
-            self.tree.add_command(test_patron_dm_slash)
             if GUILD_ID:
                 guild = discord.Object(id=int(GUILD_ID))
                 self.tree.copy_global_to(guild=guild)
@@ -3360,23 +3337,6 @@ async def patreon_webhook_handler(request):
             if event == "members:pledge:create" and tier_title:
                 public_msg = f"💎 {public_name} joined **{tier_title}**\n> 👉 patreon.com/LocoDev"
                 await public_channel.send(public_msg)
-
-    # DM new paid members with Discord invite (only if not already in the server)
-    if event == "members:pledge:create" and discord_id:
-        try:
-            guild = client.get_guild(int(GUILD_ID)) if GUILD_ID else None
-            already_in_server = guild and guild.get_member(int(discord_id)) is not None
-            if not already_in_server:
-                user = client.get_user(int(discord_id)) or await client.fetch_user(int(discord_id))
-                if user:
-                    dm_msg = (
-                        f"🎉 Congrats, you've unlocked exclusive access to our Discord community! "
-                        f"but I see you're not in it,\n\n"
-                        f"Join here: https://www.discord.gg/ZB7SMbbxQz"
-                    )
-                    await user.send(dm_msg)
-        except Exception as dm_err:
-            logger.warning("Could not DM new patron %s: %s", discord_id, dm_err)
 
     # Pushover notification for payment events
     if event == "members:pledge:create":
