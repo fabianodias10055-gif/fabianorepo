@@ -2661,7 +2661,7 @@ class FeedbackBot(discord.Client):
         channel_context = ""
         try:
             history_msgs = []
-            async for m in message.channel.history(limit=7, before=message):
+            async for m in message.channel.history(limit=11, before=message):
                 if m.id == message.id:
                     continue
                 author = m.author.display_name
