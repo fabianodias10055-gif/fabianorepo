@@ -2345,40 +2345,29 @@ class FeedbackBot(discord.Client):
                 statuses.append(discord.Activity(type=discord.ActivityType.watching, name="UE5 Devs build"))
                 statuses.append(discord.Game(name="Unreal Engine 5"))
 
-                # 5. AI-generated statuses (cached, refreshed each rotation cycle)
+                # 5. "Ask me how to..." with Claude-generated completion
+                ask_phrase = "Ask me anything! :)"
                 if ANTHROPIC_API_KEY:
                     try:
                         import anthropic as _anthropic
                         ai = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
                         resp = ai.messages.create(
                             model="claude-haiku-4-5-20251001",
-                            max_tokens=200,
+                            max_tokens=30,
                             messages=[{
                                 "role": "user",
                                 "content": (
-                                    "Generate 5 short, fun Discord bot status messages for an AI assistant called LocoIA "
-                                    "that lives in a LocoDev Unreal Engine community. "
-                                    "Mix activity types: Watching, Listening to, Playing. "
-                                    "Each line: <type>|<message> — keep each message under 30 chars, be creative and techy. "
-                                    "Example line: Watching|blueprints compile\n"
-                                    "Only output the 5 lines, nothing else."
+                                    "Complete this Discord bot status phrase with a short Unreal Engine 5 topic. "
+                                    "Output ONLY the completion, no quotes, under 25 chars.\n"
+                                    "Phrase: 'Ask me how to '"
                                 ),
                             }],
                         )
-                        for line in resp.content[0].text.strip().splitlines():
-                            if "|" in line:
-                                kind, _, text = line.partition("|")
-                                text = text.strip()[:30]
-                                kind = kind.strip().lower()
-                                if "watch" in kind:
-                                    statuses.append(discord.Activity(type=discord.ActivityType.watching, name=text))
-                                elif "listen" in kind:
-                                    statuses.append(discord.Activity(type=discord.ActivityType.listening, name=text))
-                                else:
-                                    statuses.append(discord.Game(name=text))
-                    except Exception as ai_err:
-                        logger.warning("AI status generation failed: %s", ai_err)
-                        statuses.append(discord.Activity(type=discord.ActivityType.listening, name="Ask me anything! :)"))
+                        completion = resp.content[0].text.strip().rstrip(".")
+                        ask_phrase = f"Ask me how to {completion}"
+                    except Exception:
+                        pass
+                statuses.append(discord.Activity(type=discord.ActivityType.listening, name=ask_phrase))
 
                 if statuses:
                     await self.change_presence(activity=random.choice(statuses))
