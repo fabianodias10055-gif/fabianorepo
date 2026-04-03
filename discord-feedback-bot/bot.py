@@ -3089,7 +3089,10 @@ class FeedbackBot(discord.Client):
                     await message.reply(answer[:1900])
                 # Send KB images as follow-up if any
                 if kb_images:
-                    await message.channel.send("\n".join(kb_images[:4]))
+                    try:
+                        await message.channel.send("\n".join(kb_images[:4]))
+                    except Exception as _ie:
+                        logger.warning("Failed to send KB images: %s", _ie)
                     await message.channel.send(answer[1900:])
             except Exception as exc:
                 logger.warning("AI responder error: %s", exc, exc_info=True)
