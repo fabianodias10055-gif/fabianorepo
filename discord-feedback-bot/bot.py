@@ -3347,7 +3347,8 @@ async def patreon_webhook_handler(request):
                 user = client.get_user(int(discord_id)) or await client.fetch_user(int(discord_id))
                 if user:
                     dm_msg = (
-                        f"🎉 Congrats, you've unlocked exclusive access to our Discord community!\n"
+                        f"🎉 Congrats, you've unlocked exclusive access to our Discord community! "
+                        f"but I see you're not in it,\n\n"
                         f"Join here: https://www.discord.gg/ZB7SMbbxQz"
                     )
                     await user.send(dm_msg)
