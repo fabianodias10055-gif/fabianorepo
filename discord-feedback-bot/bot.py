@@ -2535,7 +2535,7 @@ class FeedbackBot(discord.Client):
             self.tree.add_command(meta_conversion_slash)
             self.tree.add_command(test_reports_slash)
             self.tree.add_command(test_pushover_slash)
-        self.tree.add_command(kb_scan_slash)
+            self.tree.add_command(kb_scan_slash)
             if GUILD_ID:
                 guild = discord.Object(id=int(GUILD_ID))
                 self.tree.copy_global_to(guild=guild)
