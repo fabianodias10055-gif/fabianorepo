@@ -2657,6 +2657,23 @@ class FeedbackBot(discord.Client):
                                 }
                             })
                             image_count += 1
+        # Fetch last 6 messages in the channel for context
+        channel_context = ""
+        try:
+            history_msgs = []
+            async for m in message.channel.history(limit=7, before=message):
+                if m.id == message.id:
+                    continue
+                author = m.author.display_name
+                content = m.content.strip()
+                if content:
+                    history_msgs.append(f"{author}: {content}")
+            if history_msgs:
+                history_msgs.reverse()  # oldest first
+                channel_context = "\n".join(history_msgs)
+        except Exception as _he:
+            logger.warning("Failed to fetch channel history: %s", _he)
+
         # Detect YouTube URLs in current message, replied-to message, or embeds
         import re as _re
         _yt_pattern = r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]{11})'
@@ -2890,6 +2907,8 @@ class FeedbackBot(discord.Client):
 
         # Build the final text prompt, including context from replied-to message
         parts = []
+        if channel_context:
+            parts.append(f"[Recent channel messages for context:\n{channel_context}\n]")
         if web_context:
             parts.append(f"[Web page content from {url_to_fetch}:\n{web_context}\n]")
         if yt_search_results:
