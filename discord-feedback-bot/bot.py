@@ -2160,6 +2160,27 @@ async def test_pushover_slash(interaction: discord.Interaction) -> None:
     await interaction.followup.send("Test notification sent to your phone!", ephemeral=True)
 
 
+@app_commands.command(name="test_patron_dm", description="Send a test patron welcome DM to a Discord user ID.")
+@app_commands.describe(user_id="The Discord user ID to send the test DM to.")
+async def test_patron_dm_slash(interaction: discord.Interaction, user_id: str) -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    try:
+        user = interaction.client.get_user(int(user_id)) or await interaction.client.fetch_user(int(user_id))
+        dm_msg = (
+            f"🎉 Congrats, you've unlocked exclusive access to our Discord community! "
+            f"but I see you're not in it,\n\n"
+            f"Join here: https://www.discord.gg/ZB7SMbbxQz"
+        )
+        await user.send(dm_msg)
+        await interaction.followup.send(f"Test DM sent to {user} ({user_id})!", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"Failed to send DM: {e}", ephemeral=True)
+
+
 @app_commands.command(name="kb_scan", description="Scan all support channels and save approved (✅) Q&A pairs to the knowledge base.")
 @app_commands.describe(limit="How many messages to scan per channel (default 500)")
 async def kb_scan_slash(interaction: discord.Interaction, limit: int = 500) -> None:
