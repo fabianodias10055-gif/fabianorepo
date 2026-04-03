@@ -3337,9 +3337,6 @@ async def patreon_webhook_handler(request):
             if event == "members:pledge:create" and tier_title:
                 public_msg = f"💎 {public_name} joined **{tier_title}**\n> 👉 patreon.com/LocoDev"
                 await public_channel.send(public_msg)
-            elif event == "members:create":
-                public_msg = f"👋 {public_name} just joined **LocoDev** on Patreon!"
-                await public_channel.send(public_msg)
 
     # Pushover notification for payment events
     if event == "members:pledge:create":
