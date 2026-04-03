@@ -3069,6 +3069,28 @@ class FeedbackBot(discord.Client):
             history = history[-10:]
             self._conversation_history[user_id] = history
 
+        # Build user identity context
+        member_roles = [r.name for r in getattr(message.author, "roles", []) if r.name != "@everyone"]
+        is_locodev = "LocoDev" in member_roles
+        display_name = message.author.display_name
+
+        if is_locodev:
+            user_context = (
+                f"USER CONTEXT:\n"
+                f"You are talking to LocoDev himself — the creator and owner of this server. "
+                f"Treat him as your boss. Be direct, casual, and skip any generic intro. "
+                f"He knows everything about the server, so don't explain basics to him."
+            )
+        else:
+            roles_str = ", ".join(member_roles) if member_roles else "no special roles"
+            user_context = (
+                f"USER CONTEXT:\n"
+                f"You are talking to **{display_name}**, a community member.\n"
+                f"Their Discord roles: {roles_str}.\n"
+                f"Use this to tailor your response — e.g. LocoPremium members have full access, "
+                f"LocoBasic/LocoStandard have limited access, members with no tier are free users."
+            )
+
         async with message.channel.typing():
             try:
                 import anthropic as _anthropic
@@ -3098,7 +3120,8 @@ class FeedbackBot(discord.Client):
                             "- Support from experienced devs\n\n"
                             "IMPORTANT: Only mention Patreon or the plans if someone specifically asks about them. "
                             "Focus on actually helping with the question. Do not add Patreon plugs at the end of replies.\n\n"
-                            "If you don't know the answer, say so honestly and suggest contacting LocoDev."
+                            "If you don't know the answer, say so honestly and suggest contacting LocoDev.\n\n"
+                            f"{user_context}"
                         ),
                         messages=msgs
                     )
