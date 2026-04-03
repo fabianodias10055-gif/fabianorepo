@@ -3338,6 +3338,19 @@ async def patreon_webhook_handler(request):
                 public_msg = f"💎 {public_name} joined **{tier_title}**\n> 👉 patreon.com/LocoDev"
                 await public_channel.send(public_msg)
 
+    # DM new paid members with Discord invite
+    if event == "members:pledge:create" and discord_id:
+        try:
+            member = client.get_user(int(discord_id)) or await client.fetch_user(int(discord_id))
+            if member:
+                dm_msg = (
+                    f"🎉 Congrats, you've unlocked exclusive access to our Discord community!\n"
+                    f"Join here: https://www.discord.gg/ZB7SMbbxQz"
+                )
+                await member.send(dm_msg)
+        except Exception as dm_err:
+            logger.warning("Could not DM new patron %s: %s", discord_id, dm_err)
+
     # Pushover notification for payment events
     if event == "members:pledge:create":
         await _send_pushover(
