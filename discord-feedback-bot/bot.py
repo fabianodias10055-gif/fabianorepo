@@ -2353,13 +2353,13 @@ class FeedbackBot(discord.Client):
                         ai = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
                         resp = ai.messages.create(
                             model="claude-haiku-4-5-20251001",
-                            max_tokens=30,
+                            max_tokens=20,
                             messages=[{
                                 "role": "user",
                                 "content": (
-                                    "Complete this Discord bot status phrase with a short Unreal Engine 5 topic. "
-                                    "Output ONLY the completion, no quotes, under 25 chars.\n"
-                                    "Phrase: 'Ask me how to '"
+                                    "Give me a short Unreal Engine 5 topic to complete the phrase 'Ask me how to ___'. "
+                                    "Output ONLY the topic itself (e.g. 'use Nanite', 'set up Lumen'), "
+                                    "no quotes, no punctuation, under 25 characters."
                                 ),
                             }],
                         )
