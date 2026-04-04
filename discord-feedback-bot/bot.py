@@ -2276,14 +2276,17 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
 
 
 @app_commands.command(name="trial_stats", description="Show free trial starts and conversions to paid.")
-async def trial_stats_slash(interaction: discord.Interaction) -> None:
+@app_commands.describe(days="How many days back to look (default 30)")
+async def trial_stats_slash(interaction: discord.Interaction, days: int = 30) -> None:
     roles = [r.name for r in getattr(interaction.user, "roles", [])]
     if "LocoDev" not in roles:
         await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
         return
     await interaction.response.defer(thinking=True, ephemeral=True)
 
-    events = _load_events()
+    from datetime import timezone as _tz
+    cutoff = (datetime.now(_tz.utc) - timedelta(days=days)).isoformat()
+    events = [e for e in _load_events() if e.get("ts", "") >= cutoff]
     trials = [e for e in events if e.get("is_trial") is True]
     conversions = [e for e in events if e.get("is_trial_conversion") is True]
     trial_ids = {e.get("member_id") for e in trials}
@@ -2293,7 +2296,7 @@ async def trial_stats_slash(interaction: discord.Interaction) -> None:
     rate = f"{len(converted_ids)/len(trial_ids)*100:.0f}%" if trial_ids else "N/A"
 
     lines = [
-        f"**📊 Free Trial Stats** (last 8 days)",
+        f"**📊 Free Trial Stats** (last {days} day{'s' if days != 1 else ''})",
         f"🆓 Trials started: **{len(trials)}**",
         f"💎 Converted to paid: **{len(converted_ids)}**",
         f"⏳ Still on trial / not converted: **{len(pending_ids)}**",
@@ -3238,12 +3241,12 @@ def _kb_search(query: str, top_n: int = 3) -> list[dict]:
 _EVENTS_LOG_PATH = "/app/patreon_events.json"
 
 def _load_events() -> list[dict]:
-    """Load persisted events, dropping entries older than 8 days."""
+    """Load persisted events, dropping entries older than 90 days."""
     from datetime import timezone
     try:
         with open(_EVENTS_LOG_PATH, "r") as f:
             events = json.load(f)
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
         return [e for e in events if e.get("ts", "") >= cutoff]
     except Exception:
         return []
