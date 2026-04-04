@@ -3297,6 +3297,10 @@ async def patreon_webhook_handler(request):
     if amount_cents > 0:
         tier_title = _correct_tier(tier_title, amount_cents)
 
+    # Detect free trial
+    trial_ends_at = attrs.get("trial_ends_at")
+    is_free_trial = bool(trial_ends_at) and amount_cents == 0
+
     # If Discord linked: show "@DiscordMention/Patreon Name", otherwise just Patreon name
     name = f"<@{discord_id}>/**{full_name}**" if discord_id else f"**{full_name}**"
     tier_str = f" (**{tier_title}**)" if tier_title else ""
@@ -3304,7 +3308,10 @@ async def patreon_webhook_handler(request):
 
     returning_str = f" *(returning patron — ${lifetime_cents/100:.2f} lifetime)*" if is_returning else ""
 
-    if event == "members:create":
+    if event == "members:pledge:create" and is_free_trial:
+        trial_tier = tier_title or "LocoBasic"
+        msg = f"🆓 {name} started a **free trial** of **{trial_tier}**!{returning_str}"
+    elif event == "members:create":
         msg = f"🎉 {name} just joined **LocoDev** on Patreon for free!{returning_str}"
     elif event == "members:delete":
         msg = f"👋 {name} just left **LocoDev** on Patreon."
@@ -3380,16 +3387,22 @@ async def patreon_webhook_handler(request):
         public_channel = client.get_channel(PATREON_PUBLIC_CHANNEL_ID)
         if public_channel:
             public_name = f"<@{discord_id}>/**{full_name}**" if discord_id else f"**{full_name}**"
-            if event == "members:pledge:create" and tier_title:
+            if event == "members:pledge:create" and tier_title and not is_free_trial:
                 public_msg = f"💎 {public_name} joined **{tier_title}**\n> 👉 patreon.com/LocoDev"
                 await public_channel.send(public_msg)
 
-    # Pushover notification for payment events
-    if event == "members:pledge:create":
+    # Pushover notification for payment events (skip free trials)
+    if event == "members:pledge:create" and not is_free_trial:
         await _send_pushover(
             title=f"💰 New Patron — ${dollars:.2f}/month",
             message=f"{full_name} joined {tier_title or 'LocoDev'} on Patreon!",
             sound="cashregister",
+        )
+    elif event == "members:pledge:create" and is_free_trial:
+        await _send_pushover(
+            title=f"🆓 Free Trial — {tier_title or 'LocoBasic'}",
+            message=f"{full_name} started a free trial on Patreon.",
+            sound="none",
         )
     elif event == "members:update" and attrs.get("patron_status") == "active_patron":
         await _send_pushover(
