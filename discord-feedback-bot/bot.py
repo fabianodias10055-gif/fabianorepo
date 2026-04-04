@@ -2285,13 +2285,19 @@ async def trial_stats_slash(interaction: discord.Interaction, days: int = 30) ->
     await interaction.response.defer(thinking=True, ephemeral=True)
 
     from datetime import timezone as _tz
-    cutoff = (datetime.now(_tz.utc) - timedelta(days=days)).isoformat()
+    now = datetime.now(_tz.utc)
+    cutoff = (now - timedelta(days=days)).isoformat()
+    now_iso = now.isoformat()
     events = [e for e in _load_events() if e.get("ts", "") >= cutoff]
     trials = [e for e in events if e.get("is_trial") is True]
     conversions = [e for e in events if e.get("is_trial_conversion") is True]
     trial_ids = {e.get("member_id") for e in trials}
     converted_ids = {e.get("member_id") for e in conversions}
-    pending_ids = trial_ids - converted_ids
+    pending = [e for e in trials if e.get("member_id") not in converted_ids]
+
+    # Split pending into still-active vs expired (trial_ends_at in the past)
+    still_active = [e for e in pending if e.get("trial_ends_at", "9999") >= now_iso]
+    expired = [e for e in pending if e.get("trial_ends_at", "9999") < now_iso]
 
     rate = f"{len(converted_ids)/len(trial_ids)*100:.0f}%" if trial_ids else "N/A"
 
@@ -2299,18 +2305,23 @@ async def trial_stats_slash(interaction: discord.Interaction, days: int = 30) ->
         f"**📊 Free Trial Stats** (last {days} day{'s' if days != 1 else ''})",
         f"🆓 Trials started: **{len(trials)}**",
         f"💎 Converted to paid: **{len(converted_ids)}**",
-        f"⏳ Still on trial / not converted: **{len(pending_ids)}**",
+        f"⏳ Still on trial: **{len(still_active)}**",
+        f"❌ Trial ended, not converted: **{len(expired)}**",
         f"📈 Conversion rate: **{rate}**",
     ]
     if conversions:
         lines.append("\n**Conversions:**")
         for e in conversions:
             lines.append(f"  • **{e['name']}** → {e.get('tier') or 'unknown tier'}")
-    if pending_ids:
-        pending_names = [e['name'] for e in trials if e.get('member_id') in pending_ids]
+    if still_active:
         lines.append("\n**Still on trial:**")
-        for n in pending_names:
-            lines.append(f"  • {n}")
+        for e in still_active:
+            ends = e.get("trial_ends_at", "")[:10] if e.get("trial_ends_at") else "unknown"
+            lines.append(f"  • {e['name']} (ends {ends})")
+    if expired:
+        lines.append("\n**Trial expired, never converted:**")
+        for e in expired:
+            lines.append(f"  • {e['name']}")
 
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
@@ -3325,6 +3336,8 @@ async def patreon_webhook_handler(request):
     # Update tier in tracked event and persist to file
     _entry["tier"] = tier_title
     _entry["is_trial"] = is_free_trial
+    if is_free_trial and trial_ends_at:
+        _entry["trial_ends_at"] = trial_ends_at
 
     # Detect trial conversion: paid pledge from someone who had a prior trial in the log
     if event == "members:pledge:create" and not is_free_trial and amount_cents > 0 and member_id:
