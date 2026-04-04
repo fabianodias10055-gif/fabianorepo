@@ -2275,6 +2275,43 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
     await interaction.followup.send("✅ Reports sent!", ephemeral=True)
 
 
+@app_commands.command(name="trial_stats", description="Show free trial starts and conversions to paid.")
+async def trial_stats_slash(interaction: discord.Interaction) -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
+
+    events = _load_events()
+    trials = [e for e in events if e.get("is_trial") is True]
+    conversions = [e for e in events if e.get("is_trial_conversion") is True]
+    trial_ids = {e.get("member_id") for e in trials}
+    converted_ids = {e.get("member_id") for e in conversions}
+    pending_ids = trial_ids - converted_ids
+
+    rate = f"{len(converted_ids)/len(trial_ids)*100:.0f}%" if trial_ids else "N/A"
+
+    lines = [
+        f"**📊 Free Trial Stats** (last 8 days)",
+        f"🆓 Trials started: **{len(trials)}**",
+        f"💎 Converted to paid: **{len(converted_ids)}**",
+        f"⏳ Still on trial / not converted: **{len(pending_ids)}**",
+        f"📈 Conversion rate: **{rate}**",
+    ]
+    if conversions:
+        lines.append("\n**Conversions:**")
+        for e in conversions:
+            lines.append(f"  • **{e['name']}** → {e.get('tier') or 'unknown tier'}")
+    if pending_ids:
+        pending_names = [e['name'] for e in trials if e.get('member_id') in pending_ids]
+        lines.append("\n**Still on trial:**")
+        for n in pending_names:
+            lines.append(f"  • {n}")
+
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
 class FeedbackBot(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.default()
@@ -2549,6 +2586,7 @@ class FeedbackBot(discord.Client):
         self.tree.add_command(test_reports_slash)
         self.tree.add_command(test_pushover_slash)
         self.tree.add_command(kb_scan_slash)
+        self.tree.add_command(trial_stats_slash)
 
     async def on_ready(self) -> None:
         if not self.synced:
@@ -2564,6 +2602,7 @@ class FeedbackBot(discord.Client):
             self.tree.add_command(test_reports_slash)
             self.tree.add_command(test_pushover_slash)
             self.tree.add_command(kb_scan_slash)
+            self.tree.add_command(trial_stats_slash)
             if GUILD_ID:
                 guild = discord.Object(id=int(GUILD_ID))
                 self.tree.copy_global_to(guild=guild)
@@ -3262,6 +3301,7 @@ async def patreon_webhook_handler(request):
     _entry = {
         "event": event,
         "name": full_name,
+        "member_id": member_id,
         "tier": None,  # filled below after tier extraction
         "amount": amount_cents / 100,
         "ts": datetime.now(_tz.utc).isoformat(),
@@ -3281,6 +3321,18 @@ async def patreon_webhook_handler(request):
 
     # Update tier in tracked event and persist to file
     _entry["tier"] = tier_title
+    _entry["is_trial"] = is_free_trial
+
+    # Detect trial conversion: paid pledge from someone who had a prior trial in the log
+    if event == "members:pledge:create" and not is_free_trial and amount_cents > 0 and member_id:
+        prior = _load_events()
+        had_trial = any(
+            e.get("member_id") == member_id and e.get("is_trial") is True
+            for e in prior
+        )
+        if had_trial:
+            _entry["is_trial_conversion"] = True
+
     _append_event(_entry)
 
     # Correct tier name based on amount paid (Patreon sometimes sends wrong tier name)
