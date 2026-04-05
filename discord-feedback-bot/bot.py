@@ -3363,7 +3363,7 @@ _patreon_event_cache: dict[tuple, float] = {}
 _PATREON_DEDUP_SECONDS = 30
 
 # ── Knowledge Base ──────────────────────────────────────────────────────────
-_KB_PATH = "/app/knowledge_base.json"
+_KB_PATH = "/app/data/knowledge_base.json"
 _KB_APPROVE_EMOJI = "✅"
 
 def _kb_load() -> list[dict]:
@@ -3409,7 +3409,7 @@ def _kb_search(query: str, top_n: int = 3) -> list[dict]:
     return [e for _, e in scored[:top_n]]
 
 # ── Event trackers for scheduled summaries ──────────────────────────────────
-_EVENTS_LOG_PATH = "/app/patreon_events.json"
+_EVENTS_LOG_PATH = "/app/data/patreon_events.json"
 
 def _load_events() -> list[dict]:
     """Load persisted events, dropping entries older than 90 days."""

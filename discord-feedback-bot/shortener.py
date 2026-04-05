@@ -15,7 +15,7 @@ from aiohttp import web
 
 logger = logging.getLogger("shortener")
 
-DB_PATH = "/app/shortener.db"
+DB_PATH = "/app/data/shortener.db"
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -27,6 +27,8 @@ def _conn():
 
 
 def init_db():
+    import os
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with _conn() as db:
         db.execute("""
             CREATE TABLE IF NOT EXISTS links (
