@@ -3233,6 +3233,36 @@ class FeedbackBot(discord.Client):
             except Exception as _le:
                 logger.warning("Link analytics context error: %s", _le)
 
+        # Patreon event context — inject if question is about subscribers/members (owner only)
+        _patreon_keywords = ["patreon", "patron", "subscriber", "subscri", "join", "cancel", "trial", "member", "who paid", "who signed", "pledge", "tier"]
+        if message.author.id == 690691536983425044 and any(kw in (question or "").lower() for kw in _patreon_keywords):
+            try:
+                _events = _load_events()
+                from datetime import timezone as _tz
+                _now = datetime.now(_tz.utc)
+                _7d_cutoff = (_now - timedelta(days=7)).isoformat()
+                _30d_cutoff = (_now - timedelta(days=30)).isoformat()
+                _recent = [e for e in _events if e.get("ts", "") >= _7d_cutoff]
+                _month = [e for e in _events if e.get("ts", "") >= _30d_cutoff]
+                _ev_lines = ["PATREON EVENTS (from webhook log):"]
+                _ev_lines.append(f"\nLAST 7 DAYS ({len(_recent)} events):")
+                for e in sorted(_recent, key=lambda x: x.get("ts",""), reverse=True):
+                    _trial_tag = " [FREE TRIAL]" if e.get("is_trial") else ""
+                    _conv_tag = " [CONVERTED]" if e.get("is_trial_conversion") else ""
+                    _ev_lines.append(f"  {e.get('ts','')[:10]} {e.get('event','')} — {e.get('name','?')} tier={e.get('tier','?')} amount=${e.get('amount',0):.2f}{_trial_tag}{_conv_tag}")
+                if not _recent:
+                    _ev_lines.append("  No events in last 7 days.")
+                _ev_lines.append(f"\nLAST 30 DAYS ({len(_month)} events):")
+                for e in sorted(_month, key=lambda x: x.get("ts",""), reverse=True):
+                    _trial_tag = " [FREE TRIAL]" if e.get("is_trial") else ""
+                    _conv_tag = " [CONVERTED]" if e.get("is_trial_conversion") else ""
+                    _ev_lines.append(f"  {e.get('ts','')[:10]} {e.get('event','')} — {e.get('name','?')} tier={e.get('tier','?')} amount=${e.get('amount',0):.2f}{_trial_tag}{_conv_tag}")
+                if not _month:
+                    _ev_lines.append("  No events in last 30 days.")
+                parts.append(f"[Patreon Member Events:\n" + "\n".join(_ev_lines) + "\n]")
+            except Exception as _pe:
+                logger.warning("Patreon event context error: %s", _pe)
+
         if web_context:
             parts.append(f"[Web page content from {url_to_fetch}:\n{web_context}\n]")
         if yt_search_results:
