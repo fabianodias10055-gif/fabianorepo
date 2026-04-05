@@ -2328,7 +2328,13 @@ async def trial_stats_slash(interaction: discord.Interaction, days: int = 30) ->
 
 # ── URL Shortener slash commands ──────────────────────────────────────────────
 
-@app_commands.command(name="shorten", description="Create a new short link.")
+def _fmt_link(prefix: str, slug: str) -> str:
+    """Display helper — turns root/_root into locodev.dev and root/slug into /slug."""
+    if prefix == "root" and slug == "_root":
+        return "locodev.dev"
+    if prefix == "root":
+        return f"/{slug}"
+    return f"/{prefix}/{slug}", description="Create a new short link.")
 @app_commands.describe(
     url="The destination URL",
     slug="The short slug (e.g. obstacleavoidance)",
@@ -2396,7 +2402,7 @@ async def list_links_slash(interaction: discord.Interaction) -> None:
         return
     lines = ["**🔗 All Short Links:**"]
     for lnk in links:
-        lines.append(f"  `/{lnk['prefix']}/{lnk['slug']}` → {lnk['url']}")
+        lines.append(f"  `{_fmt_link(lnk['prefix'], lnk['slug'])}` → {lnk['url']}")
     text = "\n".join(lines)
     # Discord message limit
     if len(text) > 1900:
@@ -2418,7 +2424,7 @@ async def link_stats_slash(interaction: discord.Interaction, slug: str, prefix: 
         await interaction.followup.send(f"❌ Link `/{prefix}/{slug}` not found.", ephemeral=True)
         return
     lines = [
-        f"**📊 `/{prefix}/{slug}`** — last {days} days",
+        f"**📊 `{_fmt_link(prefix, slug)}`** — last {days} days",
         f"🔗 → {stats['link']['url']}",
         f"👆 Total clicks: **{stats['total']}**",
     ]
@@ -2452,7 +2458,7 @@ async def top_links_slash(interaction: discord.Interaction, days: int = 7, limit
         return
     lines = [f"**🏆 Top {limit} Links — last {days} days**"]
     for i, lnk in enumerate(links, 1):
-        lines.append(f"{i}. `/{lnk['prefix']}/{lnk['slug']}` — **{lnk['clicks']} clicks**")
+        lines.append(f"{i}. `{_fmt_link(lnk['prefix'], lnk['slug'])}` — **{lnk['clicks']} clicks**")
         lines.append(f"   → {lnk['url']}")
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
