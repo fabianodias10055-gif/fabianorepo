@@ -274,6 +274,6 @@ async def handle_redirect_domain_root(request: web.Request) -> web.Response:
 def setup_routes(app: web.Application):
     init_db()
     app.router.add_get("/", handle_redirect_domain_root)
-    app.router.add_get("/{prefix}/{slug}", handle_redirect)
-    app.router.add_get("/{slug}", handle_redirect_root)
+    app.router.add_get("/{prefix}/{slug:.+}", handle_redirect)
+    app.router.add_get("/{slug:.+}", handle_redirect_root)
     logger.info("URL shortener routes registered")
