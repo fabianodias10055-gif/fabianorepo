@@ -69,7 +69,7 @@ def create_link(slug: str, url: str, prefix: str = "p") -> bool:
         with _conn() as db:
             db.execute(
                 "INSERT INTO links (prefix, slug, url, created_at) VALUES (?,?,?,?)",
-                (prefix.lower(), slug.lower(), url, datetime.now(timezone.utc).isoformat()),
+                (prefix.lower(), slug, url, datetime.now(timezone.utc).isoformat()),
             )
             db.commit()
         return True
@@ -81,7 +81,7 @@ def get_link(slug: str, prefix: str = "p") -> dict | None:
     with _conn() as db:
         row = db.execute(
             "SELECT * FROM links WHERE prefix=? AND slug=?",
-            (prefix.lower(), slug.lower()),
+            (prefix.lower(), slug),
         ).fetchone()
     return dict(row) if row else None
 
@@ -90,7 +90,7 @@ def update_link(slug: str, new_url: str, prefix: str = "p") -> bool:
     with _conn() as db:
         cur = db.execute(
             "UPDATE links SET url=? WHERE prefix=? AND slug=?",
-            (new_url, prefix.lower(), slug.lower()),
+            (new_url, prefix.lower(), slug),
         )
         db.commit()
     return cur.rowcount > 0
@@ -100,7 +100,7 @@ def delete_link(slug: str, prefix: str = "p") -> bool:
     with _conn() as db:
         cur = db.execute(
             "DELETE FROM links WHERE prefix=? AND slug=?",
-            (prefix.lower(), slug.lower()),
+            (prefix.lower(), slug),
         )
         db.commit()
     return cur.rowcount > 0

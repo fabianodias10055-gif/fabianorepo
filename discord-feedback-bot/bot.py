@@ -2536,28 +2536,8 @@ class FeedbackBot(discord.Client):
                 statuses.append(discord.Activity(type=discord.ActivityType.watching, name="UE5 Devs build"))
                 statuses.append(discord.Game(name="Unreal Engine 5"))
 
-                # 5. "Ask me how to..." with Claude-generated completion
+                # 5. Fixed "Ask me anything! :)"
                 ask_phrase = "Ask me anything! :)"
-                if ANTHROPIC_API_KEY:
-                    try:
-                        import anthropic as _anthropic
-                        ai = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-                        resp = ai.messages.create(
-                            model="claude-haiku-4-5-20251001",
-                            max_tokens=20,
-                            messages=[{
-                                "role": "user",
-                                "content": (
-                                    "Give me a short Unreal Engine 5 topic to complete the phrase 'Ask me how to ___'. "
-                                    "Output ONLY the topic itself (e.g. 'use Nanite', 'set up Lumen'), "
-                                    "no quotes, no punctuation, under 25 characters."
-                                ),
-                            }],
-                        )
-                        completion = resp.content[0].text.strip().rstrip(".")
-                        ask_phrase = f"Ask me how to {completion}"
-                    except Exception:
-                        pass
                 statuses.append(discord.Activity(type=discord.ActivityType.listening, name=ask_phrase))
 
                 if statuses:
@@ -3679,14 +3659,13 @@ if __name__ == "__main__":
 
     async def main():
         await start_webhook_server()
-        # Auto-migrate Dub links on first boot if DB is empty
+        # Auto-migrate Dub links on every boot (upsert — skips existing slugs)
         try:
-            from shortener import list_links
             from migrate_dub import migrate
             import os
             csv_path = os.path.join(os.path.dirname(__file__), "dub_links.csv")
-            if os.path.exists(csv_path) and len(list_links()) == 0:
-                logger.info("Running one-time Dub migration...")
+            if os.path.exists(csv_path):
+                logger.info("Running Dub link migration...")
                 migrate(csv_path)
                 logger.info("Dub migration complete.")
         except Exception as e:
