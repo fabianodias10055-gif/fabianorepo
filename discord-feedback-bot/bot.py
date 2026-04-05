@@ -3210,14 +3210,19 @@ class FeedbackBot(discord.Client):
         _link_keywords = ["link", "click", "locodev.dev", "short", "redirect", "country", "visit", "traffic", "popular", "most clicked", "how many"]
         if message.author.id == 690691536983425044 and any(kw in (question or "").lower() for kw in _link_keywords):
             try:
-                from shortener import get_top_links, list_links, get_stats
-                from datetime import timezone as _ltz
+                from shortener import get_top_links, list_links
                 _all_links = list_links()
+                _top_1 = get_top_links(days=1, limit=10)
                 _top_7 = get_top_links(days=7, limit=10)
                 _top_30 = get_top_links(days=30, limit=10)
                 _link_lines = ["YOUR SHORT LINKS (locodev.dev):"]
                 for lnk in _all_links:
                     _link_lines.append(f"  {_fmt_link(lnk['prefix'], lnk['slug'])} → {lnk['url']}")
+                _link_lines.append("\nTOP CLICKS LAST 24 HOURS:")
+                for lnk in _top_1:
+                    _link_lines.append(f"  {_fmt_link(lnk['prefix'], lnk['slug'])} — {lnk['clicks']} clicks")
+                if not _top_1:
+                    _link_lines.append("  No clicks in the last 24 hours.")
                 _link_lines.append("\nTOP CLICKS LAST 7 DAYS:")
                 for lnk in _top_7:
                     _link_lines.append(f"  {_fmt_link(lnk['prefix'], lnk['slug'])} — {lnk['clicks']} clicks")
