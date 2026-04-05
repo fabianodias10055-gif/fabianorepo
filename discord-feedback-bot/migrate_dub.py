@@ -27,13 +27,13 @@ def migrate(csv_path: str):
 
             # Extract prefix and slug from full short link
             # e.g. https://locodev.dev/freebuild/gaspals → prefix=freebuild, slug=gaspals
-            # e.g. https://locodev.dev/uecourse          → prefix=p, slug=uecourse
+            # e.g. https://locodev.dev/uecourse          → prefix=root, slug=uecourse
             path = short_link.split("locodev.dev", 1)[-1].strip("/")
             parts = path.split("/", 1)
             if len(parts) == 2:
                 prefix, slug = parts[0], parts[1]
             else:
-                prefix, slug = "p", parts[0]
+                prefix, slug = "root", parts[0]
 
             ok = create_link(slug, dest_url, prefix)
             if ok:

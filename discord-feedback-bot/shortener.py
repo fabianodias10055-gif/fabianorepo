@@ -228,15 +228,11 @@ def import_from_csv(csv_path: str) -> tuple[int, int]:
 
 # ── aiohttp route ─────────────────────────────────────────────────────────────
 
-async def handle_redirect(request: web.Request) -> web.Response:
-    prefix = request.match_info["prefix"]
-    slug   = request.match_info["slug"]
-    link   = get_link(slug, prefix)
-
+async def _do_redirect(request: web.Request, slug: str, prefix: str) -> web.Response:
+    link = get_link(slug, prefix)
     if not link:
-        raise web.HTTPNotFound(text=f"Short link /{prefix}/{slug} not found.")
+        raise web.HTTPNotFound(text=f"Short link not found.")
 
-    # Parse IP and referrer — don't block the redirect waiting for geo lookup
     forwarded = request.headers.get("X-Forwarded-For", "")
     ip = forwarded.split(",")[0].strip() if forwarded else (request.remote or "")
     raw_ref = request.headers.get("Referer", "") or request.headers.get("Referrer", "") or ""
@@ -257,7 +253,21 @@ async def handle_redirect(request: web.Request) -> web.Response:
     raise web.HTTPFound(link["url"])
 
 
+async def handle_redirect(request: web.Request) -> web.Response:
+    """Handles /{prefix}/{slug}"""
+    prefix = request.match_info["prefix"]
+    slug   = request.match_info["slug"]
+    return await _do_redirect(request, slug, prefix)
+
+
+async def handle_redirect_root(request: web.Request) -> web.Response:
+    """Handles /{slug} with no prefix (stored as prefix='root')"""
+    slug = request.match_info["slug"]
+    return await _do_redirect(request, slug, "root")
+
+
 def setup_routes(app: web.Application):
     init_db()
     app.router.add_get("/{prefix}/{slug}", handle_redirect)
+    app.router.add_get("/{slug}", handle_redirect_root)
     logger.info("URL shortener routes registered")
