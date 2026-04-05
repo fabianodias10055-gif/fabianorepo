@@ -118,13 +118,31 @@ def list_links() -> list[dict]:
 
 # ── Click logging ─────────────────────────────────────────────────────────────
 
-def log_click(link_id: int, country: str, country_code: str, referrer: str):
-    with _conn() as db:
-        db.execute(
-            "INSERT INTO clicks (link_id, clicked_at, country, country_code, referrer) VALUES (?,?,?,?,?)",
-            (link_id, datetime.now(timezone.utc).isoformat(), country, country_code, referrer),
-        )
-        db.commit()
+def log_click(link_id: int, country: str, country_code: str, referrer: str) -> int | None:
+    """Insert a click row and return its rowid."""
+    try:
+        with _conn() as db:
+            cur = db.execute(
+                "INSERT INTO clicks (link_id, clicked_at, country, country_code, referrer) VALUES (?,?,?,?,?)",
+                (link_id, datetime.now(timezone.utc).isoformat(), country, country_code, referrer),
+            )
+            db.commit()
+            return cur.lastrowid
+    except Exception as exc:
+        logger.warning("log_click error: %s", exc)
+        return None
+
+
+def update_click_country(click_id: int, country: str, country_code: str):
+    try:
+        with _conn() as db:
+            db.execute(
+                "UPDATE clicks SET country=?, country_code=? WHERE id=?",
+                (country, country_code, click_id),
+            )
+            db.commit()
+    except Exception as exc:
+        logger.warning("update_click_country error: %s", exc)
 
 
 async def lookup_country(ip: str) -> tuple[str, str]:
@@ -228,12 +246,16 @@ def import_from_csv(csv_path: str) -> tuple[int, int]:
     return imported, skipped
 
 
+# Hold strong references to background geo-lookup tasks so GC doesn't kill them.
+_bg_tasks: set = set()
+
+
 # ── aiohttp route ─────────────────────────────────────────────────────────────
 
 async def _do_redirect(request: web.Request, slug: str, prefix: str) -> web.Response:
     link = get_link(slug, prefix)
     if not link:
-        raise web.HTTPNotFound(text=f"Short link not found.")
+        raise web.HTTPNotFound(text="Short link not found.")
 
     forwarded = request.headers.get("X-Forwarded-For", "")
     ip = forwarded.split(",")[0].strip() if forwarded else (request.remote or "")
@@ -243,15 +265,20 @@ async def _do_redirect(request: web.Request, slug: str, prefix: str) -> web.Resp
     except Exception:
         referrer = "direct"
 
-    async def _log():
-        try:
-            country, code = await lookup_country(ip)
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, log_click, link["id"], country, code, referrer)
-        except Exception as exc:
-            logger.warning("Click log error: %s", exc)
+    # Always log the click immediately (synchronous DB write, sub-ms).
+    click_id = log_click(link["id"], "Unknown", "??", referrer)
 
-    asyncio.create_task(_log())
+    # Resolve country in background and update the row.
+    if click_id and ip:
+        async def _geo(cid=click_id, addr=ip):
+            country, code = await lookup_country(addr)
+            if country != "Unknown":
+                update_click_country(cid, country, code)
+
+        task = asyncio.create_task(_geo())
+        _bg_tasks.add(task)
+        task.add_done_callback(_bg_tasks.discard)
+
     raise web.HTTPFound(link["url"])
 
 
