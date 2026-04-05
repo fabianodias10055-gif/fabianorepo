@@ -1533,40 +1533,38 @@ def _http_get_report(url: str, headers: dict | None = None) -> dict:
 
 
 def _build_dub_embed() -> discord.Embed:
-    from urllib import parse as _parse
+    from shortener import get_top_links
     try:
         from zoneinfo import ZoneInfo
         _tz = ZoneInfo("America/Sao_Paulo")
     except Exception:
         _tz = timezone(timedelta(hours=-3))
     now = datetime.now(_tz)
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    end = now.isoformat()
-    query = _parse.urlencode({
-        "event": "clicks", "groupBy": "top_links",
-        "start": start, "end": end,
-        "timezone": "America/Sao_Paulo", "limit": "5",
-    })
-    data = _http_get_report(
-        f"https://api.dub.co/analytics?{query}",
-        {"Authorization": f"Bearer {DUB_API_KEY}", "Accept": "application/json"},
-    )
-    if not data:
-        return discord.Embed(title="Dub Click Report", description="No clicks today.", color=0xF97316)
-    lines = []
-    for i, entry in enumerate(data[:5], 1):
-        label = entry.get("label") or entry.get("key") or f"Link {i}"
-        clicks = int(entry.get("clicks") or 0)
-        lines.append(f"{i}. **{label}** — {clicks} click{'s' if clicks != 1 else ''}")
-    total = sum(int(e.get("clicks") or 0) for e in data[:5])
     today_str = now.strftime("%b %d, %Y")
+    top = get_top_links(days=1, limit=5)
+    if not top or all(r["clicks"] == 0 for r in top):
+        return discord.Embed(title="locodev.dev Click Report", description="No clicks in the last 24 hours.", color=0xF97316)
+    lines = []
+    for i, row in enumerate(top, 1):
+        label = _fmt_link(row["prefix"], row["slug"])
+        clicks = int(row["clicks"])
+        lines.append(f"{i}. **{label}** — {clicks} click{'s' if clicks != 1 else ''}")
+    total = sum(int(r["clicks"]) for r in top)
+    winner = top[0]
+    winner_label = _fmt_link(winner["prefix"], winner["slug"])
+    winner_pct = int(winner["clicks"] / total * 100) if total else 0
     embed = discord.Embed(
-        title="Dub Click Report",
-        description=f"Top 5 clicked links today ({today_str})\n\n" + "\n".join(lines),
+        title="locodev.dev Click Report",
+        description=f"Performance overview for **Last 24 Hours**",
         color=0xF97316,
     )
-    embed.add_field(name="Total Clicks", value=str(total), inline=True)
-    embed.set_footer(text="Data from Dub.co API")
+    embed.add_field(name="Report Period", value=f"{today_str}", inline=False)
+    embed.add_field(name="Top Link", value=winner_label, inline=True)
+    embed.add_field(name="Winner Clicks", value=str(winner["clicks"]), inline=True)
+    embed.add_field(name="Winner Share", value=f"{winner_pct}%", inline=True)
+    embed.add_field(name="Top 5 Total", value=f"{total} clicks", inline=False)
+    embed.add_field(name="Top 5 Leaderboard", value="\n".join(lines), inline=False)
+    embed.set_footer(text="Data from locodev.dev shortener")
     return embed
 
 
@@ -1617,7 +1615,7 @@ def _build_ue5_embed() -> discord.Embed:
 @app_commands.command(name="report", description="Send a Dub or UE5 YouTube report instantly.")
 @app_commands.describe(type="Which report to send.")
 @app_commands.choices(type=[
-    app_commands.Choice(name="Dub Click Report (last 24h)", value="dub"),
+    app_commands.Choice(name="locodev.dev Click Report (last 24h)", value="dub"),
     app_commands.Choice(name="UE5 YouTube Top Channels", value="ue5"),
 ])
 async def report_command_slash(
