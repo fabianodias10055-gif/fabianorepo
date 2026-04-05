@@ -3374,6 +3374,7 @@ def _kb_load() -> list[dict]:
         return []
 
 def _kb_save(entries: list[dict]) -> None:
+    os.makedirs(os.path.dirname(_KB_PATH), exist_ok=True)
     with open(_KB_PATH, "w", encoding="utf-8") as f:
         json.dump(entries, f, ensure_ascii=False, indent=2)
 
@@ -3424,6 +3425,7 @@ def _load_events() -> list[dict]:
 
 def _save_events(events: list[dict]) -> None:
     try:
+        os.makedirs(os.path.dirname(_EVENTS_LOG_PATH), exist_ok=True)
         with open(_EVENTS_LOG_PATH, "w") as f:
             json.dump(events, f)
     except Exception as exc:
