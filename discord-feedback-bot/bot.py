@@ -2334,7 +2334,10 @@ def _fmt_link(prefix: str, slug: str) -> str:
         return "locodev.dev"
     if prefix == "root":
         return f"/{slug}"
-    return f"/{prefix}/{slug}", description="Create a new short link.")
+    return f"/{prefix}/{slug}"
+
+
+@app_commands.command(name="shorten", description="Create a new short link.")
 @app_commands.describe(
     url="The destination URL",
     slug="The short slug (e.g. obstacleavoidance)",
