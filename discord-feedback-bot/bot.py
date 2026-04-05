@@ -2326,6 +2326,137 @@ async def trial_stats_slash(interaction: discord.Interaction, days: int = 30) ->
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
+# ── URL Shortener slash commands ──────────────────────────────────────────────
+
+@app_commands.command(name="shorten", description="Create a new short link.")
+@app_commands.describe(
+    url="The destination URL",
+    slug="The short slug (e.g. obstacleavoidance)",
+    prefix="Prefix folder (default: p)",
+)
+async def shorten_slash(interaction: discord.Interaction, url: str, slug: str, prefix: str = "p") -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission.", ephemeral=True)
+        return
+    from shortener import create_link
+    slug = slug.lower().strip()
+    prefix = prefix.lower().strip()
+    ok = create_link(slug, url, prefix)
+    if ok:
+        await interaction.response.send_message(
+            f"✅ Created: `/{prefix}/{slug}` → <{url}>", ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            f"❌ Slug `/{prefix}/{slug}` already exists. Use `/edit_link` to update it.", ephemeral=True
+        )
+
+
+@app_commands.command(name="edit_link", description="Update the destination URL of an existing short link.")
+@app_commands.describe(slug="The slug to update", url="New destination URL", prefix="Prefix (default: p)")
+async def edit_link_slash(interaction: discord.Interaction, slug: str, url: str, prefix: str = "p") -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission.", ephemeral=True)
+        return
+    from shortener import update_link
+    ok = update_link(slug.lower(), url, prefix.lower())
+    if ok:
+        await interaction.response.send_message(f"✅ Updated `/{prefix}/{slug}` → <{url}>", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"❌ Link `/{prefix}/{slug}` not found.", ephemeral=True)
+
+
+@app_commands.command(name="delete_link", description="Delete a short link.")
+@app_commands.describe(slug="The slug to delete", prefix="Prefix (default: p)")
+async def delete_link_slash(interaction: discord.Interaction, slug: str, prefix: str = "p") -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission.", ephemeral=True)
+        return
+    from shortener import delete_link
+    ok = delete_link(slug.lower(), prefix.lower())
+    if ok:
+        await interaction.response.send_message(f"🗑️ Deleted `/{prefix}/{slug}`.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"❌ Link `/{prefix}/{slug}` not found.", ephemeral=True)
+
+
+@app_commands.command(name="list_links", description="List all short links.")
+async def list_links_slash(interaction: discord.Interaction) -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission.", ephemeral=True)
+        return
+    from shortener import list_links
+    links = list_links()
+    if not links:
+        await interaction.response.send_message("No links yet.", ephemeral=True)
+        return
+    lines = ["**🔗 All Short Links:**"]
+    for lnk in links:
+        lines.append(f"  `/{lnk['prefix']}/{lnk['slug']}` → {lnk['url']}")
+    text = "\n".join(lines)
+    # Discord message limit
+    if len(text) > 1900:
+        text = text[:1900] + "\n…(truncated)"
+    await interaction.response.send_message(text, ephemeral=True)
+
+
+@app_commands.command(name="link_stats", description="Show click analytics for a short link.")
+@app_commands.describe(slug="The slug to check", prefix="Prefix (default: p)", days="Days to look back (default 30)")
+async def link_stats_slash(interaction: discord.Interaction, slug: str, prefix: str = "p", days: int = 30) -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    from shortener import get_stats
+    stats = get_stats(slug.lower(), prefix.lower(), days)
+    if not stats:
+        await interaction.followup.send(f"❌ Link `/{prefix}/{slug}` not found.", ephemeral=True)
+        return
+    lines = [
+        f"**📊 `/{prefix}/{slug}`** — last {days} days",
+        f"🔗 → {stats['link']['url']}",
+        f"👆 Total clicks: **{stats['total']}**",
+    ]
+    if stats["by_country"]:
+        lines.append("\n**🌍 By Country:**")
+        for c in stats["by_country"]:
+            lines.append(f"  {c['country_code']} {c['country']} — {c['cnt']}")
+    if stats["by_referrer"]:
+        lines.append("\n**🔀 By Referrer:**")
+        for r in stats["by_referrer"]:
+            lines.append(f"  {r['referrer']} — {r['cnt']}")
+    if stats["daily"]:
+        lines.append("\n**📅 Last 7 days:**")
+        for d in stats["daily"]:
+            lines.append(f"  {d['day']} — {d['cnt']} clicks")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+@app_commands.command(name="top_links", description="Show the most clicked short links.")
+@app_commands.describe(days="Days to look back (default 7)", limit="Number of links to show (default 5)")
+async def top_links_slash(interaction: discord.Interaction, days: int = 7, limit: int = 5) -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    from shortener import get_top_links
+    links = get_top_links(days, limit)
+    if not links:
+        await interaction.followup.send("No clicks recorded yet.", ephemeral=True)
+        return
+    lines = [f"**🏆 Top {limit} Links — last {days} days**"]
+    for i, lnk in enumerate(links, 1):
+        lines.append(f"{i}. `/{lnk['prefix']}/{lnk['slug']}` — **{lnk['clicks']} clicks**")
+        lines.append(f"   → {lnk['url']}")
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
 class FeedbackBot(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.default()
@@ -2601,6 +2732,12 @@ class FeedbackBot(discord.Client):
         self.tree.add_command(test_pushover_slash)
         self.tree.add_command(kb_scan_slash)
         self.tree.add_command(trial_stats_slash)
+        self.tree.add_command(shorten_slash)
+        self.tree.add_command(edit_link_slash)
+        self.tree.add_command(delete_link_slash)
+        self.tree.add_command(list_links_slash)
+        self.tree.add_command(link_stats_slash)
+        self.tree.add_command(top_links_slash)
 
     async def on_ready(self) -> None:
         if not self.synced:
@@ -2617,6 +2754,12 @@ class FeedbackBot(discord.Client):
             self.tree.add_command(test_pushover_slash)
             self.tree.add_command(kb_scan_slash)
             self.tree.add_command(trial_stats_slash)
+            self.tree.add_command(shorten_slash)
+            self.tree.add_command(edit_link_slash)
+            self.tree.add_command(delete_link_slash)
+            self.tree.add_command(list_links_slash)
+            self.tree.add_command(link_stats_slash)
+            self.tree.add_command(top_links_slash)
             if GUILD_ID:
                 guild = discord.Object(id=int(GUILD_ID))
                 self.tree.copy_global_to(guild=guild)
@@ -3484,8 +3627,10 @@ async def patreon_webhook_handler(request):
 
 async def start_webhook_server():
     from aiohttp import web
+    from shortener import setup_routes as setup_shortener_routes
     app = web.Application()
     app.router.add_post("/patreon/webhook", patreon_webhook_handler)
+    setup_shortener_routes(app)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 8080)
