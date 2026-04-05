@@ -3647,6 +3647,18 @@ if __name__ == "__main__":
 
     async def main():
         await start_webhook_server()
+        # Auto-migrate Dub links on first boot if DB is empty
+        try:
+            from shortener import list_links
+            from migrate_dub import migrate
+            import os
+            csv_path = os.path.join(os.path.dirname(__file__), "dub_links.csv")
+            if os.path.exists(csv_path) and len(list_links()) == 0:
+                logger.info("Running one-time Dub migration...")
+                migrate(csv_path)
+                logger.info("Dub migration complete.")
+        except Exception as e:
+            logger.warning("Dub migration skipped: %s", e)
         await client.start(TOKEN)
 
     asyncio.run(main())
