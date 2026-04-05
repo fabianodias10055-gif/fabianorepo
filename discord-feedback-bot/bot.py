@@ -3225,6 +3225,29 @@ class FeedbackBot(discord.Client):
             parts.append(f"[Relevant past Q&A from community knowledge base:\n{kb_context}\n]")
         if channel_context:
             parts.append(f"[Recent channel messages for context:\n{channel_context}\n]")
+
+        # Link analytics context — inject if question is about links/clicks
+        _link_keywords = ["link", "click", "locodev.dev", "short", "redirect", "country", "visit", "traffic", "popular", "most clicked", "how many"]
+        if any(kw in (question or "").lower() for kw in _link_keywords):
+            try:
+                from shortener import get_top_links, list_links, get_stats
+                from datetime import timezone as _ltz
+                _all_links = list_links()
+                _top_7 = get_top_links(days=7, limit=10)
+                _top_30 = get_top_links(days=30, limit=10)
+                _link_lines = ["YOUR SHORT LINKS (locodev.dev):"]
+                for lnk in _all_links:
+                    _link_lines.append(f"  {_fmt_link(lnk['prefix'], lnk['slug'])} → {lnk['url']}")
+                _link_lines.append("\nTOP CLICKS LAST 7 DAYS:")
+                for lnk in _top_7:
+                    _link_lines.append(f"  {_fmt_link(lnk['prefix'], lnk['slug'])} — {lnk['clicks']} clicks")
+                _link_lines.append("\nTOP CLICKS LAST 30 DAYS:")
+                for lnk in _top_30:
+                    _link_lines.append(f"  {_fmt_link(lnk['prefix'], lnk['slug'])} — {lnk['clicks']} clicks")
+                parts.append(f"[URL Shortener Analytics:\n" + "\n".join(_link_lines) + "\n]")
+            except Exception as _le:
+                logger.warning("Link analytics context error: %s", _le)
+
         if web_context:
             parts.append(f"[Web page content from {url_to_fetch}:\n{web_context}\n]")
         if yt_search_results:
