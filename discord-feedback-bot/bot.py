@@ -3226,9 +3226,9 @@ class FeedbackBot(discord.Client):
         if channel_context:
             parts.append(f"[Recent channel messages for context:\n{channel_context}\n]")
 
-        # Link analytics context — inject if question is about links/clicks
+        # Link analytics context — inject if question is about links/clicks (owner only)
         _link_keywords = ["link", "click", "locodev.dev", "short", "redirect", "country", "visit", "traffic", "popular", "most clicked", "how many"]
-        if any(kw in (question or "").lower() for kw in _link_keywords):
+        if message.author.id == 690691536983425044 and any(kw in (question or "").lower() for kw in _link_keywords):
             try:
                 from shortener import get_top_links, list_links, get_stats
                 from datetime import timezone as _ltz
