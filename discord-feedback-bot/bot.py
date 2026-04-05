@@ -2594,6 +2594,14 @@ class FeedbackBot(discord.Client):
                     lines.append(f"\n**Net change: {net:+d}**")
                     await _send_chunked(channel, lines)
 
+                # Click report
+                try:
+                    loop = asyncio.get_event_loop()
+                    click_embed = await loop.run_in_executor(None, _build_dub_embed)
+                    await channel.send(embed=click_embed)
+                except Exception as ce:
+                    logger.warning("Scheduled click report error: %s", ce)
+
             except Exception as exc:
                 logger.warning("Daily summary error: %s", exc)
                 await asyncio.sleep(60)
