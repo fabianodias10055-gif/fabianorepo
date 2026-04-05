@@ -266,8 +266,14 @@ async def handle_redirect_root(request: web.Request) -> web.Response:
     return await _do_redirect(request, slug, "root")
 
 
+async def handle_redirect_domain_root(request: web.Request) -> web.Response:
+    """Handles locodev.dev with no path at all (stored as prefix='root', slug='_root')"""
+    return await _do_redirect(request, "_root", "root")
+
+
 def setup_routes(app: web.Application):
     init_db()
+    app.router.add_get("/", handle_redirect_domain_root)
     app.router.add_get("/{prefix}/{slug}", handle_redirect)
     app.router.add_get("/{slug}", handle_redirect_root)
     logger.info("URL shortener routes registered")
