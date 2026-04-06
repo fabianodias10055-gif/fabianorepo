@@ -1761,7 +1761,7 @@ async def _send_pushover(title: str, message: str, sound: str = "cashregister") 
     import aiohttp as _aiohttp
     try:
         async with _aiohttp.ClientSession() as session:
-            await session.post(
+            resp = await session.post(
                 "https://api.pushover.net/1/messages.json",
                 data={
                     "token": PUSHOVER_API_TOKEN,
@@ -1773,7 +1773,11 @@ async def _send_pushover(title: str, message: str, sound: str = "cashregister") 
                 },
                 timeout=_aiohttp.ClientTimeout(total=10),
             )
-            logger.info("Pushover notification sent: %s", title)
+            body = await resp.json()
+            if resp.status == 200 and body.get("status") == 1:
+                logger.info("Pushover notification sent: %s", title)
+            else:
+                logger.warning("Pushover rejected notification: status=%s body=%s", resp.status, body)
     except Exception as _pe:
         logger.warning("Pushover notification failed: %s", _pe)
 
@@ -3498,6 +3502,8 @@ async def patreon_webhook_handler(request):
     amount_cents = attrs.get("currently_entitled_amount_cents") or attrs.get("will_pay_amount_cents") or 0
     lifetime_cents = attrs.get("lifetime_support_cents") or 0
     is_returning = lifetime_cents > amount_cents
+    trial_ends_at = attrs.get("trial_ends_at")
+    is_free_trial = bool(trial_ends_at) and amount_cents == 0
 
     # Dedup check — use 6 hours for payment events, 30s for others
     cache_key = (member_id, event)
@@ -3562,10 +3568,6 @@ async def patreon_webhook_handler(request):
 
     if amount_cents > 0:
         tier_title = _correct_tier(tier_title, amount_cents)
-
-    # Detect free trial
-    trial_ends_at = attrs.get("trial_ends_at")
-    is_free_trial = bool(trial_ends_at) and amount_cents == 0
 
     # If Discord linked: show "@DiscordMention/Patreon Name", otherwise just Patreon name
     name = f"<@{discord_id}>/**{full_name}**" if discord_id else f"**{full_name}**"
