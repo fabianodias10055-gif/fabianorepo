@@ -1769,7 +1769,7 @@ async def _send_pushover(title: str, message: str, sound: str = "cashregister") 
                     "title": title,
                     "message": message,
                     "sound": sound,
-                    "priority": 1,
+                    "priority": 0,
                 },
                 timeout=_aiohttp.ClientTimeout(total=10),
             )
