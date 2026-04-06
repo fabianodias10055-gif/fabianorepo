@@ -1515,7 +1515,6 @@ async def sentiment_report(
 
 
 
-DUB_API_KEY = os.getenv("DUB_API_KEY", "")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 PATREON_ACCESS_TOKEN = os.getenv("PATREON_ACCESS_TOKEN", "")
 _REPORT_USER_AGENT = (
@@ -1532,7 +1531,7 @@ def _http_get_report(url: str, headers: dict | None = None) -> dict:
         return json.load(resp)
 
 
-def _build_dub_embed() -> discord.Embed:
+def _build_click_report_embed() -> discord.Embed:
     from shortener import get_top_links
     try:
         from zoneinfo import ZoneInfo
@@ -1612,10 +1611,10 @@ def _build_ue5_embed() -> discord.Embed:
     return embed
 
 
-@app_commands.command(name="report", description="Send a Dub or UE5 YouTube report instantly.")
+@app_commands.command(name="report", description="Send a click report or UE5 YouTube report instantly.")
 @app_commands.describe(type="Which report to send.")
 @app_commands.choices(type=[
-    app_commands.Choice(name="locodev.dev Click Report (last 24h)", value="dub"),
+    app_commands.Choice(name="locodev.dev Click Report (last 24h)", value="clicks"),
     app_commands.Choice(name="UE5 YouTube Top Channels", value="ue5"),
 ])
 async def report_command_slash(
@@ -1625,11 +1624,8 @@ async def report_command_slash(
     await interaction.response.defer(thinking=True)
     try:
         loop = asyncio.get_event_loop()
-        if type.value == "dub":
-            if not DUB_API_KEY:
-                await interaction.followup.send("DUB_API_KEY is not configured.")
-                return
-            embed = await loop.run_in_executor(None, _build_dub_embed)
+        if type.value == "clicks":
+            embed = await loop.run_in_executor(None, _build_click_report_embed)
         else:
             if not YOUTUBE_API_KEY:
                 await interaction.followup.send("YOUTUBE_API_KEY is not configured.")
@@ -2633,7 +2629,7 @@ class FeedbackBot(discord.Client):
                 # Click report
                 try:
                     loop = asyncio.get_event_loop()
-                    click_embed = await loop.run_in_executor(None, _build_dub_embed)
+                    click_embed = await loop.run_in_executor(None, _build_click_report_embed)
                     await channel.send(embed=click_embed)
                 except Exception as ce:
                     logger.warning("Scheduled click report error: %s", ce)
@@ -3766,15 +3762,15 @@ if __name__ == "__main__":
 
     async def main():
         await start_webhook_server()
-        # Auto-migrate Dub links on every boot (upsert — skips existing slugs)
+        # Ensure all links from CSV are imported (safe to re-run, skips existing)
         try:
             from migrate_dub import migrate
             import os
             csv_path = os.path.join(os.path.dirname(__file__), "dub_links.csv")
             if os.path.exists(csv_path):
-                logger.info("Running Dub link migration...")
+                logger.info("Running link migration from CSV...")
                 migrate(csv_path)
-                logger.info("Dub migration complete.")
+                logger.info("Link migration complete.")
         except Exception as e:
             logger.warning("Dub migration skipped: %s", e)
         await client.start(TOKEN)
