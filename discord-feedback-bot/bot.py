@@ -1829,8 +1829,8 @@ def _search_patreon_posts(query: str) -> list[dict]:
     return results[:5]
 
 
-def _fetch_patreon_daily_activity() -> dict:
-    """Fetch members who joined or have declined status in last 24h from Patreon API."""
+def _fetch_patreon_daily_activity(days: int = 1) -> dict:
+    """Fetch members who joined or have declined status in last N days from Patreon API."""
     from urllib import request as _req, parse as _parse
     from datetime import timezone
     req = _req.Request(
@@ -1841,7 +1841,7 @@ def _fetch_patreon_daily_activity() -> dict:
         campaigns = json.load(resp)
     campaign_id = campaigns["data"][0]["id"]
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     joined = []
     declined = []
     cursor = None
@@ -2244,13 +2244,15 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
     except Exception as exc:
         await channel.send(f"📊 **Daily Patreon Summary** — Error: {exc}"[:1900])
 
-    # --- Weekly summary (from persisted log) ---
+    # --- Weekly summary (live from Patreon API for paid, log for free/cancels) ---
     from datetime import timezone as _tz
     cutoff_7d = (datetime.now(_tz.utc) - timedelta(days=7)).isoformat()
-    w_events = [e for e in _load_events() if e.get("ts", "") >= cutoff_7d]
-    w_paid = [e for e in w_events if e["event"] == "members:pledge:create"]
-    w_free = [e for e in w_events if e["event"] == "members:create"]
-    w_cancels = [e for e in w_events if e["event"] in ("members:pledge:delete", "members:delete")]
+    loop = asyncio.get_event_loop()
+    w_activity = await loop.run_in_executor(None, lambda: _fetch_patreon_daily_activity(days=7))
+    w_paid = w_activity["joined"]
+    w_events_log = [e for e in _load_events() if e.get("ts", "") >= cutoff_7d]
+    w_free = [e for e in w_events_log if e["event"] == "members:create"]
+    w_cancels = [e for e in w_events_log if e["event"] in ("members:pledge:delete", "members:delete")]
     w_new = len(w_paid) + len(w_free)
     w_cancel = len(w_cancels)
 
@@ -2261,7 +2263,7 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
         if w_paid:
             lines.append(f"💎 **{len(w_paid)}** new paid subscriber(s):")
             for e in w_paid:
-                tier = f" ({e['tier']})" if e["tier"] else ""
+                tier = f" ({e['tier']})" if e.get("tier") else ""
                 lines.append(f"  • **{e['name']}**{tier} — ${e['amount']:.2f}/mo")
         if w_free:
             lines.append(f"👋 **{len(w_free)}** new free member(s):")
@@ -2583,12 +2585,12 @@ class FeedbackBot(discord.Client):
                 if joined:
                     lines.append(f"💎 **{len(joined)}** new paid subscriber(s):")
                     for e in joined:
-                        tier = f" ({e['tier']})" if e["tier"] else ""
+                        tier = f" ({e['tier']})" if e.get("tier") else ""
                         lines.append(f"  • **{e['name']}**{tier} — ${e['amount']:.2f}/mo")
                 if cancels:
                     lines.append(f"❌ **{len(cancels)}** cancellation(s):")
                     for e in cancels:
-                        tier = f" ({e['tier']})" if e["tier"] else ""
+                        tier = f" ({e['tier']})" if e.get("tier") else ""
                         lines.append(f"  • **{e['name']}**{tier}")
 
                 if len(lines) == 1:
@@ -2679,16 +2681,20 @@ class FeedbackBot(discord.Client):
 
                 from datetime import timezone as _tz
                 cutoff_7d = (datetime.now(_tz.utc) - timedelta(days=7)).isoformat()
-                events = [e for e in _load_events() if e.get("ts", "") >= cutoff_7d]
+
+                # Pull live data from Patreon API for the past 7 days
+                loop = asyncio.get_event_loop()
+                activity = await loop.run_in_executor(None, lambda: _fetch_patreon_daily_activity(days=7))
+                paid_subs = activity["joined"]
+
+                # Cancellations from local event log (API doesn't expose these easily)
+                events_log = [e for e in _load_events() if e.get("ts", "") >= cutoff_7d]
+                free_joins = [e for e in events_log if e["event"] == "members:create"]
+                cancels = [e for e in events_log if e["event"] in ("members:pledge:delete", "members:delete")]
                 _weekly_events.clear()
 
-                channel = self.get_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID)
-                if not channel:
-                    continue
+                channel = self.get_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID) or await self.fetch_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID)
 
-                paid_subs = [e for e in events if e["event"] == "members:pledge:create"]
-                free_joins = [e for e in events if e["event"] == "members:create"]
-                cancels = [e for e in events if e["event"] in ("members:pledge:delete", "members:delete")]
                 total_new = len(paid_subs) + len(free_joins)
                 total_cancel = len(cancels)
 
@@ -2701,7 +2707,7 @@ class FeedbackBot(discord.Client):
                 if paid_subs:
                     lines.append(f"💎 **{len(paid_subs)}** new paid subscriber(s):")
                     for e in paid_subs:
-                        tier = f" ({e['tier']})" if e["tier"] else ""
+                        tier = f" ({e['tier']})" if e.get("tier") else ""
                         lines.append(f"  • **{e['name']}**{tier} — ${e['amount']:.2f}/mo")
 
                 if free_joins:
