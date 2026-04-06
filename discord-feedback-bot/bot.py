@@ -3655,7 +3655,8 @@ async def patreon_webhook_handler(request):
         try:
             public_channel = client.get_channel(PATREON_PUBLIC_CHANNEL_ID) or await client.fetch_channel(PATREON_PUBLIC_CHANNEL_ID)
             if event == "members:pledge:create" and tier_title and not is_free_trial:
-                public_msg = f"💎 **{full_name}** joined **{tier_title}**\n👉 patreon.com/LocoDev"
+                public_name = f"<@{discord_id}>/**{full_name}**" if discord_id else f"**{full_name}**"
+                public_msg = f"💎 {public_name} joined **{tier_title}**\n👉 patreon.com/LocoDev"
                 await public_channel.send(public_msg)
         except Exception as _pe:
             logger.warning("Could not send to public channel %s: %s", PATREON_PUBLIC_CHANNEL_ID, _pe)
