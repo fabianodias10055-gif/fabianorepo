@@ -1740,7 +1740,37 @@ async def check_patron_slash(interaction: discord.Interaction, user: discord.Mem
         await interaction.followup.send(f"Error checking Patreon: {exc}", ephemeral=True)
 
 
-async def _send_chunked(channel, lines: list[str]) -> None:
+@app_commands.command(name="fix_roles", description="Manually assign the correct Patreon tier role to a user.")
+@app_commands.describe(user="The Discord user to fix.", tier="The tier to assign.")
+@app_commands.choices(tier=[
+    app_commands.Choice(name="LocoBasic", value="LocoBasic"),
+    app_commands.Choice(name="LocoStandard", value="LocoStandard"),
+    app_commands.Choice(name="LocoPremium", value="LocoPremium"),
+])
+async def fix_roles_slash(interaction: discord.Interaction, user: discord.Member, tier: app_commands.Choice[str]) -> None:
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    _tier_roles = ["LocoBasic", "LocoStandard", "LocoPremium"]
+    try:
+        # Remove existing tier roles
+        roles_to_remove = [r for r in user.roles if r.name in _tier_roles]
+        if roles_to_remove:
+            await user.remove_roles(*roles_to_remove, reason="Manual fix by LocoDev")
+        # Assign new role
+        role = discord.utils.get(interaction.guild.roles, name=tier.value)
+        if not role:
+            await interaction.followup.send(f"Role `{tier.value}` not found in server.", ephemeral=True)
+            return
+        await user.add_roles(role, reason="Manual fix by LocoDev")
+        await interaction.followup.send(f"✅ Assigned **{tier.value}** to {user.mention}.", ephemeral=True)
+    except Exception as exc:
+        await interaction.followup.send(f"Error: {exc}", ephemeral=True)
+
+
+
     """Send lines as Discord messages, splitting at 1900 chars."""
     chunk = ""
     for line in lines:
@@ -2730,6 +2760,7 @@ class FeedbackBot(discord.Client):
     async def setup_hook(self) -> None:
         self.tree.add_command(report_command_slash)
         self.tree.add_command(check_patron_slash)
+        self.tree.add_command(fix_roles_slash)
         self.tree.add_command(top_patrons_slash)
         self.tree.add_command(recent_posts_slash)
         self.tree.add_command(meta_conversion_slash)
@@ -2752,6 +2783,7 @@ class FeedbackBot(discord.Client):
             # Re-add commands and sync to guild
             self.tree.add_command(report_command_slash)
             self.tree.add_command(check_patron_slash)
+            self.tree.add_command(fix_roles_slash)
             self.tree.add_command(top_patrons_slash)
             self.tree.add_command(recent_posts_slash)
             self.tree.add_command(meta_conversion_slash)
