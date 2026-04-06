@@ -3678,6 +3678,12 @@ async def patreon_webhook_handler(request):
             message=f"{full_name} started a free trial on Patreon.",
             sound="none",
         )
+    elif event == "members:create":
+        await _send_pushover(
+            title=f"👋 New Free Member",
+            message=f"{full_name} joined LocoDev on Patreon for free.",
+            sound="none",
+        )
     elif event == "members:update" and attrs.get("patron_status") == "active_patron":
         await _send_pushover(
             title=f"✅ Payment received — ${dollars:.2f}",
