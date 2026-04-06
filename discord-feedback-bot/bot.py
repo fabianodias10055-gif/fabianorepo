@@ -3672,7 +3672,13 @@ async def patreon_webhook_handler(request):
 
     # Pushover notification for payment events (skip free trials)
     logger.info("Patreon webhook processed: event=%s name=%s amount=%s is_free_trial=%s", event, full_name, amount_cents, is_free_trial)
-    if event == "members:pledge:create" and not is_free_trial:
+    if event == "members:pledge:create" and not is_free_trial and _entry.get("is_trial_conversion"):
+        await _send_pushover(
+            title=f"🔄 Trial Converted — ${dollars:.2f}/month",
+            message=f"{full_name} converted from free trial to {tier_title or 'paid'} on Patreon!",
+            sound="cashregister",
+        )
+    elif event == "members:pledge:create" and not is_free_trial:
         await _send_pushover(
             title=f"💰 New Patron — ${dollars:.2f}/month",
             message=f"{full_name} joined {tier_title or 'LocoDev'} on Patreon!",
