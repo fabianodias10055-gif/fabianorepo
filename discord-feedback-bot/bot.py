@@ -3485,9 +3485,12 @@ async def patreon_webhook_handler(request):
     from aiohttp import web
     body = await request.read()
     sig = request.headers.get("X-Patreon-Signature", "")
+    logger.info("Patreon webhook received: event=%s sig=%s body_len=%d",
+                request.headers.get("X-Patreon-Event", ""), sig[:10] if sig else "none", len(body))
     if PATREON_WEBHOOK_SECRET:
         expected = hmac.new(PATREON_WEBHOOK_SECRET.encode(), body, hashlib.md5).hexdigest()
         if not hmac.compare_digest(sig, expected):
+            logger.warning("Patreon webhook signature mismatch — got %s expected %s", sig[:10], expected[:10])
             return web.Response(status=403, text="Invalid signature")
     event = request.headers.get("X-Patreon-Event", "")
     try:
@@ -3662,6 +3665,7 @@ async def patreon_webhook_handler(request):
             logger.warning("Could not send to public channel %s: %s", PATREON_PUBLIC_CHANNEL_ID, _pe)
 
     # Pushover notification for payment events (skip free trials)
+    logger.info("Patreon webhook processed: event=%s name=%s amount=%s is_free_trial=%s", event, full_name, amount_cents, is_free_trial)
     if event == "members:pledge:create" and not is_free_trial:
         await _send_pushover(
             title=f"💰 New Patron — ${dollars:.2f}/month",
