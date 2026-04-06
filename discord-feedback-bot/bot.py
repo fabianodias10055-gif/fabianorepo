@@ -3644,20 +3644,22 @@ async def patreon_webhook_handler(request):
 
     if msg:
         # Send full message to #bot-reports
-        channel = client.get_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID)
-        if channel:
+        try:
+            channel = client.get_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID) or await client.fetch_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID)
             await channel.send(msg)
             logger.info("Posted Patreon announcement: %s", msg)
-        else:
-            logger.warning("Announcement channel %s not found", PATREON_ANNOUNCEMENT_CHANNEL_ID)
+        except Exception as _ce:
+            logger.warning("Could not send to announcement channel %s: %s", PATREON_ANNOUNCEMENT_CHANNEL_ID, _ce)
 
         # Send short public message to #patreon-members for new members (free or paid)
-        public_channel = client.get_channel(PATREON_PUBLIC_CHANNEL_ID)
-        if public_channel:
+        try:
+            public_channel = client.get_channel(PATREON_PUBLIC_CHANNEL_ID) or await client.fetch_channel(PATREON_PUBLIC_CHANNEL_ID)
             public_name = f"<@{discord_id}>/**{full_name}**" if discord_id else f"**{full_name}**"
             if event == "members:pledge:create" and tier_title and not is_free_trial:
                 public_msg = f"💎 {public_name} joined **{tier_title}**\n> 👉 patreon.com/LocoDev"
                 await public_channel.send(public_msg)
+        except Exception as _pe:
+            logger.warning("Could not send to public channel %s: %s", PATREON_PUBLIC_CHANNEL_ID, _pe)
 
     # Pushover notification for payment events (skip free trials)
     if event == "members:pledge:create" and not is_free_trial:
