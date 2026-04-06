@@ -3678,6 +3678,12 @@ async def patreon_webhook_handler(request):
             message=f"{full_name} started a free trial on Patreon.",
             sound="none",
         )
+    elif event == "members:pledge:update" and amount_cents > 0:
+        await _send_pushover(
+            title=f"⬆️ Tier Upgrade — ${dollars:.2f}/month",
+            message=f"{full_name} upgraded to {tier_title or 'a new tier'} on Patreon.",
+            sound="cashregister",
+        )
     elif event == "members:create":
         await _send_pushover(
             title=f"👋 New Free Member",
