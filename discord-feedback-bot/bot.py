@@ -3654,26 +3654,30 @@ async def patreon_webhook_handler(request):
             try:
                 member = guild.get_member(int(discord_id)) or await guild.fetch_member(int(discord_id))
                 if member:
-                    # Determine which role to assign
-                    new_role_name = None
-                    if event in ("members:pledge:create", "members:pledge:update"):
-                        new_role_name = tier_title  # e.g. "LocoStandard"
-                    elif event == "members:pledge:delete":
-                        new_role_name = None  # remove all tier roles
-
-                    # Remove all existing tier roles first
-                    roles_to_remove = [r for r in member.roles if r.name in _tier_roles]
-                    if roles_to_remove:
-                        await member.remove_roles(*roles_to_remove, reason="Patreon tier update")
-
-                    # Assign the new tier role
-                    if new_role_name and new_role_name in _tier_roles:
-                        role = discord.utils.get(guild.roles, name=new_role_name)
-                        if role:
+                    if event in ("members:pledge:create", "members:pledge:update") and tier_title in _tier_roles:
+                        # New sub or tier change — assign correct role
+                        roles_to_remove = [r for r in member.roles if r.name in _tier_roles and r.name != tier_title]
+                        if roles_to_remove:
+                            await member.remove_roles(*roles_to_remove, reason="Patreon tier update")
+                        role = discord.utils.get(guild.roles, name=tier_title)
+                        if role and role not in member.roles:
                             await member.add_roles(role, reason=f"Patreon {event}")
-                            logger.info("Assigned role '%s' to %s (Discord ID %s)", new_role_name, full_name, discord_id)
-                        else:
-                            logger.warning("Role '%s' not found in guild", new_role_name)
+                            logger.info("Assigned role '%s' to %s (Discord ID %s)", tier_title, full_name, discord_id)
+                    elif event == "members:update" and attrs.get("patron_status") == "active_patron" and tier_title in _tier_roles:
+                        # Payment received — ensure they still have the correct role
+                        role = discord.utils.get(guild.roles, name=tier_title)
+                        if role and role not in member.roles:
+                            roles_to_remove = [r for r in member.roles if r.name in _tier_roles and r.name != tier_title]
+                            if roles_to_remove:
+                                await member.remove_roles(*roles_to_remove, reason="Patreon payment confirmed")
+                            await member.add_roles(role, reason="Patreon payment confirmed")
+                            logger.info("Re-assigned role '%s' to %s after payment", tier_title, full_name)
+                    elif event == "members:pledge:delete":
+                        # Cancelled — remove all tier roles
+                        roles_to_remove = [r for r in member.roles if r.name in _tier_roles]
+                        if roles_to_remove:
+                            await member.remove_roles(*roles_to_remove, reason="Patreon cancelled")
+                            logger.info("Removed tier roles from %s (Discord ID %s) — cancelled", full_name, discord_id)
             except discord.NotFound:
                 logger.warning("Discord member %s not found in guild for role assignment", discord_id)
             except Exception as _re:
