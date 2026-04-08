@@ -3254,7 +3254,9 @@ class FeedbackBot(discord.Client):
         # Owner can create/delete short links by talking to the bot
         if message.author.id == 690691536983425044:
             import re as _re
-            _q_lower = (question or "").lower()
+            # Use raw message content for link detection (more reliable than parsed question)
+            _raw_msg = message.content
+            _q_lower = _raw_msg.lower()
             _delete_kw = ["delete link", "remove link", "delete the link", "remove the link"]
 
             if any(kw in _q_lower for kw in _delete_kw):
@@ -3272,8 +3274,8 @@ class FeedbackBot(discord.Client):
 
             else:
                 # Detect create intent: message has a locodev.dev/path AND a https:// URL
-                _path_match = _re.search(r'locodev\.dev/([^\s→>]+)', question or "", _re.IGNORECASE)
-                _url_match = _re.search(r'https?://[^\s]+', question or "")
+                _path_match = _re.search(r'locodev\.dev/([^\s→>\n]+)', _raw_msg, _re.IGNORECASE)
+                _url_match = _re.search(r'https?://[^\s→>\n]+', _raw_msg)
                 if _path_match and _url_match:
                     _dest_url = _url_match.group(0).rstrip(".,)")
                     _raw_path = _path_match.group(1).strip("/")
@@ -3281,15 +3283,23 @@ class FeedbackBot(discord.Client):
                         _pfx, _slg = _raw_path.split("/", 1)
                     else:
                         _pfx, _slg = "root", _raw_path
-                    from shortener import create_link as _crt_link, update_link as _upd_link
-                    _ok = _crt_link(_slg, _dest_url, _pfx)
-                    _short = f"locodev.dev/{_pfx}/{_slg}" if _pfx != "root" else f"locodev.dev/{_slg}"
-                    if _ok:
-                        await message.channel.send(f"✅ Created: `{_short}` → {_dest_url}")
-                    else:
-                        # Already exists — update it
-                        _upd_link(_slg, _dest_url, _pfx)
-                        await message.channel.send(f"✅ Updated: `{_short}` → {_dest_url}")
+                    try:
+                        from shortener import create_link as _crt_link, update_link as _upd_link, get_link as _get_link
+                        _ok = _crt_link(_slg, _dest_url, _pfx)
+                        _short = f"locodev.dev/{_pfx}/{_slg}" if _pfx != "root" else f"locodev.dev/{_slg}"
+                        if not _ok:
+                            _upd_link(_slg, _dest_url, _pfx)
+                        # Verify it's actually in the DB
+                        _verify = _get_link(_slg, _pfx)
+                        if _verify:
+                            action = "Created" if _ok else "Updated"
+                            await message.channel.send(f"✅ {action}: `{_short}` → {_verify['url']}")
+                        else:
+                            await message.channel.send(f"❌ Failed to save link — DB write error.")
+                            logger.error("Link creation failed: slug=%s prefix=%s url=%s", _slg, _pfx, _dest_url)
+                    except Exception as _le:
+                        await message.channel.send(f"❌ Error creating link: {_le}")
+                        logger.error("Link creation exception: %s", _le)
                     return
 
 
