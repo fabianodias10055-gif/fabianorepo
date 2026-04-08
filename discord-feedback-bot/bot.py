@@ -3665,7 +3665,11 @@ async def patreon_webhook_handler(request):
     member_id = data.get("data", {}).get("id", "")
     included = data.get("included", [])
     full_name = attrs.get("full_name", "Someone")
-    amount_cents = attrs.get("currently_entitled_amount_cents") or attrs.get("will_pay_amount_cents") or 0
+    # Use currently_entitled_amount_cents for free trial detection (can be 0 for trials)
+    # will_pay_amount_cents is the future amount — don't use it to override 0
+    _entitled = attrs.get("currently_entitled_amount_cents")
+    _will_pay = attrs.get("will_pay_amount_cents")
+    amount_cents = _entitled if _entitled is not None else (_will_pay or 0)
     lifetime_cents = attrs.get("lifetime_support_cents") or 0
     is_returning = lifetime_cents > amount_cents
     trial_ends_at = attrs.get("trial_ends_at")
