@@ -3251,6 +3251,51 @@ class FeedbackBot(discord.Client):
             parts.append(f"[Recent channel messages for context:\n{channel_context}\n]")
 
         # Link analytics context — inject if question is about links/clicks (owner only)
+        # Owner can create/delete short links by talking to the bot
+        if message.author.id == 690691536983425044:
+            _q_lower = (question or "").lower()
+            _create_kw = ["create link", "create a link", "make a link", "add a link", "add link", "new link", "short link for", "create short", "map ", "point "]
+            _delete_kw = ["delete link", "remove link", "delete the link", "remove the link"]
+            if any(kw in _q_lower for kw in _delete_kw):
+                # Parse: "delete link /download/foo" or "delete link download/foo"
+                import re as _re
+                _slug_match = _re.search(r'(?:delete|remove)\s+(?:the\s+)?link\s+/?([^\s]+)', _q_lower)
+                if _slug_match:
+                    _raw = _slug_match.group(1).strip("/")
+                    if "/" in _raw:
+                        _dpfx, _dslug = _raw.split("/", 1)
+                    else:
+                        _dpfx, _dslug = "root", _raw
+                    from shortener import delete_link as _del_link
+                    _deleted = _del_link(_dslug, _dpfx)
+                    await message.channel.send(f"✅ Deleted `/{_dpfx}/{_dslug}`." if _deleted else f"❌ Link `/{_dpfx}/{_dslug}` not found.")
+                    return
+            elif any(kw in _q_lower for kw in _create_kw):
+                # Extract URL from the message
+                import re as _re
+                _url_match = _re.search(r'https?://[^\s]+', question or "")
+                if _url_match:
+                    _dest_url = _url_match.group(0).rstrip(".,)")
+                    # Extract the desired short path (e.g. "download/foo/v1.3")
+                    _path_match = _re.search(r'locodev\.dev/([^\s]+)', _q_lower)
+                    if not _path_match:
+                        # Try patterns like "map download/foo to https://..."
+                        _path_match = _re.search(r'(?:map|point|as|for|called?|named?|use|path|slug)\s+/?([a-z0-9/_-]+)', _q_lower)
+                    if _path_match:
+                        _raw_path = _path_match.group(1).strip("/")
+                        if "/" in _raw_path:
+                            _pfx, _slg = _raw_path.split("/", 1)
+                        else:
+                            _pfx, _slg = "root", _raw_path
+                        from shortener import create_link as _crt_link
+                        _ok = _crt_link(_slg, _dest_url, _pfx)
+                        _short = f"locodev.dev/{_pfx}/{_slg}" if _pfx != "root" else f"locodev.dev/{_slg}"
+                        if _ok:
+                            await message.channel.send(f"✅ Created: `{_short}` → {_dest_url}")
+                        else:
+                            await message.channel.send(f"⚠️ A link at `{_short}` already exists. Use `/link_update` to change it.")
+                        return
+
         _link_keywords = ["link", "click", "locodev.dev", "short", "redirect", "country", "visit", "traffic", "popular", "most clicked", "how many"]
         if message.author.id == 690691536983425044 and any(kw in (question or "").lower() for kw in _link_keywords):
             try:
