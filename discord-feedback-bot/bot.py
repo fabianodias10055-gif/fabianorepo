@@ -3414,6 +3414,45 @@ class FeedbackBot(discord.Client):
                     _ev_lines.append(f"  {e.get('ts','')[:10]} {e.get('event','')} — {e.get('name','?')} tier={e.get('tier','?')} amount=${e.get('amount',0):.2f}{_trial_tag}{_conv_tag}")
                 if not _month:
                     _ev_lines.append("  No events in last 30 days.")
+
+                # Correlate Patreon link clicks with conversions (time-based)
+                try:
+                    from shortener import _conn as _sh_conn
+                    from datetime import timedelta as _td
+                    _cutoff_30 = (_now - timedelta(days=30)).isoformat()
+                    with _sh_conn() as _shdb:
+                        # Clicks on Patreon links (p/ prefix) per slug last 30 days
+                        _p_clicks = _shdb.execute(
+                            """SELECT l.slug, l.url, COUNT(c.id) cnt,
+                                      MIN(c.clicked_at) first_click, MAX(c.clicked_at) last_click
+                               FROM links l JOIN clicks c ON c.link_id=l.id
+                               WHERE l.prefix='p' AND c.clicked_at>=?
+                               GROUP BY l.id ORDER BY cnt DESC""",
+                            (_cutoff_30,)
+                        ).fetchall()
+                        # Free join clicks (free/ prefix)
+                        _free_clicks = _shdb.execute(
+                            """SELECT l.slug, l.url, COUNT(c.id) cnt
+                               FROM links l JOIN clicks c ON c.link_id=l.id
+                               WHERE l.prefix='free' AND c.clicked_at>=?
+                               GROUP BY l.id ORDER BY cnt DESC""",
+                            (_cutoff_30,)
+                        ).fetchall()
+                    _ev_lines.append(f"\nPATREON LINK CLICKS vs CONVERSIONS (last 30 days):")
+                    _ev_lines.append("Patreon page links (locodev.dev/p/...):")
+                    for _r in _p_clicks:
+                        _ev_lines.append(f"  /p/{_r['slug']} — {_r['cnt']} clicks (last: {(_r['last_click'] or '')[:10]})")
+                    if not _p_clicks:
+                        _ev_lines.append("  No clicks on Patreon links.")
+                    _ev_lines.append("Free tier links (locodev.dev/free/...):")
+                    for _r in _free_clicks:
+                        _ev_lines.append(f"  /free/{_r['slug']} — {_r['cnt']} clicks (last: {(_r['last_click'] or '')[:10]})")
+                    if not _free_clicks:
+                        _ev_lines.append("  No clicks on free links.")
+                    _ev_lines.append("NOTE: Direct correlation not possible (no user ID tracking), but you can infer by comparing click dates with conversion dates above.")
+                except Exception as _ce:
+                    logger.warning("Conversion correlation error: %s", _ce)
+
                 parts.append(f"[Patreon Member Events:\n" + "\n".join(_ev_lines) + "\n]")
             except Exception as _pe:
                 logger.warning("Patreon event context error: %s", _pe)
