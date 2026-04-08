@@ -3345,6 +3345,22 @@ class FeedbackBot(discord.Client):
                     _link_lines.append(f"  {_c['country'] or 'Unknown'} ({_c['country_code'] or '??'}) — {_c['cnt']} clicks")
                 if not _countries:
                     _link_lines.append("  No country data available.")
+                # If a specific link path is mentioned in the question, inject its detailed stats
+                import re as _sre
+                _mentioned = _sre.findall(r'(?:locodev\.dev/|/)?([a-z0-9_-]+/[a-zA-Z0-9/_.-]+)', (question or "").lower())
+                for _mpath in _mentioned:
+                    _mpath = _mpath.strip("/")
+                    if "/" in _mpath:
+                        _mpfx, _mslg = _mpath.split("/", 1)
+                        _mstats = get_stats(_mslg, _mpfx, days=30)
+                        if _mstats and _mstats['total'] > 0:
+                            _link_lines.append(f"\nDETAILED STATS FOR /{_mpfx}/{_mslg} (last 30 days):")
+                            _link_lines.append(f"  Total: {_mstats['total']} clicks")
+                            _link_lines.append(f"  By country:")
+                            for _bc in _mstats['by_country']:
+                                _link_lines.append(f"    • {_bc['country'] or 'Unknown'} ({_bc['country_code'] or '??'}) — {_bc['cnt']} clicks")
+                            if not _mstats['by_country']:
+                                _link_lines.append(f"    • No country data resolved yet (geo lookup pending)")
                 parts.append(f"[URL Shortener Analytics:\n" + "\n".join(_link_lines) + "\n]")
             except Exception as _le:
                 logger.warning("Link analytics context error: %s", _le)
