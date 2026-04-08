@@ -3366,7 +3366,7 @@ class FeedbackBot(discord.Client):
                 logger.warning("Link analytics context error: %s", _le)
 
         # Patreon event context — inject if question is about subscribers/members (owner only)
-        _patreon_keywords = ["patreon", "patron", "subscriber", "subscri", "join", "cancel", "trial", "member", "who paid", "who signed", "pledge", "tier"]
+        _patreon_keywords = ["patreon", "patron", "subscriber", "subscri", "join", "cancel", "trial", "member", "who paid", "who signed", "pledge", "tier", "revenue", "income", "earning", "monthly", "mrr", "money", "increasing", "growing"]
         if message.author.id == 690691536983425044 and any(kw in (question or "").lower() for kw in _patreon_keywords):
             try:
                 _events = _load_events()
@@ -3376,15 +3376,38 @@ class FeedbackBot(discord.Client):
                 _30d_cutoff = (_now - timedelta(days=30)).isoformat()
                 _recent = [e for e in _events if e.get("ts", "") >= _7d_cutoff]
                 _month = [e for e in _events if e.get("ts", "") >= _30d_cutoff]
-                _ev_lines = ["PATREON EVENTS (from webhook log):"]
-                _ev_lines.append(f"\nLAST 7 DAYS ({len(_recent)} events):")
+
+                # Revenue summary from active paid subscribers (members:pledge:create + members:pledge:update)
+                # Use latest pledge event per member to get current amount
+                _member_amounts: dict = {}
+                for e in sorted(_events, key=lambda x: x.get("ts", "")):
+                    if e.get("event") in ("members:pledge:create", "members:pledge:update") and not e.get("is_trial") and e.get("amount", 0) > 0:
+                        _member_amounts[e.get("member_id", e.get("name"))] = e.get("amount", 0)
+                    elif e.get("event") in ("members:pledge:delete", "members:delete"):
+                        _member_amounts.pop(e.get("member_id", e.get("name")), None)
+                _mrr = sum(_member_amounts.values())
+                _active_count = len(_member_amounts)
+
+                # Revenue from last 30 days (new payments received)
+                _payments_30d = [e for e in _month if e.get("event") == "members:update" and e.get("amount", 0) > 0]
+                _new_subs_30d = [e for e in _month if e.get("event") == "members:pledge:create" and not e.get("is_trial") and e.get("amount", 0) > 0]
+                _cancels_30d = [e for e in _month if e.get("event") in ("members:pledge:delete", "members:delete")]
+
+                _ev_lines = ["PATREON REVENUE & MEMBER DATA:"]
+                _ev_lines.append(f"\nESTIMATED MRR (based on active pledges in log): ${_mrr:.2f}/month")
+                _ev_lines.append(f"Active paid members tracked: {_active_count}")
+                _ev_lines.append(f"\nLAST 30 DAYS:")
+                _ev_lines.append(f"  New paid subscribers: {len(_new_subs_30d)}")
+                _ev_lines.append(f"  Cancellations: {len(_cancels_30d)}")
+                _ev_lines.append(f"  Net change: {len(_new_subs_30d) - len(_cancels_30d):+d}")
+                _ev_lines.append(f"\nRECENT EVENTS (last 7 days):")
                 for e in sorted(_recent, key=lambda x: x.get("ts",""), reverse=True):
                     _trial_tag = " [FREE TRIAL]" if e.get("is_trial") else ""
                     _conv_tag = " [CONVERTED]" if e.get("is_trial_conversion") else ""
                     _ev_lines.append(f"  {e.get('ts','')[:10]} {e.get('event','')} — {e.get('name','?')} tier={e.get('tier','?')} amount=${e.get('amount',0):.2f}{_trial_tag}{_conv_tag}")
                 if not _recent:
                     _ev_lines.append("  No events in last 7 days.")
-                _ev_lines.append(f"\nLAST 30 DAYS ({len(_month)} events):")
+                _ev_lines.append(f"\nALL EVENTS LAST 30 DAYS:")
                 for e in sorted(_month, key=lambda x: x.get("ts",""), reverse=True):
                     _trial_tag = " [FREE TRIAL]" if e.get("is_trial") else ""
                     _conv_tag = " [CONVERTED]" if e.get("is_trial_conversion") else ""
