@@ -3418,7 +3418,15 @@ class FeedbackBot(discord.Client):
                 f"USER CONTEXT:\n"
                 f"You are talking to LocoDev himself — the creator and owner of this server. "
                 f"Treat him as your boss. Be direct, casual, and skip any generic intro. "
-                f"He knows everything about the server, so don't explain basics to him."
+                f"He knows everything about the server, so don't explain basics to him.\n\n"
+                f"IMPORTANT — URL SHORTENER ACTIONS:\n"
+                f"You have the ability to actually create and delete short links on locodev.dev. "
+                f"When LocoDev wants to create a short link, respond with EXACTLY this format on its own line:\n"
+                f"[CREATE_LINK: prefix/slug → destination_url]\n"
+                f"Example: [CREATE_LINK: download/ragdollbasic → https://drive.google.com/...]\n"
+                f"For root links (no prefix): [CREATE_LINK: root/slug → url]\n"
+                f"DO NOT say 'I can't create links' or 'you need to do this manually'. "
+                f"Just output the CREATE_LINK marker and it will be executed automatically."
             )
         else:
             roles_str = ", ".join(member_roles) if member_roles else "no special roles"
@@ -3466,12 +3474,45 @@ class FeedbackBot(discord.Client):
                     )
                     return resp.content[0].text
                 answer = await loop.run_in_executor(None, _ask)
+
+                # Execute any [CREATE_LINK: prefix/slug → url] markers in Claude's response
+                import re as _cre
+                _cl_matches = _cre.findall(r'\[CREATE_LINK:\s*([^\s→]+)\s*[→>]+\s*(https?://[^\]]+)\]', answer)
+                _link_results = []
+                for _cl_path, _cl_url in _cl_matches:
+                    _cl_url = _cl_url.strip()
+                    _cl_path = _cl_path.strip().strip("/")
+                    if "/" in _cl_path:
+                        _cl_pfx, _cl_slg = _cl_path.split("/", 1)
+                    else:
+                        _cl_pfx, _cl_slg = "root", _cl_path
+                    try:
+                        from shortener import create_link as _cl_create, update_link as _cl_update, get_link as _cl_get
+                        _cl_ok = _cl_create(_cl_slg, _cl_url, _cl_pfx)
+                        if not _cl_ok:
+                            _cl_update(_cl_slg, _cl_url, _cl_pfx)
+                        _cl_verify = _cl_get(_cl_slg, _cl_pfx)
+                        _cl_short = f"locodev.dev/{_cl_pfx}/{_cl_slg}" if _cl_pfx != "root" else f"locodev.dev/{_cl_slg}"
+                        if _cl_verify:
+                            _link_results.append(f"✅ {'Created' if _cl_ok else 'Updated'}: `{_cl_short}` → {_cl_verify['url']}")
+                            logger.info("Auto-created link: %s → %s", _cl_short, _cl_url)
+                        else:
+                            _link_results.append(f"❌ Failed to save `{_cl_short}`")
+                    except Exception as _cle:
+                        _link_results.append(f"❌ Error: {_cle}")
+                        logger.error("CREATE_LINK execution error: %s", _cle)
+                # Strip the markers from the displayed answer
+                answer = _cre.sub(r'\[CREATE_LINK:[^\]]+\]\n?', '', answer).strip()
+
                 # Store bot reply in history
                 self._conversation_history[user_id].append({"role": "assistant", "content": answer})
                 if len(answer) <= 1900:
                     await message.reply(answer)
                 else:
                     await message.reply(answer[:1900])
+                # Send link creation results as follow-up
+                if _link_results:
+                    await message.channel.send("\n".join(_link_results))
                 # Send KB images as follow-up if any
                 if kb_images:
                     try:
