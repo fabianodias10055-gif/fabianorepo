@@ -3306,13 +3306,13 @@ class FeedbackBot(discord.Client):
         _link_keywords = ["link", "click", "locodev.dev", "short", "redirect", "country", "visit", "traffic", "popular", "most clicked", "how many"]
         if message.author.id == 690691536983425044 and any(kw in (question or "").lower() for kw in _link_keywords):
             try:
-                from shortener import get_top_links, list_links, _conn as _sh_conn
+                from shortener import get_top_links, list_links, get_stats, _conn as _sh_conn
                 from datetime import timedelta as _td, timezone as _shtz
                 _all_links = list_links()
                 _top_1 = get_top_links(days=1, limit=10)
                 _top_7 = get_top_links(days=7, limit=10)
                 _top_30 = get_top_links(days=30, limit=10)
-                # Country breakdown for last 7 days
+                # Country breakdown for last 7 days (overall)
                 _cutoff_7 = (datetime.now(_shtz.utc) - _td(days=7)).isoformat()
                 with _sh_conn() as _shdb:
                     _countries = _shdb.execute(
@@ -3329,13 +3329,18 @@ class FeedbackBot(discord.Client):
                     _link_lines.append(f"  {_fmt_link(lnk['prefix'], lnk['slug'])} — {lnk['clicks']} clicks")
                 if not _top_1:
                     _link_lines.append("  No clicks in the last 24 hours.")
-                _link_lines.append("\nTOP CLICKS LAST 7 DAYS:")
+                _link_lines.append("\nTOP CLICKS LAST 7 DAYS (with per-link country breakdown):")
                 for lnk in _top_7:
-                    _link_lines.append(f"  {_fmt_link(lnk['prefix'], lnk['slug'])} — {lnk['clicks']} clicks")
+                    _lbl = _fmt_link(lnk['prefix'], lnk['slug'])
+                    _link_lines.append(f"  {_lbl} — {lnk['clicks']} clicks")
+                    _lstats = get_stats(lnk['slug'], lnk['prefix'], days=7)
+                    if _lstats and _lstats.get('by_country'):
+                        for _bc in _lstats['by_country'][:5]:
+                            _link_lines.append(f"    • {_bc['country'] or 'Unknown'} ({_bc['country_code'] or '??'}) — {_bc['cnt']} clicks")
                 _link_lines.append("\nTOP CLICKS LAST 30 DAYS:")
                 for lnk in _top_30:
                     _link_lines.append(f"  {_fmt_link(lnk['prefix'], lnk['slug'])} — {lnk['clicks']} clicks")
-                _link_lines.append("\nCOUNTRY BREAKDOWN (last 7 days):")
+                _link_lines.append("\nOVERALL COUNTRY BREAKDOWN (last 7 days, all links combined):")
                 for _c in _countries:
                     _link_lines.append(f"  {_c['country'] or 'Unknown'} ({_c['country_code'] or '??'}) — {_c['cnt']} clicks")
                 if not _countries:
