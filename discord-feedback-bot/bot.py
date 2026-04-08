@@ -2639,11 +2639,34 @@ class FeedbackBot(discord.Client):
                 await asyncio.sleep(60)
 
     async def _watch_unreal_engine_youtube(self) -> None:
-        """Poll Unreal Engine YouTube RSS feed every 10 minutes and post new videos."""
+        """Poll Unreal Engine YouTube RSS feed every 30 minutes and post new videos."""
+        import json as _json
         import xml.etree.ElementTree as ET
         from urllib import request as _req
+        _UE_SEEN_PATH = "/app/data/ue_seen_videos.json"
+
+        def _load_seen() -> set:
+            try:
+                with open(_UE_SEEN_PATH) as f:
+                    return set(_json.load(f))
+            except Exception:
+                return set()
+
+        def _save_seen(ids: set):
+            try:
+                os.makedirs(os.path.dirname(_UE_SEEN_PATH), exist_ok=True)
+                with open(_UE_SEEN_PATH, "w") as f:
+                    _json.dump(list(ids), f)
+            except Exception as exc:
+                logger.warning("ue_seen save error: %s", exc)
+
         await self.wait_until_ready()
         RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id=UCBobmJyzsJ6Ll7UbfhI4iwQ"
+
+        # Load persisted seen IDs so restarts don't re-seed all videos
+        self._ue_seen_video_ids = _load_seen()
+        logger.info("YouTube watcher started, %d seen video IDs loaded", len(self._ue_seen_video_ids))
+
         while not self.is_closed():
             try:
                 loop = asyncio.get_event_loop()
@@ -2658,32 +2681,33 @@ class FeedbackBot(discord.Client):
                 if not entries:
                     await asyncio.sleep(600)
                     continue
-                latest = entries[0]
-                video_id = latest.findtext("yt:videoId", namespaces=ns)
-                title = latest.findtext("atom:title", namespaces=ns, default="New video")
-                link_el = latest.find("atom:link", ns)
-                url = link_el.get("href", "") if link_el is not None else f"https://www.youtube.com/watch?v={video_id}"
 
                 if not self._ue_seen_video_ids:
-                    # On first run seed with all current videos, don't announce
+                    # First ever run with no persisted data — seed without announcing
                     for entry in entries:
                         vid = entry.findtext("yt:videoId", namespaces=ns)
                         if vid:
                             self._ue_seen_video_ids.add(vid)
+                    _save_seen(self._ue_seen_video_ids)
+                    logger.info("YouTube watcher: seeded %d videos on first run", len(self._ue_seen_video_ids))
                 else:
+                    new_found = False
                     for entry in entries:
                         vid = entry.findtext("yt:videoId", namespaces=ns)
                         if not vid or vid in self._ue_seen_video_ids:
                             continue
                         self._ue_seen_video_ids.add(vid)
+                        new_found = True
                         t = entry.findtext("atom:title", namespaces=ns, default="New video")
                         l_el = entry.find("atom:link", ns)
                         u = l_el.get("href", "") if l_el is not None else f"https://www.youtube.com/watch?v={vid}"
-                        channel = self.get_channel(YOUTUBE_NOTIFY_CHANNEL_ID)
-                        if channel:
-                            await channel.send(
-                                f"🎮 **Unreal Engine** just posted a new video!\n**{t}**\n{u}"
-                            )
+                        channel = self.get_channel(YOUTUBE_NOTIFY_CHANNEL_ID) or await self.fetch_channel(YOUTUBE_NOTIFY_CHANNEL_ID)
+                        await channel.send(
+                            f"🎮 **Unreal Engine** just posted a new video!\n**{t}**\n{u}"
+                        )
+                        logger.info("YouTube watcher: posted new video %s (%s)", vid, t)
+                    if new_found:
+                        _save_seen(self._ue_seen_video_ids)
             except Exception as exc:
                 logger.warning("YouTube watcher error: %s", exc)
             await asyncio.sleep(1800)  # check every 30 minutes
