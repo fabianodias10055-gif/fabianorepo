@@ -3521,7 +3521,8 @@ class FeedbackBot(discord.Client):
                         ).fetchall()
                         # Free join clicks (free/ prefix)
                         _free_clicks = _shdb.execute(
-                            """SELECT l.slug, l.url, COUNT(c.id) cnt
+                            """SELECT l.slug, l.url, COUNT(c.id) cnt,
+                                      MIN(c.clicked_at) first_click, MAX(c.clicked_at) last_click
                                FROM links l JOIN clicks c ON c.link_id=l.id
                                WHERE l.prefix='free' AND c.clicked_at>=?
                                GROUP BY l.id ORDER BY cnt DESC""",
