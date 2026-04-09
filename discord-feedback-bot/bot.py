@@ -2251,17 +2251,33 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
         all_logged = _load_events()
         cancels = [e for e in all_logged if e["event"] in ("members:pledge:delete", "members:delete") and e.get("ts", "") >= cutoff_24h]
 
+        # Dedup by (name, member_id) to prevent showing the same person twice
+        def _dedup(items):
+            _seen = set()
+            _out = []
+            for _e in items:
+                _k = (_e.get("name"), _e.get("member_id"))
+                if _k in _seen:
+                    continue
+                _seen.add(_k)
+                _out.append(_e)
+            return _out
+
+        joined = _dedup(joined)
+        cancels = _dedup(cancels)
+
         lines = ["📊 **Daily Patreon Summary** (last 24h)\n"]
         if joined:
             lines.append(f"💎 **{len(joined)}** new paid subscriber(s):")
             for e in joined:
-                tier = f" ({e['tier']})" if e["tier"] else ""
+                tier = f" ({e['tier']})" if e.get("tier") else ""
                 lines.append(f"  • **{e['name']}**{tier} — ${e['amount']:.2f}/mo")
         if cancels:
             lines.append(f"❌ **{len(cancels)}** cancellation(s):")
             for e in cancels:
-                tier = f" ({e['tier']})" if e["tier"] else ""
-                lines.append(f"  • **{e['name']}**{tier}")
+                tier = f" ({e.get('tier')})" if e.get("tier") else ""
+                _ts = e.get("ts", "")[:16].replace("T", " ")
+                lines.append(f"  • **{e['name']}**{tier} — {_ts} UTC")
         if len(lines) == 1:
             await channel.send("📊 **Daily Patreon Summary** — No new subscribers or cancellations in the last 24h.")
         else:
@@ -2279,6 +2295,21 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
     w_events_log = [e for e in _load_events() if e.get("ts", "") >= cutoff_7d]
     w_free = [e for e in w_events_log if e["event"] == "members:create"]
     w_cancels = [e for e in w_events_log if e["event"] in ("members:pledge:delete", "members:delete")]
+
+    def _dedup_w(items):
+        _seen = set()
+        _out = []
+        for _e in items:
+            _k = (_e.get("name"), _e.get("member_id"))
+            if _k in _seen:
+                continue
+            _seen.add(_k)
+            _out.append(_e)
+        return _out
+
+    w_paid = _dedup_w(w_paid)
+    w_free = _dedup_w(w_free)
+    w_cancels = _dedup_w(w_cancels)
     w_new = len(w_paid) + len(w_free)
     w_cancel = len(w_cancels)
 
@@ -2294,11 +2325,13 @@ async def test_reports_slash(interaction: discord.Interaction) -> None:
         if w_free:
             lines.append(f"👋 **{len(w_free)}** new free member(s):")
             for e in w_free:
-                lines.append(f"  • **{e['name']}**")
+                _ts = e.get("ts", "")[:16].replace("T", " ")
+                lines.append(f"  • **{e['name']}** — {_ts} UTC")
         if w_cancels:
             lines.append(f"❌ **{len(w_cancels)}** cancellation(s):")
             for e in w_cancels:
-                lines.append(f"  • **{e['name']}**")
+                _ts = e.get("ts", "")[:16].replace("T", " ")
+                lines.append(f"  • **{e['name']}** — {_ts} UTC")
         lines.append(f"\n**Net change this week: {w_new - w_cancel:+d}**")
         await channel.send("\n".join(lines))
 
@@ -2607,6 +2640,20 @@ class FeedbackBot(discord.Client):
                 cancels = [e for e in all_logged if e["event"] in ("members:pledge:delete", "members:delete") and e.get("ts", "") >= cutoff_24h]
                 _daily_events.clear()
 
+                def _dedup_d(items):
+                    _seen = set()
+                    _out = []
+                    for _e in items:
+                        _k = (_e.get("name"), _e.get("member_id"))
+                        if _k in _seen:
+                            continue
+                        _seen.add(_k)
+                        _out.append(_e)
+                    return _out
+
+                joined = _dedup_d(joined)
+                cancels = _dedup_d(cancels)
+
                 lines = ["📊 **Daily Patreon Summary** (last 24h)\n"]
                 if joined:
                     lines.append(f"💎 **{len(joined)}** new paid subscriber(s):")
@@ -2616,8 +2663,9 @@ class FeedbackBot(discord.Client):
                 if cancels:
                     lines.append(f"❌ **{len(cancels)}** cancellation(s):")
                     for e in cancels:
-                        tier = f" ({e['tier']})" if e.get("tier") else ""
-                        lines.append(f"  • **{e['name']}**{tier}")
+                        tier = f" ({e.get('tier')})" if e.get("tier") else ""
+                        _ts = e.get("ts", "")[:16].replace("T", " ")
+                        lines.append(f"  • **{e['name']}**{tier} — {_ts} UTC")
 
                 if len(lines) == 1:
                     await channel.send("📊 **Daily Patreon Summary** — No new subscribers or cancellations in the last 24h.")
@@ -2743,6 +2791,21 @@ class FeedbackBot(discord.Client):
                 cancels = [e for e in events_log if e["event"] in ("members:pledge:delete", "members:delete")]
                 _weekly_events.clear()
 
+                def _dedup_wb(items):
+                    _seen = set()
+                    _out = []
+                    for _e in items:
+                        _k = (_e.get("name"), _e.get("member_id"))
+                        if _k in _seen:
+                            continue
+                        _seen.add(_k)
+                        _out.append(_e)
+                    return _out
+
+                paid_subs = _dedup_wb(paid_subs)
+                free_joins = _dedup_wb(free_joins)
+                cancels = _dedup_wb(cancels)
+
                 channel = self.get_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID) or await self.fetch_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID)
 
                 total_new = len(paid_subs) + len(free_joins)
@@ -2763,12 +2826,14 @@ class FeedbackBot(discord.Client):
                 if free_joins:
                     lines.append(f"👋 **{len(free_joins)}** new free member(s):")
                     for e in free_joins:
-                        lines.append(f"  • **{e['name']}**")
+                        _ts = e.get("ts", "")[:16].replace("T", " ")
+                        lines.append(f"  • **{e['name']}** — {_ts} UTC")
 
                 if cancels:
                     lines.append(f"❌ **{len(cancels)}** cancellation(s):")
                     for e in cancels:
-                        lines.append(f"  • **{e['name']}**")
+                        _ts = e.get("ts", "")[:16].replace("T", " ")
+                        lines.append(f"  • **{e['name']}** — {_ts} UTC")
 
                 lines.append(f"\n**Net change this week: {total_new - total_cancel:+d}**")
                 await channel.send("\n".join(lines))
@@ -3656,6 +3721,32 @@ class FeedbackBot(discord.Client):
 _patreon_event_cache: dict[tuple, float] = {}
 _PATREON_DEDUP_SECONDS = 30
 
+# Persistent webhook idempotency — hash of body → ingestion timestamp
+_WEBHOOK_SEEN_PATH = "/app/data/patreon_webhook_seen.json"
+_webhook_seen_hashes: dict | None = None  # lazily loaded
+_WEBHOOK_STARTUP_TIME = datetime.now(timezone.utc)  # module-level datetime/timezone already imported
+_WEBHOOK_STARTUP_GRACE_SECS = 90  # first 90s after boot: log but don't announce / pushover
+_HISTORICAL_CANCEL_DAYS = 60  # pledge:delete with last_charge_date older than this is skipped
+
+def _load_webhook_seen() -> dict:
+    """Load persistent webhook hash dedup file, pruning entries older than 30 days."""
+    try:
+        from datetime import timezone as _tz
+        with open(_WEBHOOK_SEEN_PATH) as _f:
+            _data = json.load(_f)
+        _cutoff = (datetime.now(_tz.utc) - timedelta(days=30)).isoformat()
+        return {k: v for k, v in _data.items() if v >= _cutoff}
+    except Exception:
+        return {}
+
+def _save_webhook_seen(seen: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(_WEBHOOK_SEEN_PATH), exist_ok=True)
+        with open(_WEBHOOK_SEEN_PATH, "w") as _f:
+            json.dump(seen, _f)
+    except Exception as _exc:
+        logger.warning("Could not save webhook seen file: %s", _exc)
+
 # ── Knowledge Base ──────────────────────────────────────────────────────────
 _KB_PATH = "/app/data/knowledge_base.json"
 _KB_APPROVE_EMOJI = "✅"
@@ -3766,7 +3857,57 @@ async def patreon_webhook_handler(request):
     trial_ends_at = attrs.get("trial_ends_at")
     is_free_trial = bool(trial_ends_at) and amount_cents == 0
 
-    # Dedup check — use 6 hours for payment events, 30s for others
+    # --- Persistent idempotency by body hash (survives restarts) ---
+    global _webhook_seen_hashes
+    if _webhook_seen_hashes is None:
+        _webhook_seen_hashes = _load_webhook_seen()
+    body_hash = hashlib.sha256(body).hexdigest()
+    if body_hash in _webhook_seen_hashes:
+        logger.info(
+            "Skipping already-processed webhook hash=%s event=%s name=%s",
+            body_hash[:12], event, full_name,
+        )
+        return web.Response(status=200, text="OK (duplicate body)")
+    from datetime import timezone as _tz
+    _webhook_seen_hashes[body_hash] = datetime.now(_tz.utc).isoformat()
+    # Prune entries older than 30 days occasionally (load also prunes on read)
+    if len(_webhook_seen_hashes) % 10 == 0:
+        _cutoff_30d = (datetime.now(_tz.utc) - timedelta(days=30)).isoformat()
+        _webhook_seen_hashes = {k: v for k, v in _webhook_seen_hashes.items() if v >= _cutoff_30d}
+    _save_webhook_seen(_webhook_seen_hashes)
+
+    # --- Historical cancellation filter ---
+    # For pledge:delete, if last_charge_date is very old, the cancellation is
+    # historical cleanup (Patreon retrying or replaying an old event), not a
+    # fresh cancel. Skip entirely — don't log, don't announce.
+    if event == "members:pledge:delete":
+        _lcd = attrs.get("last_charge_date")
+        if _lcd:
+            try:
+                _lc = datetime.fromisoformat(_lcd.replace("Z", "+00:00"))
+                _age_days = (datetime.now(timezone.utc) - _lc).days
+                if _age_days > _HISTORICAL_CANCEL_DAYS:
+                    logger.info(
+                        "Skipping historical cancellation for %s (last_charge_date=%s, %d days ago)",
+                        full_name, _lcd, _age_days,
+                    )
+                    return web.Response(status=200, text="OK (historical)")
+            except Exception as _te:
+                logger.warning("Could not parse last_charge_date '%s': %s", _lcd, _te)
+
+    # --- Startup grace period ---
+    # If a flood of webhooks arrives in the first 90s after boot, it's almost
+    # certainly Patreon's retry queue flushing. Log them (and record the hash
+    # so later retries are deduped) but do NOT announce or pushover.
+    _boot_age = (datetime.now(timezone.utc) - _WEBHOOK_STARTUP_TIME).total_seconds()
+    _in_startup_grace = _boot_age < _WEBHOOK_STARTUP_GRACE_SECS
+    if _in_startup_grace:
+        logger.info(
+            "Webhook in startup grace (%.0fs of %ds), logging but not announcing: event=%s name=%s",
+            _boot_age, _WEBHOOK_STARTUP_GRACE_SECS, event, full_name,
+        )
+
+    # In-memory dedup (belt-and-suspenders short-window guard)
     cache_key = (member_id, event)
     now = time.monotonic()
     dedup_seconds = 21600 if event in ("members:update", "members:pledge:create", "members:pledge:delete") else 30
@@ -3907,7 +4048,7 @@ async def patreon_webhook_handler(request):
             except Exception as _re:
                 logger.warning("Failed to assign role for %s: %s", discord_id, _re)
 
-    if msg:
+    if msg and not _in_startup_grace:
         # Send full message to #bot-reports
         try:
             channel = client.get_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID) or await client.fetch_channel(PATREON_ANNOUNCEMENT_CHANNEL_ID)
@@ -3926,8 +4067,10 @@ async def patreon_webhook_handler(request):
         except Exception as _pe:
             logger.warning("Could not send to public channel %s: %s", PATREON_PUBLIC_CHANNEL_ID, _pe)
 
-    # Pushover notification for payment events (skip free trials)
+    # Pushover notification for payment events (skip free trials and startup grace)
     logger.info("Patreon webhook processed: event=%s name=%s amount=%s is_free_trial=%s", event, full_name, amount_cents, is_free_trial)
+    if _in_startup_grace:
+        return web.Response(status=200, text="OK (startup grace)")
     if event == "members:pledge:create" and not is_free_trial and _entry.get("is_trial_conversion"):
         await _send_pushover(
             title=f"🔄 Trial Converted — ${dollars:.2f}/month",
