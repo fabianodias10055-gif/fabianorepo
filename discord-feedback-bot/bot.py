@@ -3030,17 +3030,51 @@ class FeedbackBot(discord.Client):
             if hasattr(ref_msg, "content") and ref_msg.content:
                 replied_text = ref_msg.content.strip()
 
+        _text_exts = {".txt", ".md", ".csv", ".log", ".srt", ".vtt"}
+        def _is_text_attachment(a):
+            if a.content_type and (
+                a.content_type.startswith("text/") or
+                a.content_type in ("application/octet-stream",)
+            ):
+                import os as _os
+                ext = _os.path.splitext(a.filename)[1].lower()
+                return ext in _text_exts
+            import os as _os
+            ext = _os.path.splitext(a.filename)[1].lower()
+            return ext in _text_exts
+
         has_images = any(_is_image_attachment(a) for a in all_attachments)
-        if not question and not has_images and not replied_text:
+        has_text_files = any(_is_text_attachment(a) for a in all_attachments)
+        if not question and not has_images and not has_text_files and not replied_text:
             await message.reply("Hey! How can I help? 😊")
             return
 
         # Build user message content (text + images)
         user_content: list = []
         image_count = 0
+        attached_texts: list[str] = []
+        import aiohttp as _aiohttp
         for attachment in all_attachments:
-            if _is_image_attachment(attachment):
-                import aiohttp as _aiohttp
+            if _is_text_attachment(attachment):
+                try:
+                    async with _aiohttp.ClientSession() as session:
+                        async with session.get(attachment.url) as resp:
+                            if resp.status == 200:
+                                raw = await resp.read()
+                                # Cap at 150 KB to avoid massive prompts
+                                if len(raw) > 150_000:
+                                    raw = raw[:150_000]
+                                    truncated = True
+                                else:
+                                    truncated = False
+                                text_content = raw.decode("utf-8", errors="replace")
+                                suffix = "\n[...truncated at 150 KB]" if truncated else ""
+                                attached_texts.append(
+                                    f"[Attachment: {attachment.filename}]\n{text_content}{suffix}"
+                                )
+                except Exception as _te:
+                    logger.warning("Could not read text attachment %s: %s", attachment.filename, _te)
+            elif _is_image_attachment(attachment):
                 async with _aiohttp.ClientSession() as session:
                     async with session.get(attachment.url) as resp:
                         if resp.status == 200:
@@ -3572,10 +3606,14 @@ class FeedbackBot(discord.Client):
             parts.append(video_info)
         if replied_text and not _yt_match:
             parts.append(f"[Replying to this message:\n{replied_text}\n]")
+        for _at in attached_texts:
+            parts.append(_at)
         if question:
             parts.append(question)
         elif image_count > 0 and not replied_text and not transcript_context:
             parts.append("Please describe and analyze what you see in this image.")
+        elif attached_texts and not question:
+            parts.append("Please read the attached file(s) and summarize or answer any question about them.")
         full_prompt = "\n\n".join(parts) if parts else ""
         if full_prompt:
             user_content.append({"type": "text", "text": full_prompt})
