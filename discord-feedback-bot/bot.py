@@ -4179,6 +4179,21 @@ if __name__ == "__main__":
                 logger.info("Link migration complete.")
         except Exception as e:
             logger.warning("Dub migration skipped: %s", e)
+
+        # ── One-time link URL patches (safe to run on every boot — idempotent) ──
+        try:
+            from shortener import update_link as _patch_link
+            _link_patches = [
+                # (slug, prefix, new_url)
+                ("uecourse", "p", "https://blueprint.locodev.dev/?utm_source=youtube&utm_medium=organic_video&utm_campaign=leads_abril"),
+            ]
+            for _slug, _prefix, _new_url in _link_patches:
+                if _patch_link(_slug, _new_url, _prefix):
+                    logger.info("Link patch applied: %s/%s → %s", _prefix, _slug, _new_url)
+                else:
+                    logger.warning("Link patch failed (slug not found?): %s/%s", _prefix, _slug)
+        except Exception as _pe:
+            logger.warning("Link patches error: %s", _pe)
         await client.start(TOKEN)
 
     asyncio.run(main())
