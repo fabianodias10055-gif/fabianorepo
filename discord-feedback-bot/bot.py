@@ -3741,6 +3741,9 @@ class FeedbackBot(discord.Client):
                     await message.reply(answer)
                 else:
                     await message.reply(answer[:1900])
+                    remainder = answer[1900:]
+                    if remainder.strip():
+                        await message.channel.send(remainder)
                 # Send link creation results as follow-up
                 if _link_results:
                     await message.channel.send("\n".join(_link_results))
@@ -3750,7 +3753,6 @@ class FeedbackBot(discord.Client):
                         await message.channel.send("\n".join(kb_images[:4]))
                     except Exception as _ie:
                         logger.warning("Failed to send KB images: %s", _ie)
-                    await message.channel.send(answer[1900:])
             except Exception as exc:
                 logger.warning("AI responder error: %s", exc, exc_info=True)
                 await message.reply(f"Sorry, I couldn't process your question right now. Try again! 🙏")
