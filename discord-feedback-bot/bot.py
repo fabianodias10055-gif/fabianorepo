@@ -34,6 +34,7 @@ PATREON_WEBHOOK_SECRET = os.getenv("PATREON_WEBHOOK_SECRET", "")
 PATREON_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("PATREON_ANNOUNCEMENT_CHANNEL_ID", "1490377274749354207"))
 PATREON_PUBLIC_CHANNEL_ID = int(os.getenv("PATREON_PUBLIC_CHANNEL_ID", "1158395982485147689"))
 YOUTUBE_NOTIFY_CHANNEL_ID = int(os.getenv("YOUTUBE_NOTIFY_CHANNEL_ID", "1481432850212585655"))
+LINK_MANAGEMENT_CHANNEL_ID = int(os.getenv("LINK_MANAGEMENT_CHANNEL_ID", "1490377274749354207"))
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 PUSHOVER_USER_KEY = os.getenv("PUSHOVER_USER_KEY", "")
 PUSHOVER_API_TOKEN = os.getenv("PUSHOVER_API_TOKEN", "")
@@ -3737,6 +3738,8 @@ class FeedbackBot(discord.Client):
         is_locodev = "LocoDev" in member_roles
         display_name = message.author.display_name
 
+        _in_link_channel = message.channel.id == LINK_MANAGEMENT_CHANNEL_ID
+
         if is_locodev:
             user_context = (
                 f"USER CONTEXT:\n"
@@ -3744,8 +3747,10 @@ class FeedbackBot(discord.Client):
                 f"Treat him as your boss. Be direct, casual, and skip any generic intro. "
                 f"He knows everything about the server, so don't explain basics to him.\n\n"
                 f"IMPORTANT — URL SHORTENER ACTIONS:\n"
-                f"You have the ability to actually create and delete short links on locodev.dev. "
-                f"When LocoDev wants to create a short link, respond with EXACTLY this format on its own line:\n"
+                f"You have the ability to actually create and delete short links on locodev.dev, "
+                f"BUT ONLY when the conversation is in channel <#{LINK_MANAGEMENT_CHANNEL_ID}>. "
+                f"{'You are currently IN that channel, so you may create links.' if _in_link_channel else f'You are NOT in that channel. If asked to create or edit links, tell the user to go to <#{LINK_MANAGEMENT_CHANNEL_ID}> to manage links.'}\n"
+                f"When in the link management channel and LocoDev wants to create a short link, respond with EXACTLY this format on its own line:\n"
                 f"[CREATE_LINK: prefix/slug → destination_url]\n"
                 f"Example: [CREATE_LINK: download/ragdollbasic → https://drive.google.com/...]\n"
                 f"For root links (no prefix): [CREATE_LINK: root/slug → url]\n"
@@ -3809,6 +3814,11 @@ class FeedbackBot(discord.Client):
                 from urllib.parse import urlparse as _ulp
                 _cl_matches = _cre.findall(r'\[CREATE_LINK:\s*([^\s→]+)\s*[→>]+\s*(https?://[^\]]+)\]', answer)
                 _link_results = []
+                if _cl_matches and not _in_link_channel:
+                    _link_results.append(
+                        f"🔒 Link management is only allowed in <#{LINK_MANAGEMENT_CHANNEL_ID}>."
+                    )
+                    _cl_matches = []
                 for _cl_path, _cl_url in _cl_matches:
                     _cl_url = _cl_url.strip()
                     _cl_path = _cl_path.strip().strip("/")
