@@ -29,6 +29,7 @@ load_dotenv(BASE_DIR / ".env")
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GUILD_ID = os.getenv("DISCORD_GUILD_ID")
+OWNER_DISCORD_ID = int(os.getenv("OWNER_DISCORD_ID", "0"))  # set in Railway vars
 PATREON_WEBHOOK_SECRET = os.getenv("PATREON_WEBHOOK_SECRET", "")
 PATREON_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("PATREON_ANNOUNCEMENT_CHANNEL_ID", "1490377274749354207"))
 PATREON_PUBLIC_CHANNEL_ID = int(os.getenv("PATREON_PUBLIC_CHANNEL_ID", "1158395982485147689"))
@@ -2400,6 +2401,92 @@ def _fmt_link(prefix: str, slug: str) -> str:
     return f"/{prefix}/{slug}"
 
 
+# ── Link security ───────────────────────────────────────────────────────────
+
+# Prefixes that are sensitive — only the server owner can modify them
+_PROTECTED_PREFIXES = {"download", "docs", "freebuild", "free"}
+
+# Domains allowed for download/docs links — reject anything else
+_ALLOWED_DOWNLOAD_DOMAINS = {
+    "drive.google.com",
+    "docs.google.com",
+    "github.com",
+    "raw.githubusercontent.com",
+    "dropbox.com",
+    "dl.dropboxusercontent.com",
+    "patreon.com",
+    "locodev.dev",
+    "blueprint.locodev.dev",
+    "blueprintmastery.hotmart.host",
+    "hotmart.com",
+    "creator-spring.com",
+}
+
+_LINK_AUDIT_PATH = "/app/data/link_audit.json"
+
+def _audit_link_change(action: str, user_id: int, user_name: str,
+                        prefix: str, slug: str, new_url: str, old_url: str = "") -> None:
+    """Append a link change record to the audit log."""
+    try:
+        from datetime import timezone as _tz
+        record = {
+            "ts": datetime.now(_tz.utc).isoformat(),
+            "action": action,
+            "user_id": user_id,
+            "user_name": user_name,
+            "prefix": prefix,
+            "slug": slug,
+            "old_url": old_url,
+            "new_url": new_url,
+        }
+        try:
+            with open(_LINK_AUDIT_PATH) as _f:
+                log = json.load(_f)
+        except Exception:
+            log = []
+        log.append(record)
+        # Keep last 500 entries
+        if len(log) > 500:
+            log = log[-500:]
+        os.makedirs(os.path.dirname(_LINK_AUDIT_PATH), exist_ok=True)
+        with open(_LINK_AUDIT_PATH, "w") as _f:
+            json.dump(log, _f)
+    except Exception as _ae:
+        logger.warning("Audit log error: %s", _ae)
+
+def _check_link_permission(interaction: discord.Interaction, prefix: str, url: str = "") -> str | None:
+    """
+    Returns an error message string if the action is not allowed, or None if OK.
+    Checks:
+    1. User must have 'LocoDev' role for any link operation
+    2. For protected prefixes, user must be the server owner (OWNER_DISCORD_ID)
+    3. For protected prefixes, destination URL must be on the allowed domain list
+    """
+    from urllib.parse import urlparse as _urlparse
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        return "❌ You don't have permission to manage links."
+
+    if prefix in _PROTECTED_PREFIXES:
+        # Must be the owner
+        if OWNER_DISCORD_ID and interaction.user.id != OWNER_DISCORD_ID:
+            return f"🔒 Only the server owner can modify `{prefix}/` links."
+        # URL must be on allowlist
+        if url:
+            try:
+                domain = _urlparse(url).netloc.lower().lstrip("www.")
+                # Strip port if present
+                domain = domain.split(":")[0]
+                if not any(domain == d or domain.endswith("." + d) for d in _ALLOWED_DOWNLOAD_DOMAINS):
+                    return (
+                        f"🚫 URL domain `{domain}` is not on the trusted list for `{prefix}/` links.\n"
+                        f"Allowed domains: {', '.join(sorted(_ALLOWED_DOWNLOAD_DOMAINS))}"
+                    )
+            except Exception:
+                return "🚫 Could not parse the destination URL."
+    return None  # all good
+
+
 @app_commands.command(name="shorten", description="Create a new short link.")
 @app_commands.describe(
     url="The destination URL",
@@ -2407,15 +2494,16 @@ def _fmt_link(prefix: str, slug: str) -> str:
     prefix="Prefix folder (default: p)",
 )
 async def shorten_slash(interaction: discord.Interaction, url: str, slug: str, prefix: str = "p") -> None:
-    roles = [r.name for r in getattr(interaction.user, "roles", [])]
-    if "LocoDev" not in roles:
-        await interaction.response.send_message("You don't have permission.", ephemeral=True)
-        return
-    from shortener import create_link
     slug = slug.lower().strip()
     prefix = prefix.lower().strip()
+    err = _check_link_permission(interaction, prefix, url)
+    if err:
+        await interaction.response.send_message(err, ephemeral=True)
+        return
+    from shortener import create_link
     ok = create_link(slug, url, prefix)
     if ok:
+        _audit_link_change("create", interaction.user.id, str(interaction.user), prefix, slug, url)
         await interaction.response.send_message(
             f"✅ Created: `/{prefix}/{slug}` → <{url}>", ephemeral=True
         )
@@ -2428,13 +2516,18 @@ async def shorten_slash(interaction: discord.Interaction, url: str, slug: str, p
 @app_commands.command(name="edit_link", description="Update the destination URL of an existing short link.")
 @app_commands.describe(slug="The slug to update", url="New destination URL", prefix="Prefix (default: p)")
 async def edit_link_slash(interaction: discord.Interaction, slug: str, url: str, prefix: str = "p") -> None:
-    roles = [r.name for r in getattr(interaction.user, "roles", [])]
-    if "LocoDev" not in roles:
-        await interaction.response.send_message("You don't have permission.", ephemeral=True)
+    slug = slug.lower().strip()
+    prefix = prefix.lower().strip()
+    err = _check_link_permission(interaction, prefix, url)
+    if err:
+        await interaction.response.send_message(err, ephemeral=True)
         return
-    from shortener import update_link
-    ok = update_link(slug.lower(), url, prefix.lower())
+    from shortener import update_link, get_link
+    old = get_link(slug, prefix)
+    old_url = old["url"] if old else ""
+    ok = update_link(slug, url, prefix)
     if ok:
+        _audit_link_change("update", interaction.user.id, str(interaction.user), prefix, slug, url, old_url)
         await interaction.response.send_message(f"✅ Updated `/{prefix}/{slug}` → <{url}>", ephemeral=True)
     else:
         await interaction.response.send_message(f"❌ Link `/{prefix}/{slug}` not found.", ephemeral=True)
@@ -2443,13 +2536,18 @@ async def edit_link_slash(interaction: discord.Interaction, slug: str, url: str,
 @app_commands.command(name="delete_link", description="Delete a short link.")
 @app_commands.describe(slug="The slug to delete", prefix="Prefix (default: p)")
 async def delete_link_slash(interaction: discord.Interaction, slug: str, prefix: str = "p") -> None:
-    roles = [r.name for r in getattr(interaction.user, "roles", [])]
-    if "LocoDev" not in roles:
-        await interaction.response.send_message("You don't have permission.", ephemeral=True)
+    slug = slug.lower().strip()
+    prefix = prefix.lower().strip()
+    err = _check_link_permission(interaction, prefix)
+    if err:
+        await interaction.response.send_message(err, ephemeral=True)
         return
-    from shortener import delete_link
-    ok = delete_link(slug.lower(), prefix.lower())
+    from shortener import delete_link, get_link
+    old = get_link(slug, prefix)
+    old_url = old["url"] if old else ""
+    ok = delete_link(slug, prefix)
     if ok:
+        _audit_link_change("delete", interaction.user.id, str(interaction.user), prefix, slug, "", old_url)
         await interaction.response.send_message(f"🗑️ Deleted `/{prefix}/{slug}`.", ephemeral=True)
     else:
         await interaction.response.send_message(f"❌ Link `/{prefix}/{slug}` not found.", ephemeral=True)
@@ -3708,6 +3806,7 @@ class FeedbackBot(discord.Client):
 
                 # Execute any [CREATE_LINK: prefix/slug → url] markers in Claude's response
                 import re as _cre
+                from urllib.parse import urlparse as _ulp
                 _cl_matches = _cre.findall(r'\[CREATE_LINK:\s*([^\s→]+)\s*[→>]+\s*(https?://[^\]]+)\]', answer)
                 _link_results = []
                 for _cl_path, _cl_url in _cl_matches:
@@ -3717,6 +3816,23 @@ class FeedbackBot(discord.Client):
                         _cl_pfx, _cl_slg = _cl_path.split("/", 1)
                     else:
                         _cl_pfx, _cl_slg = "root", _cl_path
+                    # Security: block Claude from touching protected prefixes via chat
+                    if _cl_pfx in _PROTECTED_PREFIXES:
+                        _link_results.append(
+                            f"🔒 `{_cl_pfx}/` links can only be managed via `/edit_link` slash command by the server owner."
+                        )
+                        logger.warning("Blocked Claude CREATE_LINK attempt on protected prefix '%s'", _cl_pfx)
+                        continue
+                    # Security: domain allowlist for all chat-created links
+                    try:
+                        _cl_domain = _ulp(_cl_url).netloc.lower().lstrip("www.").split(":")[0]
+                        _all_domains = _ALLOWED_DOWNLOAD_DOMAINS | {"patreon.com", "youtube.com", "youtu.be"}
+                        if not any(_cl_domain == _d or _cl_domain.endswith("." + _d) for _d in _all_domains):
+                            _link_results.append(f"🚫 Domain `{_cl_domain}` not on trusted list. Link not created.")
+                            logger.warning("Blocked CREATE_LINK — untrusted domain: %s", _cl_domain)
+                            continue
+                    except Exception:
+                        pass
                     try:
                         from shortener import create_link as _cl_create, update_link as _cl_update, get_link as _cl_get
                         _cl_ok = _cl_create(_cl_slg, _cl_url, _cl_pfx)
@@ -3725,6 +3841,11 @@ class FeedbackBot(discord.Client):
                         _cl_verify = _cl_get(_cl_slg, _cl_pfx)
                         _cl_short = f"locodev.dev/{_cl_pfx}/{_cl_slg}" if _cl_pfx != "root" else f"locodev.dev/{_cl_slg}"
                         if _cl_verify:
+                            _audit_link_change(
+                                "create" if _cl_ok else "update",
+                                message.author.id, str(message.author),
+                                _cl_pfx, _cl_slg, _cl_url,
+                            )
                             _link_results.append(f"✅ {'Created' if _cl_ok else 'Updated'}: `{_cl_short}` → {_cl_verify['url']}")
                             logger.info("Auto-created link: %s → %s", _cl_short, _cl_url)
                         else:
