@@ -3201,20 +3201,69 @@ class FeedbackBot(discord.Client):
                                 }
                             })
                             image_count += 1
-        # Fetch last 6 messages in the channel for context
+        # Fetch last 12 messages in the channel for context, including attachments
         channel_context = ""
+        _hist_images: list = []
+        _hist_img_count = 0
+        _MAX_HIST_IMAGES = 3
+        _MAX_HIST_FILE_BYTES = 30_000
         try:
             history_msgs = []
-            async for m in message.channel.history(limit=11, before=message):
-                if m.id == message.id:
-                    continue
-                author = m.author.display_name
-                content = m.content.strip()
-                if content:
-                    history_msgs.append(f"{author}: {content}")
+            async with _aiohttp.ClientSession() as _hist_session:
+                async for m in message.channel.history(limit=12, before=message):
+                    if m.id == message.id:
+                        continue
+                    author = m.author.display_name
+                    parts_for_msg = []
+                    content = m.content.strip()
+                    if content:
+                        parts_for_msg.append(content)
+                    for _hatt in m.attachments:
+                        if _is_text_attachment(_hatt):
+                            try:
+                                async with _hist_session.get(_hatt.url) as _hr:
+                                    if _hr.status == 200:
+                                        _hraw = await _hr.read()
+                                        _htrunc = ""
+                                        if len(_hraw) > _MAX_HIST_FILE_BYTES:
+                                            _hraw = _hraw[:_MAX_HIST_FILE_BYTES]
+                                            _htrunc = "\n[...truncated]"
+                                        _htxt = _hraw.decode("utf-8", errors="replace")
+                                        parts_for_msg.append(
+                                            f"[Attachment: {_hatt.filename}]\n{_htxt}{_htrunc}"
+                                        )
+                            except Exception:
+                                parts_for_msg.append(f"[Attachment: {_hatt.filename} — could not read]")
+                        elif _is_image_attachment(_hatt):
+                            if _hist_img_count < _MAX_HIST_IMAGES:
+                                try:
+                                    async with _hist_session.get(_hatt.url) as _hr:
+                                        if _hr.status == 200:
+                                            _hibytes = await _hr.read()
+                                            import base64 as _b64h
+                                            _hib64 = _b64h.b64encode(_hibytes).decode()
+                                            if _hibytes[:8] == b'\x89PNG\r\n\x1a\n':    _himt = "image/png"
+                                            elif _hibytes[:3] == b'\xff\xd8\xff':        _himt = "image/jpeg"
+                                            elif _hibytes[:4] == b'GIF8':               _himt = "image/gif"
+                                            elif _hibytes[:4] == b'RIFF' and _hibytes[8:12] == b'WEBP': _himt = "image/webp"
+                                            else: _himt = (_hatt.content_type or "image/png").split(";")[0].strip()
+                                            _hist_images.append({
+                                                "type": "image",
+                                                "source": {"type": "base64", "media_type": _himt, "data": _hib64},
+                                            })
+                                            _hist_img_count += 1
+                                            parts_for_msg.append(f"[Image: {_hatt.filename}]")
+                                except Exception:
+                                    parts_for_msg.append(f"[Image: {_hatt.filename} — could not load]")
+                            else:
+                                parts_for_msg.append(f"[Image: {_hatt.filename}]")
+                        else:
+                            parts_for_msg.append(f"[File: {_hatt.filename}]")
+                    if parts_for_msg:
+                        history_msgs.append(f"{author}: " + "\n".join(parts_for_msg))
             if history_msgs:
                 history_msgs.reverse()  # oldest first
-                channel_context = "\n".join(history_msgs)
+                channel_context = "\n\n".join(history_msgs)
         except Exception as _he:
             logger.warning("Failed to fetch channel history: %s", _he)
 
@@ -3714,6 +3763,9 @@ class FeedbackBot(discord.Client):
         elif attached_texts and not question:
             parts.append("Please read the attached file(s) and summarize or answer any question about them.")
         full_prompt = "\n\n".join(parts) if parts else ""
+        # Inject historical images after current-message images, before the text prompt
+        for _hi in _hist_images:
+            user_content.append(_hi)
         if full_prompt:
             user_content.append({"type": "text", "text": full_prompt})
         if not user_content:
