@@ -3674,6 +3674,20 @@ class FeedbackBot(discord.Client):
             except Exception as _le:
                 logger.warning("Link analytics context error: %s", _le)
 
+        # Google Drive project folders — inject when in link channel so Claude
+        # can auto-fill the destination URL when creating download/ links.
+        if _in_link_channel and _is_owner:
+            try:
+                from drive_helper import list_project_folders as _gdrive_list
+                _drive_folders = _gdrive_list()
+                if _drive_folders:
+                    _folder_lines = "\n".join(
+                        f"  • {f['name']} → {f['url']}" for f in _drive_folders
+                    )
+                    parts.append(f"[Google Drive project folders (use these URLs for download/ links):\n{_folder_lines}\n]")
+            except Exception as _dre:
+                logger.warning("Drive context error: %s", _dre)
+
         # Patreon event context — inject if question is about subscribers/members (owner only)
         _patreon_keywords = ["patreon", "patron", "subscriber", "subscri", "join", "cancel", "trial", "member", "who paid", "who signed", "pledge", "tier", "revenue", "income", "earning", "monthly", "mrr", "money", "increasing", "growing"]
         if _is_owner and any(kw in (question or "").lower() for kw in _patreon_keywords):
@@ -3854,6 +3868,11 @@ class FeedbackBot(discord.Client):
                 f"unguessable suffix for `download/` links so the final URL becomes `download/weaponstandard/<random>`. "
                 f"Emitting `[CREATE_LINK: download/weaponstandard → ...]` is correct; emitting "
                 f"`[CREATE_LINK: download/weaponstandard/2EZwiLCL → ...]` is WRONG.\n"
+                f"6. DRIVE AUTO-FILL — When creating a `download/` link and no URL is provided, check the "
+                f"'Google Drive project folders' list in context. Find the folder whose name best matches what "
+                f"LocoDev asked for (fuzzy: ignore case, spaces, and words like System/Standard/Premium/Basic). "
+                f"Use that folder's URL directly in the [CREATE_LINK] marker. "
+                f"If no match exists in the list, ask LocoDev for the URL.\n"
                 f"DO NOT say 'I can't create links' or 'you need to do this manually' or 'use the slash command'. "
                 f"All prefixes including `download/`, `docs/`, `free/`, `freebuild/` are fine for LocoDev to create via chat — just emit the marker. "
                 f"Just output the CREATE_LINK marker and it will be executed automatically.\n"
