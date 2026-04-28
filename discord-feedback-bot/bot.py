@@ -4443,6 +4443,33 @@ if __name__ == "__main__":
                     logger.warning("Link patch failed (slug not found?): %s/%s", _prefix, _slug)
         except Exception as _pe:
             logger.warning("Link patches error: %s", _pe)
+
+        # ── Startup link deletions (disabled/retired links) ──────────────────
+        try:
+            from shortener import delete_link as _del_link
+            _link_deletes = [
+                # (slug, prefix) — links that should no longer be active
+                ("walkonbeamstandard/i7IpRzN1",     "download"),
+                ("slidingstandard/YKZu5AFj",         "download"),
+                ("slidingpremium/R6jcCKTp",          "download"),
+                ("slidingbasic/QIkpihi5",            "download"),
+                ("ziplinebasic/zxsjJboA",            "download"),
+                ("pushpullstandard/N77kqqbI",        "download"),
+                ("rollpickupbasic/ZuxuEkmT",         "download"),
+                ("falldamagestandard/ZqOiMdHG",      "download"),
+                ("dynamicfootstepsbasic/FY2JsdbM",   "download"),
+                ("telekinesisbasic/in9ReCom",        "download"),
+                ("hostagesystembasic/6oBef2f5",      "download"),
+                ("hangswingbasic/iVxKADv8",          "download"),
+                ("vaultsystemstandard/grg5nv2J",     "download"),
+                ("hangsswingstandard/OZV1moOY",      "download"),
+                ("motionmatchingbasic/g6rDdbyO",     "download"),
+            ]
+            for _slug, _prefix in _link_deletes:
+                if _del_link(_slug, _prefix):
+                    logger.info("Link disabled: %s/%s", _prefix, _slug)
+        except Exception as _de:
+            logger.warning("Link deletes error: %s", _de)
         await client.start(TOKEN)
 
     asyncio.run(main())
