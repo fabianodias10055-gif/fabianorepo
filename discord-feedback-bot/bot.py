@@ -2421,6 +2421,8 @@ _ALLOWED_DOWNLOAD_DOMAINS = {
     "blueprintmastery.hotmart.host",
     "hotmart.com",
     "creator-spring.com",
+    "mega.nz",
+    "mega.co.nz",
 }
 
 _LINK_AUDIT_PATH = "/app/data/link_audit.json"
@@ -3148,11 +3150,11 @@ class FeedbackBot(discord.Client):
             await message.reply("Hey! How can I help? 😊")
             return
 
+        import aiohttp as _aiohttp
         # Build user message content (text + images)
         user_content: list = []
         image_count = 0
         attached_texts: list[str] = []
-        import aiohttp as _aiohttp
         for attachment in all_attachments:
             if _is_text_attachment(attachment):
                 try:
@@ -3812,7 +3814,9 @@ class FeedbackBot(discord.Client):
                 f"3. Keep slugs short, lowercase, no spaces (use hyphens).\n"
                 f"4. If the slug you want is taken, tell LocoDev and suggest alternatives.\n"
                 f"DO NOT say 'I can't create links' or 'you need to do this manually'. "
-                f"Just output the CREATE_LINK marker and it will be executed automatically."
+                f"Just output the CREATE_LINK marker and it will be executed automatically.\n"
+                f"CRITICAL: NEVER announce the short URL in your response text. Do NOT say 'Done!', 'link is ready', or write out the locodev.dev/... URL. "
+                f"Only output the [CREATE_LINK] marker — the system will post the confirmation automatically."
             )
         else:
             roles_str = ", ".join(member_roles) if member_roles else "no special roles"
