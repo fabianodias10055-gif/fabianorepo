@@ -3688,7 +3688,7 @@ class FeedbackBot(discord.Client):
 
         # Google Drive project folders — inject when in link channel so Claude
         # can auto-fill the destination URL when creating download/ links.
-        if _in_link_channel and _is_owner:
+        if message.channel.id == LINK_MANAGEMENT_CHANNEL_ID and _is_owner:
             try:
                 from drive_helper import list_project_folders as _gdrive_list
                 _drive_folders = _gdrive_list()
