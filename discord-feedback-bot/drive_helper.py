@@ -38,8 +38,28 @@ def _get_service():
         return None
 
 
+def _list_children(svc, parent_id: str) -> list[dict]:
+    res = (
+        svc.files()
+        .list(
+            q=(
+                f"'{parent_id}' in parents"
+                " and mimeType='application/vnd.google-apps.folder'"
+                " and trashed=false"
+            ),
+            fields="files(id,name,webViewLink)",
+            pageSize=200,
+            orderBy="name",
+        )
+        .execute()
+    )
+    return res.get("files", [])
+
+
 def list_project_folders() -> list[dict]:
-    """Return [{name, url}] for all subfolders of the root Drive folder, cached 5 min."""
+    """Return [{name, url}] for all folders up to 2 levels deep under the root.
+    Each name is prefixed with parent path (e.g. 'Sliding System / Sliding System - Standard').
+    Cached for 5 minutes."""
     global _cache, _cache_ts
     if _cache and time.time() - _cache_ts < _CACHE_TTL:
         return _cache
@@ -47,26 +67,24 @@ def list_project_folders() -> list[dict]:
     if not svc:
         return _cache
     try:
-        res = (
-            svc.files()
-            .list(
-                q=(
-                    f"'{GDRIVE_ROOT_FOLDER_ID}' in parents"
-                    " and mimeType='application/vnd.google-apps.folder'"
-                    " and trashed=false"
-                ),
-                fields="files(id,name,webViewLink)",
-                pageSize=200,
-                orderBy="name",
-            )
-            .execute()
-        )
-        _cache = [
-            {"name": f["name"], "url": f.get("webViewLink", "")}
-            for f in res.get("files", [])
-        ]
+        out: list[dict] = []
+        level1 = _list_children(svc, GDRIVE_ROOT_FOLDER_ID)
+        for f1 in level1:
+            out.append({"name": f1["name"], "url": f1.get("webViewLink", "")})
+            try:
+                level2 = _list_children(svc, f1["id"])
+                for f2 in level2:
+                    out.append(
+                        {
+                            "name": f"{f1['name']} / {f2['name']}",
+                            "url": f2.get("webViewLink", ""),
+                        }
+                    )
+            except Exception as sub_exc:
+                logger.warning("Drive subfolder list failed for %s: %s", f1["name"], sub_exc)
+        _cache = out
         _cache_ts = time.time()
-        logger.info("Drive: loaded %d project folders", len(_cache))
+        logger.info("Drive: loaded %d project folders (2 levels)", len(_cache))
     except Exception as exc:
         logger.warning("Drive folder list failed: %s", exc)
     return _cache
