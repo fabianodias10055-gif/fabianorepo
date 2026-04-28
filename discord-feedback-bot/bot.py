@@ -29,7 +29,7 @@ load_dotenv(BASE_DIR / ".env")
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GUILD_ID = os.getenv("DISCORD_GUILD_ID")
-OWNER_DISCORD_ID = int(os.getenv("OWNER_DISCORD_ID", "0"))  # set in Railway vars
+OWNER_DISCORD_ID = int(os.getenv("OWNER_DISCORD_ID", "690691536983425044"))
 PATREON_WEBHOOK_SECRET = os.getenv("PATREON_WEBHOOK_SECRET", "")
 PATREON_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("PATREON_ANNOUNCEMENT_CHANNEL_ID", "1490377274749354207"))
 PATREON_PUBLIC_CHANNEL_ID = int(os.getenv("PATREON_PUBLIC_CHANNEL_ID", "1158395982485147689"))
@@ -3162,6 +3162,18 @@ class FeedbackBot(discord.Client):
 
         has_images = any(_is_image_attachment(a) for a in all_attachments)
         has_text_files = any(_is_text_attachment(a) for a in all_attachments)
+        if not question and not has_images and not has_text_files and not replied_text:
+            # Look at the last message from the same user in this channel (within 2 min).
+            # Handles the case where they send text then @mention as a separate message.
+            try:
+                async for _prev in message.channel.history(limit=5, before=message):
+                    if _prev.author.id == message.author.id and _prev.content.strip():
+                        _age = (message.created_at - _prev.created_at).total_seconds()
+                        if _age < 120:
+                            question = _prev.content.strip()
+                        break
+            except Exception:
+                pass
         if not question and not has_images and not has_text_files and not replied_text:
             await message.reply("Hey! How can I help? 😊")
             return
