@@ -1768,7 +1768,7 @@ async def fix_roles_slash(interaction: discord.Interaction, user: discord.Member
         await interaction.followup.send(f"Error: {exc}", ephemeral=True)
 
 
-
+async def _send_chunked(channel, lines):
     """Send lines as Discord messages, splitting at 1900 chars."""
     chunk = ""
     for line in lines:
@@ -2477,7 +2477,9 @@ def _check_link_permission(interaction: discord.Interaction, prefix: str, url: s
         # URL must be on allowlist
         if url:
             try:
-                domain = _urlparse(url).netloc.lower().lstrip("www.")
+                domain = _urlparse(url).netloc.lower()
+                if domain.startswith("www."):
+                    domain = domain[4:]
                 # Strip port if present
                 domain = domain.split(":")[0]
                 if not any(domain == d or domain.endswith("." + d) for d in _ALLOWED_DOWNLOAD_DOMAINS):
@@ -2845,8 +2847,6 @@ class FeedbackBot(discord.Client):
                         vid = entry.findtext("yt:videoId", namespaces=ns)
                         if not vid or vid in self._ue_seen_video_ids:
                             continue
-                        self._ue_seen_video_ids.add(vid)
-                        new_found = True
                         t = entry.findtext("atom:title", namespaces=ns, default="New video")
                         l_el = entry.find("atom:link", ns)
                         u = l_el.get("href", "") if l_el is not None else f"https://www.youtube.com/watch?v={vid}"
@@ -2854,6 +2854,8 @@ class FeedbackBot(discord.Client):
                         await channel.send(
                             f"🎮 **Unreal Engine** just posted a new video!\n**{t}**\n{u}"
                         )
+                        self._ue_seen_video_ids.add(vid)
+                        new_found = True
                         logger.info("YouTube watcher: posted new video %s (%s)", vid, t)
                     if new_found:
                         _save_seen(self._ue_seen_video_ids)
@@ -3524,9 +3526,12 @@ class FeedbackBot(discord.Client):
             parts.append(f"[Recent channel messages for context:\n{channel_context}\n]")
 
         # Link analytics context — inject if question is about links/clicks (owner only)
-        # Owner can create/delete short links by talking to the bot
-        if message.author.id == 690691536983425044:
+        # Owner can create/delete short links by talking to the bot — but only in the
+        # link management channel, and the destination must be on the trusted domain list.
+        _is_owner = bool(OWNER_DISCORD_ID) and message.author.id == OWNER_DISCORD_ID
+        if _is_owner and message.channel.id == LINK_MANAGEMENT_CHANNEL_ID:
             import re as _re
+            from urllib.parse import urlparse as _ulp_chat
             # Use raw message content for link detection (more reliable than parsed question)
             _raw_msg = message.content
             _q_lower = _raw_msg.lower()
@@ -3542,7 +3547,11 @@ class FeedbackBot(discord.Client):
                         _dpfx, _dslug = "root", _raw
                     from shortener import delete_link as _del_link
                     _deleted = _del_link(_dslug, _dpfx)
-                    await message.channel.send(f"✅ Deleted `/{_dpfx}/{_dslug}`." if _deleted else f"❌ Link `/{_dpfx}/{_dslug}` not found.")
+                    if _deleted:
+                        _audit_link_change("delete", message.author.id, str(message.author), _dpfx, _dslug, "")
+                        await message.channel.send(f"✅ Deleted `/{_dpfx}/{_dslug}`.")
+                    else:
+                        await message.channel.send(f"❌ Link `/{_dpfx}/{_dslug}` not found.")
                     return
 
             else:
@@ -3556,6 +3565,15 @@ class FeedbackBot(discord.Client):
                         _pfx, _slg = _raw_path.split("/", 1)
                     else:
                         _pfx, _slg = "root", _raw_path
+                    # Domain allowlist — same set used by the [CREATE_LINK] marker
+                    _dom = _ulp_chat(_dest_url).netloc.lower()
+                    if _dom.startswith("www."):
+                        _dom = _dom[4:]
+                    _dom = _dom.split(":")[0]
+                    _all_doms = _ALLOWED_DOWNLOAD_DOMAINS | {"patreon.com", "youtube.com", "youtu.be"}
+                    if not any(_dom == _d or _dom.endswith("." + _d) for _d in _all_doms):
+                        await message.channel.send(f"🚫 Domain `{_dom}` is not on the trusted list. Link not created.")
+                        return
                     try:
                         from shortener import create_link as _crt_link, update_link as _upd_link, get_link as _get_link
                         _ok = _crt_link(_slg, _dest_url, _pfx)
@@ -3566,6 +3584,7 @@ class FeedbackBot(discord.Client):
                         _verify = _get_link(_slg, _pfx)
                         if _verify:
                             action = "Created" if _ok else "Updated"
+                            _audit_link_change(action.lower(), message.author.id, str(message.author), _pfx, _slg, _dest_url)
                             await message.channel.send(f"✅ {action}: `{_short}` → {_verify['url']}")
                         else:
                             await message.channel.send(f"❌ Failed to save link — DB write error.")
@@ -3577,7 +3596,7 @@ class FeedbackBot(discord.Client):
 
 
         _link_keywords = ["link", "click", "locodev.dev", "short", "redirect", "country", "visit", "traffic", "popular", "most clicked", "how many", "create", "make a", "short link"]
-        if message.author.id == 690691536983425044 and any(kw in (question or "").lower() for kw in _link_keywords):
+        if _is_owner and any(kw in (question or "").lower() for kw in _link_keywords):
             try:
                 from shortener import get_top_links, list_links, get_stats, _conn as _sh_conn
                 from datetime import timedelta as _td, timezone as _shtz
@@ -3640,7 +3659,7 @@ class FeedbackBot(discord.Client):
 
         # Patreon event context — inject if question is about subscribers/members (owner only)
         _patreon_keywords = ["patreon", "patron", "subscriber", "subscri", "join", "cancel", "trial", "member", "who paid", "who signed", "pledge", "tier", "revenue", "income", "earning", "monthly", "mrr", "money", "increasing", "growing"]
-        if message.author.id == 690691536983425044 and any(kw in (question or "").lower() for kw in _patreon_keywords):
+        if _is_owner and any(kw in (question or "").lower() for kw in _patreon_keywords):
             try:
                 _events = _load_events()
                 from datetime import timezone as _tz
@@ -3813,7 +3832,8 @@ class FeedbackBot(discord.Client):
                 f"2. Never reuse an existing slug — if /p/obstacleavoidance exists, use /p/obstacleavoidance-yt or similar.\n"
                 f"3. Keep slugs short, lowercase, no spaces (use hyphens).\n"
                 f"4. If the slug you want is taken, tell LocoDev and suggest alternatives.\n"
-                f"DO NOT say 'I can't create links' or 'you need to do this manually'. "
+                f"DO NOT say 'I can't create links' or 'you need to do this manually' or 'use the slash command'. "
+                f"All prefixes including `download/`, `docs/`, `free/`, `freebuild/` are fine for LocoDev to create via chat — just emit the marker. "
                 f"Just output the CREATE_LINK marker and it will be executed automatically.\n"
                 f"CRITICAL: NEVER announce the short URL in your response text. Do NOT say 'Done!', 'link is ready', or write out the locodev.dev/... URL. "
                 f"Only output the [CREATE_LINK] marker — the system will post the confirmation automatically."
@@ -3870,6 +3890,15 @@ class FeedbackBot(discord.Client):
                 from urllib.parse import urlparse as _ulp
                 _cl_matches = _cre.findall(r'\[CREATE_LINK:\s*([^\s→]+)\s*[→>]+\s*(https?://[^\]]+)\]', answer)
                 _link_results = []
+                # Author check: only the server owner can drive link mutations via chat.
+                # Without this, anyone in the link channel could prompt-inject Claude into
+                # emitting a [CREATE_LINK] marker that the bot would execute.
+                if _cl_matches and not (bool(OWNER_DISCORD_ID) and message.author.id == OWNER_DISCORD_ID):
+                    _link_results.append(
+                        "🔒 Only the server owner can create links via chat. Use `/shorten` instead."
+                    )
+                    logger.warning("Blocked CREATE_LINK from non-owner %s", message.author.id)
+                    _cl_matches = []
                 if _cl_matches and not _in_link_channel:
                     _link_results.append(
                         f"🔒 Link management is only allowed in <#{LINK_MANAGEMENT_CHANNEL_ID}>."
@@ -3882,16 +3911,14 @@ class FeedbackBot(discord.Client):
                         _cl_pfx, _cl_slg = _cl_path.split("/", 1)
                     else:
                         _cl_pfx, _cl_slg = "root", _cl_path
-                    # Security: block Claude from touching protected prefixes via chat
-                    if _cl_pfx in _PROTECTED_PREFIXES:
-                        _link_results.append(
-                            f"🔒 `{_cl_pfx}/` links can only be managed via `/edit_link` slash command by the server owner."
-                        )
-                        logger.warning("Blocked Claude CREATE_LINK attempt on protected prefix '%s'", _cl_pfx)
-                        continue
+                    # Protected prefixes (download/docs/freebuild/free) are owner-only;
+                    # the author check above already guarantees that, so no extra block needed.
                     # Security: domain allowlist for all chat-created links
                     try:
-                        _cl_domain = _ulp(_cl_url).netloc.lower().lstrip("www.").split(":")[0]
+                        _cl_domain = _ulp(_cl_url).netloc.lower()
+                        if _cl_domain.startswith("www."):
+                            _cl_domain = _cl_domain[4:]
+                        _cl_domain = _cl_domain.split(":")[0]
                         _all_domains = _ALLOWED_DOWNLOAD_DOMAINS | {"patreon.com", "youtube.com", "youtu.be"}
                         if not any(_cl_domain == _d or _cl_domain.endswith("." + _d) for _d in _all_domains):
                             _link_results.append(f"🚫 Domain `{_cl_domain}` not on trusted list. Link not created.")
@@ -3922,6 +3949,16 @@ class FeedbackBot(discord.Client):
                 # Strip the markers from the displayed answer
                 answer = _cre.sub(r'\[CREATE_LINK:[^\]]+\]\n?', '', answer).strip()
 
+                # If Claude emitted only the marker (no surrounding text), the link
+                # results become the user-visible reply — otherwise message.reply("")
+                # would 400 and the link confirmation would never get sent.
+                if not answer:
+                    if _link_results:
+                        answer = "\n".join(_link_results)
+                        _link_results = []
+                    else:
+                        answer = "✅ Done."
+
                 # Store bot reply in history
                 self._conversation_history[user_id].append({"role": "assistant", "content": answer})
                 if len(answer) <= 1900:
@@ -3931,7 +3968,7 @@ class FeedbackBot(discord.Client):
                     remainder = answer[1900:]
                     if remainder.strip():
                         await message.channel.send(remainder)
-                # Send link creation results as follow-up
+                # Send link creation results as follow-up (only if not already consumed above)
                 if _link_results:
                     await message.channel.send("\n".join(_link_results))
                 # Send KB images as follow-up if any
