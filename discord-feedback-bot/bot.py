@@ -2425,6 +2425,17 @@ _ALLOWED_DOWNLOAD_DOMAINS = {
     "mega.co.nz",
 }
 
+
+def _random_slug_suffix(length: int = 8) -> str:
+    """Random base62 suffix appended to download/ slugs so they're unguessable."""
+    import secrets, string
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+# Prefixes that get an auto-appended random suffix for obscurity
+_OBSCURED_PREFIXES = {"download"}
+
 _LINK_AUDIT_PATH = "/app/data/link_audit.json"
 
 def _audit_link_change(action: str, user_id: int, user_name: str,
@@ -2505,6 +2516,9 @@ async def shorten_slash(interaction: discord.Interaction, url: str, slug: str, p
     if err:
         await interaction.response.send_message(err, ephemeral=True)
         return
+    # Auto-append random suffix for obscured prefixes (e.g. download/)
+    if prefix in _OBSCURED_PREFIXES and "/" not in slug:
+        slug = f"{slug}/{_random_slug_suffix()}"
     from shortener import create_link
     ok = create_link(slug, url, prefix)
     if ok:
@@ -3574,6 +3588,9 @@ class FeedbackBot(discord.Client):
                     if not any(_dom == _d or _dom.endswith("." + _d) for _d in _all_doms):
                         await message.channel.send(f"🚫 Domain `{_dom}` is not on the trusted list. Link not created.")
                         return
+                    # Auto-append random suffix for obscured prefixes (e.g. download/)
+                    if _pfx in _OBSCURED_PREFIXES and "/" not in _slg:
+                        _slg = f"{_slg}/{_random_slug_suffix()}"
                     try:
                         from shortener import create_link as _crt_link, update_link as _upd_link, get_link as _get_link
                         _ok = _crt_link(_slg, _dest_url, _pfx)
@@ -3832,6 +3849,11 @@ class FeedbackBot(discord.Client):
                 f"2. Never reuse an existing slug — if /p/obstacleavoidance exists, use /p/obstacleavoidance-yt or similar.\n"
                 f"3. Keep slugs short, lowercase, no spaces (use hyphens).\n"
                 f"4. If the slug you want is taken, tell LocoDev and suggest alternatives.\n"
+                f"5. CRITICAL — `download/` links: ONLY provide the base slug (e.g. `download/weaponstandard`). "
+                f"Do NOT append a Mega ID, hash, or random string yourself. The system automatically appends a random "
+                f"unguessable suffix for `download/` links so the final URL becomes `download/weaponstandard/<random>`. "
+                f"Emitting `[CREATE_LINK: download/weaponstandard → ...]` is correct; emitting "
+                f"`[CREATE_LINK: download/weaponstandard/2EZwiLCL → ...]` is WRONG.\n"
                 f"DO NOT say 'I can't create links' or 'you need to do this manually' or 'use the slash command'. "
                 f"All prefixes including `download/`, `docs/`, `free/`, `freebuild/` are fine for LocoDev to create via chat — just emit the marker. "
                 f"Just output the CREATE_LINK marker and it will be executed automatically.\n"
@@ -3913,6 +3935,9 @@ class FeedbackBot(discord.Client):
                         _cl_pfx, _cl_slg = "root", _cl_path
                     # Protected prefixes (download/docs/freebuild/free) are owner-only;
                     # the author check above already guarantees that, so no extra block needed.
+                    # Auto-append random suffix for obscured prefixes (e.g. download/)
+                    if _cl_pfx in _OBSCURED_PREFIXES and "/" not in _cl_slg:
+                        _cl_slg = f"{_cl_slg}/{_random_slug_suffix()}"
                     # Security: domain allowlist for all chat-created links
                     try:
                         _cl_domain = _ulp(_cl_url).netloc.lower()
