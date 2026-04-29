@@ -3166,6 +3166,44 @@ class FeedbackBot(discord.Client):
         except Exception as _ee:
             logger.warning("Mirror edit error: %s", _ee)
 
+    async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
+        """Flag server nickname changes."""
+        if before.nick == after.nick:
+            return
+        dest = await self._mirror_dest()
+        if not dest:
+            return
+        try:
+            old_nick = before.nick or "*(none)*"
+            new_nick = after.nick or "*(removed)*"
+            await dest.send(
+                f"📝 **NICKNAME CHANGED**\n"
+                f"**User:** {after} (ID: {after.id})\n"
+                f"**Before:** {old_nick}\n"
+                f"**After:** {new_nick}"
+            )
+        except Exception as _nce:
+            logger.warning("Mirror nickname error: %s", _nce)
+
+    async def on_user_update(self, before: discord.User, after: discord.User) -> None:
+        """Flag global Discord username changes."""
+        if before.name == after.name and before.display_name == after.display_name:
+            return
+        dest = await self._mirror_dest()
+        if not dest:
+            return
+        try:
+            lines = [f"👤 **USERNAME CHANGED**", f"**User ID:** {after.id}"]
+            if before.name != after.name:
+                lines.append(f"**Username before:** {before.name}")
+                lines.append(f"**Username after:** {after.name}")
+            if before.display_name != after.display_name:
+                lines.append(f"**Display name before:** {before.display_name}")
+                lines.append(f"**Display name after:** {after.display_name}")
+            await dest.send("\n".join(lines))
+        except Exception as _uce:
+            logger.warning("Mirror username error: %s", _uce)
+
     async def on_message(self, message: discord.Message) -> None:
         # Mirror all messages from the source channel to the backup channel.
         if message.channel.id == MIRROR_SOURCE_CHANNEL_ID and MIRROR_DEST_CHANNEL_ID:
