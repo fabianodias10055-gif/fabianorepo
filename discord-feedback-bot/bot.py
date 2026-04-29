@@ -3110,7 +3110,7 @@ class FeedbackBot(discord.Client):
             return
         try:
             ts = discord.utils.format_dt(message.created_at, style="f")
-            author_tag = f"{message.author} (ID: {message.author.id})"
+            author_tag = f"{message.author.mention} ({message.author} — ID: {message.author.id})"
             content = message.content or "*(no text)*"
             lines = [
                 f"🗑️ **MESSAGE DELETED**",
@@ -3152,7 +3152,7 @@ class FeedbackBot(discord.Client):
             return
         try:
             ts = discord.utils.format_dt(after.edited_at or after.created_at, style="f")
-            author_tag = f"{before.author} (ID: {before.author.id})"
+            author_tag = f"{before.author.mention} ({before.author} — ID: {before.author.id})"
             before_text = before.content or "*(no text)*"
             after_text = after.content or "*(no text)*"
             await dest.send(
@@ -3178,7 +3178,7 @@ class FeedbackBot(discord.Client):
             new_nick = after.nick or "*(removed)*"
             await dest.send(
                 f"📝 **NICKNAME CHANGED**\n"
-                f"**User:** {after} (ID: {after.id})\n"
+                f"**User:** {after.mention} ({after} — ID: {after.id})\n"
                 f"**Before:** {old_nick}\n"
                 f"**After:** {new_nick}"
             )
@@ -3193,7 +3193,7 @@ class FeedbackBot(discord.Client):
         if not dest:
             return
         try:
-            lines = [f"👤 **USERNAME CHANGED**", f"**User ID:** {after.id}"]
+            lines = [f"👤 **USERNAME CHANGED**", f"**User:** {after.mention} (ID: {after.id})"]
             if before.name != after.name:
                 lines.append(f"**Username before:** {before.name}")
                 lines.append(f"**Username after:** {after.name}")
@@ -3213,7 +3213,7 @@ class FeedbackBot(discord.Client):
                     # Build header: author, timestamp, jump link
                     ts = discord.utils.format_dt(message.created_at, style="f")
                     jump = message.jump_url
-                    author_tag = f"{message.author} (ID: {message.author.id})"
+                    author_tag = f"{message.author.mention} ({message.author} — ID: {message.author.id})"
                     header = f"**{author_tag}** — {ts}\n{jump}"
                     body = message.content or ""
                     mirror_text = f"{header}\n{body}".strip()
