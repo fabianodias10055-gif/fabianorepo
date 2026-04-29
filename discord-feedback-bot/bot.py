@@ -35,6 +35,8 @@ PATREON_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("PATREON_ANNOUNCEMENT_CHANNEL_ID
 PATREON_PUBLIC_CHANNEL_ID = int(os.getenv("PATREON_PUBLIC_CHANNEL_ID", "1158395982485147689"))
 YOUTUBE_NOTIFY_CHANNEL_ID = int(os.getenv("YOUTUBE_NOTIFY_CHANNEL_ID", "1481432850212585655"))
 LINK_MANAGEMENT_CHANNEL_ID = int(os.getenv("LINK_MANAGEMENT_CHANNEL_ID", "1490377274749354207"))
+MIRROR_SOURCE_CHANNEL_ID = int(os.getenv("MIRROR_SOURCE_CHANNEL_ID", "1160715880787869729"))
+MIRROR_DEST_CHANNEL_ID = int(os.getenv("MIRROR_DEST_CHANNEL_ID", "1499029543078465696"))
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 PUSHOVER_USER_KEY = os.getenv("PUSHOVER_USER_KEY", "")
 PUSHOVER_API_TOKEN = os.getenv("PUSHOVER_API_TOKEN", "")
@@ -3097,6 +3099,32 @@ class FeedbackBot(discord.Client):
             logger.warning("KB reaction handler error: %s", _ke)
 
     async def on_message(self, message: discord.Message) -> None:
+        # Mirror all messages from the source channel to the backup channel.
+        if message.channel.id == MIRROR_SOURCE_CHANNEL_ID and MIRROR_DEST_CHANNEL_ID:
+            try:
+                dest = self.get_channel(MIRROR_DEST_CHANNEL_ID)
+                if dest:
+                    # Build header: author, timestamp, jump link
+                    ts = discord.utils.format_dt(message.created_at, style="f")
+                    jump = message.jump_url
+                    author_tag = f"{message.author} (ID: {message.author.id})"
+                    header = f"**{author_tag}** — {ts}\n{jump}"
+                    body = message.content or ""
+                    mirror_text = f"{header}\n{body}".strip()
+                    # Collect files to re-upload (max 8 MB per file; skip oversized)
+                    files = []
+                    for att in message.attachments:
+                        if att.size <= 8_000_000:
+                            try:
+                                files.append(await att.to_file())
+                            except Exception:
+                                mirror_text += f"\n📎 {att.filename} ({att.url})"
+                        else:
+                            mirror_text += f"\n📎 {att.filename} (too large to copy — {att.url})"
+                    await dest.send(mirror_text, files=files if files else discord.utils.MISSING)
+            except Exception as _me:
+                logger.warning("Mirror error: %s", _me)
+
         if message.author.bot:
             return
         # Trigger if bot is @mentioned OR if someone replies to one of the bot's messages
