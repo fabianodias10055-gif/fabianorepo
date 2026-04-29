@@ -3098,6 +3098,74 @@ class FeedbackBot(discord.Client):
         except Exception as _ke:
             logger.warning("KB reaction handler error: %s", _ke)
 
+    async def _mirror_dest(self):
+        """Return the mirror destination channel, or None."""
+        return self.get_channel(MIRROR_DEST_CHANNEL_ID) if MIRROR_DEST_CHANNEL_ID else None
+
+    async def on_message_delete(self, message: discord.Message) -> None:
+        if message.channel.id != MIRROR_SOURCE_CHANNEL_ID:
+            return
+        dest = await self._mirror_dest()
+        if not dest:
+            return
+        try:
+            ts = discord.utils.format_dt(message.created_at, style="f")
+            author_tag = f"{message.author} (ID: {message.author.id})"
+            content = message.content or "*(no text)*"
+            lines = [
+                f"🗑️ **MESSAGE DELETED**",
+                f"**Author:** {author_tag}",
+                f"**Originally sent:** {ts}",
+                f"**Content:**\n{content}",
+            ]
+            if message.attachments:
+                att_list = "\n".join(f"  • {a.filename}" for a in message.attachments)
+                lines.append(f"**Attachments (files lost):**\n{att_list}")
+            await dest.send("\n".join(lines))
+        except Exception as _de:
+            logger.warning("Mirror delete error: %s", _de)
+
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent) -> None:
+        """Fallback for deletions where the message wasn't cached."""
+        if payload.channel_id != MIRROR_SOURCE_CHANNEL_ID:
+            return
+        if payload.cached_message is not None:
+            return  # already handled by on_message_delete
+        dest = await self._mirror_dest()
+        if not dest:
+            return
+        try:
+            await dest.send(
+                f"🗑️ **MESSAGE DELETED** (content unknown — message was not in cache)\n"
+                f"**Message ID:** {payload.message_id}"
+            )
+        except Exception as _rde:
+            logger.warning("Mirror raw-delete error: %s", _rde)
+
+    async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
+        if before.channel.id != MIRROR_SOURCE_CHANNEL_ID:
+            return
+        if before.content == after.content:
+            return  # embed/pin update, not a text edit
+        dest = await self._mirror_dest()
+        if not dest:
+            return
+        try:
+            ts = discord.utils.format_dt(after.edited_at or after.created_at, style="f")
+            author_tag = f"{before.author} (ID: {before.author.id})"
+            before_text = before.content or "*(no text)*"
+            after_text = after.content or "*(no text)*"
+            await dest.send(
+                f"✏️ **MESSAGE EDITED**\n"
+                f"**Author:** {author_tag}\n"
+                f"**Edited at:** {ts}\n"
+                f"**Jump:** {after.jump_url}\n"
+                f"**Before:**\n{before_text}\n"
+                f"**After:**\n{after_text}"
+            )
+        except Exception as _ee:
+            logger.warning("Mirror edit error: %s", _ee)
+
     async def on_message(self, message: discord.Message) -> None:
         # Mirror all messages from the source channel to the backup channel.
         if message.channel.id == MIRROR_SOURCE_CHANNEL_ID and MIRROR_DEST_CHANNEL_ID:
