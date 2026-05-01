@@ -416,7 +416,7 @@ function logout() {
 }
 
 document.getElementById('login-btn').onclick = tryLogin;
-document.getElementById('pw').onkeydown = e => e.key === 'Enter' && tryLogin();
+document.getElementById('pw').addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
 
 function boot() {
   document.getElementById('auth').style.display = 'none';
