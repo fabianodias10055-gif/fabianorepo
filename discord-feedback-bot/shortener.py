@@ -5,7 +5,9 @@ Routes are registered on the existing aiohttp server (port 8080).
 
 import asyncio
 import csv
+import hashlib
 import logging
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
@@ -17,6 +19,17 @@ logger = logging.getLogger("shortener")
 
 DB_PATH = "/app/data/shortener.db"
 
+# Salt used to hash visitor IPs before storing them. Set via Railway env var.
+# Never rotate — rotating would orphan all previously-stored visitor identifiers.
+_IP_SALT = os.environ.get("IP_HASH_SALT", "")
+
+
+def hash_ip(ip: str) -> str:
+    """Returns a stable opaque identifier for a visitor IP, or '' if unhashable."""
+    if not ip or not _IP_SALT:
+        return ""
+    return hashlib.sha256(f"{_IP_SALT}:{ip}".encode("utf-8")).hexdigest()
+
 
 # ── Database ──────────────────────────────────────────────────────────────────
 
@@ -26,8 +39,18 @@ def _conn():
     return conn
 
 
+def _migrate_clicks_columns(db: sqlite3.Connection):
+    """Idempotent: adds ip_hash, user_agent, timezone columns if missing."""
+    cur = db.execute("PRAGMA table_info(clicks)")
+    existing = {row[1] for row in cur.fetchall()}
+    for col in ("ip_hash", "user_agent", "timezone"):
+        if col not in existing:
+            db.execute(f"ALTER TABLE clicks ADD COLUMN {col} TEXT")
+            logger.info("Migrated clicks: added column %s", col)
+    db.commit()
+
+
 def init_db():
-    import os
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with _conn() as db:
         db.execute("""
@@ -50,6 +73,9 @@ def init_db():
                 country      TEXT,
                 country_code TEXT,
                 referrer     TEXT,
+                ip_hash      TEXT,
+                user_agent   TEXT,
+                timezone     TEXT,
                 FOREIGN KEY (link_id) REFERENCES links(id)
             )
         """)
@@ -59,6 +85,8 @@ def init_db():
         db.execute(
             "CREATE INDEX IF NOT EXISTS idx_clicks_time ON clicks(clicked_at)"
         )
+        # Idempotent: ensures pre-existing DBs get the new columns too.
+        _migrate_clicks_columns(db)
         db.commit()
     logger.info("Shortener DB initialised at %s", DB_PATH)
 
@@ -118,13 +146,33 @@ def list_links() -> list[dict]:
 
 # ── Click logging ─────────────────────────────────────────────────────────────
 
-def log_click(link_id: int, country: str, country_code: str, referrer: str) -> int | None:
+def log_click(
+    link_id: int,
+    country: str,
+    country_code: str,
+    referrer: str,
+    ip_hash: str = "",
+    user_agent: str = "",
+    timezone_name: str | None = None,
+) -> int | None:
     """Insert a click row and return its rowid."""
     try:
         with _conn() as db:
             cur = db.execute(
-                "INSERT INTO clicks (link_id, clicked_at, country, country_code, referrer) VALUES (?,?,?,?,?)",
-                (link_id, datetime.now(timezone.utc).isoformat(), country, country_code, referrer),
+                """INSERT INTO clicks
+                   (link_id, clicked_at, country, country_code, referrer,
+                    ip_hash, user_agent, timezone)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (
+                    link_id,
+                    datetime.now(timezone.utc).isoformat(),
+                    country,
+                    country_code,
+                    referrer,
+                    ip_hash,
+                    user_agent,
+                    timezone_name,
+                ),
             )
             db.commit()
             return cur.lastrowid
@@ -133,32 +181,42 @@ def log_click(link_id: int, country: str, country_code: str, referrer: str) -> i
         return None
 
 
-def update_click_country(click_id: int, country: str, country_code: str):
+def update_click_geo(
+    click_id: int,
+    country: str,
+    country_code: str,
+    timezone_name: str | None = None,
+):
+    """Updates country, country_code and (optionally) timezone on a click row."""
     try:
         with _conn() as db:
             db.execute(
-                "UPDATE clicks SET country=?, country_code=? WHERE id=?",
-                (country, country_code, click_id),
+                "UPDATE clicks SET country=?, country_code=?, timezone=? WHERE id=?",
+                (country, country_code, timezone_name, click_id),
             )
             db.commit()
     except Exception as exc:
-        logger.warning("update_click_country error: %s", exc)
+        logger.warning("update_click_geo error: %s", exc)
 
 
-async def lookup_country(ip: str) -> tuple[str, str]:
-    """Returns (country_name, country_code). Fails silently."""
+async def lookup_geo(ip: str) -> tuple[str, str, str | None]:
+    """Returns (country_name, country_code, timezone_name). Fails silently."""
     try:
         timeout = aiohttp.ClientTimeout(total=2)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(
-                f"http://ip-api.com/json/{ip}?fields=country,countryCode"
+                f"http://ip-api.com/json/{ip}?fields=country,countryCode,timezone"
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get("country", "Unknown"), data.get("countryCode", "??")
+                    return (
+                        data.get("country", "Unknown"),
+                        data.get("countryCode", "??"),
+                        data.get("timezone") or None,
+                    )
     except Exception:
         pass
-    return "Unknown", "??"
+    return "Unknown", "??", None
 
 
 # ── Analytics ─────────────────────────────────────────────────────────────────
@@ -265,15 +323,21 @@ async def _do_redirect(request: web.Request, slug: str, prefix: str) -> web.Resp
     except Exception:
         referrer = "direct"
 
-    # Always log the click immediately (synchronous DB write, sub-ms).
-    click_id = log_click(link["id"], "Unknown", "??", referrer)
+    user_agent = request.headers.get("User-Agent", "")[:512]
+    ip_h = hash_ip(ip)
 
-    # Resolve country in background and update the row.
+    # Always log the click immediately (synchronous DB write, sub-ms).
+    click_id = log_click(
+        link["id"], "Unknown", "??", referrer,
+        ip_hash=ip_h, user_agent=user_agent,
+    )
+
+    # Resolve country + timezone in background and update the row.
     if click_id and ip:
         async def _geo(cid=click_id, addr=ip):
-            country, code = await lookup_country(addr)
-            if country != "Unknown":
-                update_click_country(cid, country, code)
+            country, code, tz = await lookup_geo(addr)
+            if country != "Unknown" or tz:
+                update_click_geo(cid, country, code, tz)
 
         task = asyncio.create_task(_geo())
         _bg_tasks.add(task)

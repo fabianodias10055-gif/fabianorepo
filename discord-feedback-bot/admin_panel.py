@@ -155,6 +155,72 @@ async def handle_delete_link(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def handle_link_clicks(request: web.Request) -> web.Response:
+    """GET /adminlocoILco/api/link/{prefix}/{slug}/clicks
+    Returns the link details + every click row (capped at 500, newest first).
+    """
+    if not _check_token(request):
+        raise web.HTTPUnauthorized()
+    prefix = request.match_info["prefix"]
+    slug = request.match_info["slug"]
+    from shortener import _conn
+    with _conn() as db:
+        link = db.execute(
+            "SELECT id, prefix, slug, url, created_at FROM links WHERE prefix=? AND slug=?",
+            (prefix, slug),
+        ).fetchone()
+        if not link:
+            raise web.HTTPNotFound(text="Link not found")
+        total = db.execute(
+            "SELECT COUNT(*) FROM clicks WHERE link_id=?", (link["id"],)
+        ).fetchone()[0]
+        rows = db.execute(
+            """SELECT clicked_at, country, country_code, referrer,
+                      user_agent, ip_hash, timezone
+               FROM clicks WHERE link_id=?
+               ORDER BY clicked_at DESC LIMIT 500""",
+            (link["id"],),
+        ).fetchall()
+    return web.json_response({
+        "link": {
+            "prefix": link["prefix"],
+            "slug": link["slug"],
+            "url": link["url"],
+            "created_at": link["created_at"],
+            "total_clicks": total,
+        },
+        "clicks": [dict(r) for r in rows],
+    })
+
+
+async def handle_clicks_by_country(request: web.Request) -> web.Response:
+    """GET /adminlocoILco/api/clicks/by-country?window=24h|7d|all
+    Returns clicks grouped by country over the chosen window. Used by the chart
+    on blueprint.locodev.dev/app/admin/links.
+    """
+    if not _check_token(request):
+        raise web.HTTPUnauthorized()
+    window = request.query.get("window", "7d")
+    if window == "24h":
+        time_filter = "AND clicked_at >= datetime('now', '-1 day')"
+    elif window == "7d":
+        time_filter = "AND clicked_at >= datetime('now', '-7 days')"
+    elif window == "all":
+        time_filter = ""
+    else:
+        raise web.HTTPBadRequest(text="invalid window (24h|7d|all)")
+    from shortener import _conn
+    with _conn() as db:
+        rows = db.execute(
+            f"""SELECT country, country_code, COUNT(*) AS clicks
+                FROM clicks
+                WHERE country IS NOT NULL AND country != 'Unknown' {time_filter}
+                GROUP BY country, country_code
+                ORDER BY clicks DESC"""
+        ).fetchall()
+    return web.json_response([dict(r) for r in rows])
+
+
 # ── HTML dashboard ────────────────────────────────────────────────────────────
 
 async def handle_admin_html(request: web.Request) -> web.Response:
@@ -170,11 +236,15 @@ def setup_admin_routes(app: web.Application, secret: str):
         logger.warning("ADMIN_SECRET not set — admin panel disabled")
         return
     p = "/adminlocoILco"
-    # Admin routes must be registered BEFORE shortener catch-all routes
+    # Admin routes must be registered BEFORE shortener catch-all routes.
+    # Note: per-link /clicks must be registered BEFORE the {slug:.+} PUT/DELETE
+    # so the static "clicks" suffix takes precedence over the catch-all slug.
     app.router.add_get(p, handle_admin_html)
     app.router.add_post(p + "/login", handle_login)
     app.router.add_get(p + "/api/links", handle_list_links)
     app.router.add_post(p + "/api/links", handle_create_link)
+    app.router.add_get(p + "/api/clicks/by-country", handle_clicks_by_country)
+    app.router.add_get(p + "/api/link/{prefix}/{slug:.+}/clicks", handle_link_clicks)
     app.router.add_put(p + "/api/link/{prefix}/{slug:.+}", handle_update_link)
     app.router.add_delete(p + "/api/link/{prefix}/{slug:.+}", handle_delete_link)
     app.router.add_get(p + "/api/stats", handle_stats)
