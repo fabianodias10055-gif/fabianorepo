@@ -169,15 +169,16 @@ def setup_admin_routes(app: web.Application, secret: str):
     if not secret:
         logger.warning("ADMIN_SECRET not set — admin panel disabled")
         return
+    p = "/adminlocoILco"
     # Admin routes must be registered BEFORE shortener catch-all routes
-    app.router.add_get("/admin", handle_admin_html)
-    app.router.add_post("/admin/login", handle_login)
-    app.router.add_get("/admin/api/links", handle_list_links)
-    app.router.add_post("/admin/api/links", handle_create_link)
-    app.router.add_put("/admin/api/link/{prefix}/{slug:.+}", handle_update_link)
-    app.router.add_delete("/admin/api/link/{prefix}/{slug:.+}", handle_delete_link)
-    app.router.add_get("/admin/api/stats", handle_stats)
-    logger.info("Admin panel registered at /admin")
+    app.router.add_get(p, handle_admin_html)
+    app.router.add_post(p + "/login", handle_login)
+    app.router.add_get(p + "/api/links", handle_list_links)
+    app.router.add_post(p + "/api/links", handle_create_link)
+    app.router.add_put(p + "/api/link/{prefix}/{slug:.+}", handle_update_link)
+    app.router.add_delete(p + "/api/link/{prefix}/{slug:.+}", handle_delete_link)
+    app.router.add_get(p + "/api/stats", handle_stats)
+    logger.info("Admin panel registered at %s", p)
 
 
 # ── Dashboard HTML ────────────────────────────────────────────────────────────
@@ -194,7 +195,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 a{color:inherit;text-decoration:none}
 
 /* ── Auth ── */
-#auth{display:flex;align-items:center;justify-content:center;min-height:100vh}
+#auth{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0f1117;z-index:10}
 .auth-card{background:#1a1d27;border:1px solid #2d3148;border-radius:14px;padding:44px 40px;width:360px}
 .auth-card h1{font-size:1.5rem;color:#4ade80;margin-bottom:6px}
 .auth-card p{color:#64748b;font-size:.9rem;margin-bottom:28px}
@@ -393,7 +394,7 @@ let timer = null;
 async function tryLogin() {
   const pw = document.getElementById('pw').value;
   try {
-    const r = await fetch('/admin/login', {
+    const r = await fetch('/adminlocoILco/login', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({password:pw})
     });
@@ -436,8 +437,8 @@ async function req(method, path, body) {
 // ── Refresh ───────────────────────────────────────────────────────────────────
 async function refresh() {
   const [rs, rl] = await Promise.all([
-    req('GET', '/admin/api/stats'),
-    req('GET', '/admin/api/links'),
+    req('GET', '/adminlocoILco/api/stats'),
+    req('GET', '/adminlocoILco/api/links'),
   ]);
   if (!rs || !rl) return;
   const stats = await rs.json();
@@ -550,7 +551,7 @@ function startEdit(pfx, slg, url) {
 async function saveEdit(pfx, slg) {
   const inp = document.getElementById('ei-'+pfx+'-'+slg);
   if (!inp) return;
-  const r = await req('PUT', '/admin/api/link/'+pfx+'/'+slg, {url:inp.value.trim()});
+  const r = await req('PUT', '/adminlocoILco/api/link/'+pfx+'/'+slg, {url:inp.value.trim()});
   if (r && r.ok) { toast('Updated', 'ok'); refresh(); }
   else toast('Update failed', 'err');
 }
@@ -558,7 +559,7 @@ async function saveEdit(pfx, slg) {
 async function delLink(pfx, slg) {
   const short = pfx==='root' ? '/'+slg : '/'+pfx+'/'+slg;
   if (!confirm('Delete '+short+'?')) return;
-  const r = await req('DELETE', '/admin/api/link/'+pfx+'/'+slg);
+  const r = await req('DELETE', '/adminlocoILco/api/link/'+pfx+'/'+slg);
   if (r && r.ok) { toast('Deleted', 'ok'); refresh(); }
   else toast('Delete failed', 'err');
 }
@@ -569,7 +570,7 @@ async function createLink() {
   const slg  = document.getElementById('nslug').value.trim();
   const url  = document.getElementById('nurl').value.trim();
   if (!slg || !url) { toast('Slug and URL required', 'err'); return; }
-  const r = await req('POST', '/admin/api/links', {prefix:pfx, slug:slg, url});
+  const r = await req('POST', '/adminlocoILco/api/links', {prefix:pfx, slug:slg, url});
   if (r && r.ok) {
     toast('Created!', 'ok');
     document.getElementById('nslug').value = '';
