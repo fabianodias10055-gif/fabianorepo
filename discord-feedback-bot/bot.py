@@ -3975,8 +3975,11 @@ class FeedbackBot(discord.Client):
         if user_id not in self._conversation_history:
             self._conversation_history[user_id] = []
         history = self._conversation_history[user_id]
-        # Store text-only summary in history (no base64) to keep memory light
-        history_text = (f"[User shared {image_count} image(s)] " if image_count > 0 else "") + (full_prompt or "")
+        # Store only the raw question in history — NOT the full injected context.
+        # Context (analytics, Drive folders, Patreon events) is fetched fresh each turn
+        # and should not compound across turns. Storing full_prompt would make history
+        # grow by ~50 KB per analytics exchange and eventually crash the API call.
+        history_text = (f"[User shared {image_count} image(s)] " if image_count > 0 else "") + (question or "")
         history.append({"role": "user", "content": user_content if image_count > 0 else history_text.strip()})
         # Keep only last 10 messages to avoid token limits
         if len(history) > 10:
@@ -4046,7 +4049,10 @@ class FeedbackBot(discord.Client):
             try:
                 import anthropic as _anthropic
                 loop = asyncio.get_event_loop()
-                msgs = list(history)
+                # Prior exchanges use compact history (raw questions); the current
+                # turn uses the full context-injected prompt so Claude has all data.
+                current_content = user_content if image_count > 0 else (full_prompt or question or "")
+                msgs = list(history[:-1]) + [{"role": "user", "content": current_content}]
                 def _ask():
                     ai = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
                     resp = ai.messages.create(
@@ -4176,7 +4182,10 @@ class FeedbackBot(discord.Client):
                         logger.warning("Failed to send KB images: %s", _ie)
             except Exception as exc:
                 logger.warning("AI responder error: %s", exc, exc_info=True)
-                await message.reply(f"Sorry, I couldn't process your question right now. Try again! 🙏")
+                if _is_owner:
+                    await message.reply(f"⚠️ Error: `{type(exc).__name__}: {exc}`")
+                else:
+                    await message.reply("Sorry, I couldn't process your question right now. Try again! 🙏")
 
 
 # Dedup cache: (member_id, event) -> timestamp, to avoid duplicate announcements
