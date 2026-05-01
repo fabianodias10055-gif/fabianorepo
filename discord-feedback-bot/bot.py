@@ -37,6 +37,7 @@ YOUTUBE_NOTIFY_CHANNEL_ID = int(os.getenv("YOUTUBE_NOTIFY_CHANNEL_ID", "14814328
 LINK_MANAGEMENT_CHANNEL_ID = int(os.getenv("LINK_MANAGEMENT_CHANNEL_ID", "1490377274749354207"))
 MIRROR_SOURCE_CHANNEL_ID = int(os.getenv("MIRROR_SOURCE_CHANNEL_ID", "1160715880787869729"))
 MIRROR_DEST_CHANNEL_ID = int(os.getenv("MIRROR_DEST_CHANNEL_ID", "1499029543078465696"))
+ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 PUSHOVER_USER_KEY = os.getenv("PUSHOVER_USER_KEY", "")
 PUSHOVER_API_TOKEN = os.getenv("PUSHOVER_API_TOKEN", "")
@@ -4579,8 +4580,11 @@ async def patreon_webhook_handler(request):
 async def start_webhook_server():
     from aiohttp import web
     from shortener import setup_routes as setup_shortener_routes
+    from admin_panel import setup_admin_routes
     app = web.Application()
     app.router.add_post("/patreon/webhook", patreon_webhook_handler)
+    # Admin routes must be registered before shortener catch-all routes
+    setup_admin_routes(app, ADMIN_SECRET)
     setup_shortener_routes(app)
     runner = web.AppRunner(app)
     await runner.setup()
