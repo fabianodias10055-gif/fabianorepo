@@ -487,13 +487,13 @@ function renderFeed(clicks) {
     if (cc && cc !== '??' && cc.length===2) {
       try { flag = String.fromCodePoint(...[...cc].map(ch => 0x1F1E6+ch.charCodeAt(0)-65)); } catch(e){}
     }
-    const slug = c.prefix && c.prefix!=='root' ? `/\${c.prefix}/\${c.slug}` : `/\${c.slug}`;
+    const slug = c.prefix && c.prefix!=='root' ? `/${c.prefix}/${c.slug}` : `/${c.slug}`;
     const t = (c.clicked_at||'').slice(11,19);
     return `<div class="fi">
-      <span class="fi-slug">\${slug}</span>
-      <span class="fi-time">\${t}</span>
-      <span class="fi-country">\${flag} \${c.country||'??'}</span>
-      <span class="fi-ref">\${c.referrer||'direct'}</span>
+      <span class="fi-slug">${slug}</span>
+      <span class="fi-time">${t}</span>
+      <span class="fi-country">${flag} ${c.country||'??'}</span>
+      <span class="fi-ref">${c.referrer||'direct'}</span>
     </div>`;
   }).join('');
 }
@@ -516,14 +516,14 @@ function renderLinks() {
   document.getElementById('tbody').innerHTML = data.map(l => {
     const short = l.prefix==='root' ? '/'+l.slug : '/'+l.prefix+'/'+l.slug;
     return `<tr>
-      <td class="td-slug"><a href="https://locodev.dev\${short}" target="_blank">\${short}</a></td>
-      <td class="td-url" title="\${l.url}"><a href="\${l.url}" target="_blank">\${l.url}</a></td>
-      <td class="td-num \${l.clicks_1h>0?'hot':''}">\${l.clicks_1h||0}</td>
-      <td class="td-num \${l.clicks_7d>4?'hot':''}">\${l.clicks_7d||0}</td>
-      <td class="td-num">\${l.total_clicks||0}</td>
+      <td class="td-slug"><a href="https://locodev.dev${short}" target="_blank">${short}</a></td>
+      <td class="td-url" title="${l.url}"><a href="${l.url}" target="_blank">${l.url}</a></td>
+      <td class="td-num ${l.clicks_1h>0?'hot':''}">${l.clicks_1h||0}</td>
+      <td class="td-num ${l.clicks_7d>4?'hot':''}">${l.clicks_7d||0}</td>
+      <td class="td-num">${l.total_clicks||0}</td>
       <td class="td-act">
-        <button class="btn btn-gray btn-sm" onclick="startEdit('\${l.prefix}','\${l.slug}',\`\${l.url.replace(/\`/g,'')}\`)">Edit</button>
-        <button class="btn btn-red btn-sm" style="margin-left:4px" onclick="delLink('\${l.prefix}','\${l.slug}')">Del</button>
+        <button class="btn btn-gray btn-sm" onclick="startEdit('${l.prefix}','${l.slug}',\`${l.url.replace(/\`/g,'')}\`)">Edit</button>
+        <button class="btn btn-red btn-sm" style="margin-left:4px" onclick="delLink('${l.prefix}','${l.slug}')">Del</button>
       </td>
     </tr>`;
   }).join('');
@@ -537,8 +537,8 @@ function startEdit(pfx, slg, url) {
   for (const row of rows) {
     if (row.cells[0].textContent.trim()===short) {
       row.cells[1].innerHTML =
-        `<input class="edit-inp" id="ei-\${pfx}-\${slg}" value="">` +
-        `<button class="btn btn-green btn-sm" style="margin-left:6px" onclick="saveEdit('\${pfx}','\${slg}')">Save</button>` +
+        `<input class="edit-inp" id="ei-${pfx}-${slg}" value="">` +
+        `<button class="btn btn-green btn-sm" style="margin-left:6px" onclick="saveEdit('${pfx}','${slg}')">Save</button>` +
         `<button class="btn btn-gray btn-sm" style="margin-left:4px" onclick="renderLinks()">&#x2715;</button>`;
       const inp = document.getElementById('ei-'+pfx+'-'+slg);
       inp.value = url;
