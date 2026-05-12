@@ -2699,27 +2699,18 @@ class FeedbackBot(discord.Client):
                     except Exception:
                         pass
 
-                # 2. Live patron count
-                if PATREON_ACCESS_TOKEN:
-                    try:
-                        loop = asyncio.get_event_loop()
-                        patrons = await loop.run_in_executor(None, _fetch_top_patrons, 1000)
-                        statuses.append(discord.Activity(type=discord.ActivityType.watching, name=f"{len(patrons)} patrons"))
-                    except Exception:
-                        pass
-
-                # 3. Live server member count
+                # 2. Live server member count
                 if GUILD_ID:
                     guild = self.get_guild(int(GUILD_ID))
                     if guild:
                         statuses.append(discord.Activity(type=discord.ActivityType.watching, name=f"{guild.member_count} devs 🎮"))
 
-                # 4. Fixed statuses
+                # 3. Fixed statuses
                 statuses.append(discord.Activity(type=discord.ActivityType.listening, name="LocoDev"))
                 statuses.append(discord.Activity(type=discord.ActivityType.watching, name="UE5 Devs build"))
                 statuses.append(discord.Game(name="Unreal Engine 5"))
 
-                # 5. Fixed "Ask me anything! :)"
+                # 4. Fixed "Ask me anything! :)"
                 ask_phrase = "Ask me anything! :)"
                 statuses.append(discord.Activity(type=discord.ActivityType.listening, name=ask_phrase))
 
