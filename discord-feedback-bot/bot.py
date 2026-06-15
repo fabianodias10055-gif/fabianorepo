@@ -39,6 +39,9 @@ LINK_MANAGEMENT_CHANNEL_ID = int(os.getenv("LINK_MANAGEMENT_CHANNEL_ID", "149037
 MIRROR_SOURCE_CHANNEL_ID = int(os.getenv("MIRROR_SOURCE_CHANNEL_ID", "1160715880787869729"))
 MIRROR_DEST_CHANNEL_ID = int(os.getenv("MIRROR_DEST_CHANNEL_ID", "1499029543078465696"))
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
+# Proactive KB auto-reply thresholds
+KB_AUTO_MIN_SCORE = int(os.getenv("KB_AUTO_MIN_SCORE", "3"))   # min non-stopword word overlap
+KB_AUTO_COOLDOWN = int(os.getenv("KB_AUTO_COOLDOWN", "120"))   # seconds between KB replies per user per channel
 # Spam detection thresholds (image-only flood across channels)
 SPAM_IMAGE_COUNT = int(os.getenv("SPAM_IMAGE_COUNT", "3"))      # image-only msgs within window
 SPAM_IMAGE_CHANNELS = int(os.getenv("SPAM_IMAGE_CHANNELS", "2")) # across this many channels
@@ -2679,6 +2682,9 @@ class FeedbackBot(discord.Client):
         self._spam_tracker: dict[int, collections.deque] = {}
         # Users already actioned this session (avoid double-kick)
         self._spam_actioned: set[int] = set()
+        # Proactive KB auto-reply state
+        self._kb_auto_replied: set[int] = set()                                # message IDs already answered
+        self._kb_auto_cooldown: dict[tuple[int, int], float] = {}             # (user_id, channel_id) → timestamp
 
     def _clean_post_title(self, title: str) -> str:
         import re
@@ -3333,6 +3339,57 @@ class FeedbackBot(discord.Client):
 
         logger.info("Spam punished: user=%s kicked=%s deleted=%d", member, kicked, deleted)
 
+    async def _try_kb_auto_reply(self, message: discord.Message) -> bool:
+        """Proactively reply with a KB match when a support-channel message looks like a question.
+
+        Returns True if a reply was sent so the caller can short-circuit.
+        """
+        import time as _t
+        text = message.content.strip()
+        # Skip very short messages and ones that are obviously not questions
+        if len(text) < 10:
+            return False
+        if not _looks_like_question(text):
+            return False
+        if message.id in self._kb_auto_replied:
+            return False
+
+        # Per-(user, channel) cooldown so the bot doesn't repeat itself
+        key = (message.author.id, message.channel.id)
+        now = _t.time()
+        if now - self._kb_auto_cooldown.get(key, 0.0) < KB_AUTO_COOLDOWN:
+            return False
+
+        matches = _kb_search_scored(text, top_n=1, min_score=KB_AUTO_MIN_SCORE)
+        if not matches:
+            return False
+
+        score, entry = matches[0]
+        answer = entry["answer"]
+        kb_question = entry["question"]
+        images = entry.get("images") or []
+
+        reply_text = f"📚 **From our FAQ:**\n{answer}"
+        if len(reply_text) > 1900:
+            reply_text = reply_text[:1897] + "…"
+
+        try:
+            await message.reply(reply_text, mention_author=False)
+            if images:
+                await message.channel.send("\n".join(images[:4]))
+            self._kb_auto_replied.add(message.id)
+            if len(self._kb_auto_replied) > 500:
+                self._kb_auto_replied.clear()
+            self._kb_auto_cooldown[key] = now
+            if len(self._kb_auto_cooldown) > 500:
+                cutoff = now - KB_AUTO_COOLDOWN
+                self._kb_auto_cooldown = {k: v for k, v in self._kb_auto_cooldown.items() if v > cutoff}
+            logger.info("KB auto-reply to %s (score=%d): %s", message.author, score, kb_question[:60])
+            return True
+        except Exception as _e:
+            logger.warning("KB auto-reply error: %s", _e)
+            return False
+
     async def on_message(self, message: discord.Message) -> None:
         # Mirror all messages from the source channel to the backup channel.
         if message.channel.id == MIRROR_SOURCE_CHANNEL_ID and MIRROR_DEST_CHANNEL_ID:
@@ -3377,6 +3434,9 @@ class FeedbackBot(discord.Client):
             except Exception:
                 pass
         if not is_mention and not is_reply_to_bot:
+            # Proactively answer questions in support channels from the KB
+            if message.channel.id in KB_CHANNEL_IDS:
+                await self._try_kb_auto_reply(message)
             return
         if not ANTHROPIC_API_KEY:
             return
@@ -4397,6 +4457,45 @@ def _kb_search(query: str, top_n: int = 3) -> list[dict]:
             scored.append((score, e))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [e for _, e in scored[:top_n]]
+
+_KB_STOPWORDS = {
+    "i", "a", "an", "the", "is", "it", "in", "of", "to", "my", "me",
+    "do", "can", "be", "for", "how", "what", "where", "when", "why",
+    "who", "will", "are", "have", "has", "was", "not", "that", "this",
+    "on", "at", "by", "or", "and", "but", "if", "as", "with", "from",
+    "any", "you", "your", "we", "they", "their", "there", "just", "im",
+    "i'm", "its", "it's", "get", "got", "so", "up", "out", "about",
+    "also", "some", "all", "no", "need", "want", "like", "more",
+}
+_KB_QUESTION_STARTERS = {
+    "how", "what", "why", "where", "when", "can", "could", "does", "do",
+    "is", "are", "will", "would", "should", "which", "who", "any",
+    "help", "having", "having", "getting", "trying", "unable",
+}
+
+def _looks_like_question(text: str) -> bool:
+    """Return True if text is plausibly a question or support request."""
+    if "?" in text:
+        return True
+    words = text.lower().split()
+    return bool(words) and words[0] in _KB_QUESTION_STARTERS and len(words) >= 4
+
+def _kb_search_scored(query: str, top_n: int = 3, min_score: int = 1) -> list[tuple[int, dict]]:
+    """Like _kb_search but filters stopwords, returns (score, entry) pairs, min_score enforced."""
+    entries = _kb_load()
+    query_words = {w.strip("?.,!") for w in query.lower().split()
+                   if w not in _KB_STOPWORDS and len(w) > 2}
+    if not query_words:
+        return []
+    scored = []
+    for e in entries:
+        q_words = {w for w in e["question"].lower().split()
+                   if w not in _KB_STOPWORDS and len(w) > 2}
+        score = len(query_words & q_words)
+        if score >= min_score:
+            scored.append((score, e))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored[:top_n]
 
 # ── Event trackers for scheduled summaries ──────────────────────────────────
 _EVENTS_LOG_PATH = "/app/data/patreon_events.json"
