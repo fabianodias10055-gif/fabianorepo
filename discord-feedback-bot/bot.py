@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import csv
 import json
 import logging
@@ -38,6 +39,14 @@ LINK_MANAGEMENT_CHANNEL_ID = int(os.getenv("LINK_MANAGEMENT_CHANNEL_ID", "149037
 MIRROR_SOURCE_CHANNEL_ID = int(os.getenv("MIRROR_SOURCE_CHANNEL_ID", "1160715880787869729"))
 MIRROR_DEST_CHANNEL_ID = int(os.getenv("MIRROR_DEST_CHANNEL_ID", "1499029543078465696"))
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
+# Spam detection thresholds (image-only flood across channels)
+SPAM_IMAGE_COUNT = int(os.getenv("SPAM_IMAGE_COUNT", "3"))      # image-only msgs within window
+SPAM_IMAGE_CHANNELS = int(os.getenv("SPAM_IMAGE_CHANNELS", "2")) # across this many channels
+SPAM_IMAGE_WINDOW = int(os.getenv("SPAM_IMAGE_WINDOW", "15"))    # seconds
+# General cross-channel flood
+SPAM_MSG_COUNT = int(os.getenv("SPAM_MSG_COUNT", "6"))           # any msgs within window
+SPAM_MSG_CHANNELS = int(os.getenv("SPAM_MSG_CHANNELS", "3"))     # across this many channels
+SPAM_MSG_WINDOW = int(os.getenv("SPAM_MSG_WINDOW", "10"))        # seconds
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 PUSHOVER_USER_KEY = os.getenv("PUSHOVER_USER_KEY", "")
 PUSHOVER_API_TOKEN = os.getenv("PUSHOVER_API_TOKEN", "")
@@ -2666,6 +2675,10 @@ class FeedbackBot(discord.Client):
         self._ue_seen_video_ids: set[str] = set()
         self._conversation_history: dict[int, list[dict]] = {}
         self._processed_messages: set[int] = set()
+        # Spam detection: user_id → deque of (datetime, channel_id, Message, is_image_only)
+        self._spam_tracker: dict[int, collections.deque] = {}
+        # Users already actioned this session (avoid double-kick)
+        self._spam_actioned: set[int] = set()
 
     def _clean_post_title(self, title: str) -> str:
         import re
@@ -3196,6 +3209,119 @@ class FeedbackBot(discord.Client):
         except Exception as _uce:
             logger.warning("Mirror username error: %s", _uce)
 
+    # ── Spam detection ────────────────────────────────────────────────────────
+
+    async def _check_spam(self, message: discord.Message) -> bool:
+        """Track message; return True and take action if spam is detected."""
+        if not message.guild:
+            return False
+        member = message.author
+        if not isinstance(member, discord.Member):
+            return False
+        # Never action admins or the server owner
+        if member.guild_permissions.administrator or member.id == message.guild.owner_id:
+            return False
+
+        uid = member.id
+        now = datetime.now(timezone.utc)
+        is_image_only = bool(message.attachments) and not message.content.strip()
+
+        deque = self._spam_tracker.setdefault(uid, collections.deque())
+        deque.append((now, message.channel.id, message, is_image_only))
+
+        # Drop entries older than the longest window we care about
+        max_window = max(SPAM_IMAGE_WINDOW, SPAM_MSG_WINDOW)
+        while deque and (now - deque[0][0]).total_seconds() > max_window:
+            deque.popleft()
+
+        if uid in self._spam_actioned:
+            # Already kicked — just silently delete any new messages they sneak in
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return True
+
+        recent = list(deque)
+
+        # Image-only flood check
+        img_recent = [e for e in recent if e[3] and (now - e[0]).total_seconds() <= SPAM_IMAGE_WINDOW]
+        img_channels = len({e[1] for e in img_recent})
+
+        # General cross-channel flood check
+        msg_recent = [e for e in recent if (now - e[0]).total_seconds() <= SPAM_MSG_WINDOW]
+        msg_channels = len({e[1] for e in msg_recent})
+
+        is_spam = (
+            (len(img_recent) >= SPAM_IMAGE_COUNT and img_channels >= SPAM_IMAGE_CHANNELS) or
+            (len(msg_recent) >= SPAM_MSG_COUNT and msg_channels >= SPAM_MSG_CHANNELS)
+        )
+        if not is_spam:
+            return False
+
+        self._spam_actioned.add(uid)
+        await self._punish_spammer(member, recent)
+        return True
+
+    async def _punish_spammer(self, member: discord.Member, entries: list) -> None:
+        """Delete all tracked messages, kick the member, and log the action."""
+        # 1. Delete every tracked message
+        deleted = 0
+        by_channel: dict[int, list] = {}
+        for _ts, cid, msg, _ in entries:
+            by_channel.setdefault(cid, []).append(msg)
+
+        for cid, msgs in by_channel.items():
+            ch = self.get_channel(cid)
+            if not ch:
+                continue
+            for msg in msgs:
+                try:
+                    await msg.delete()
+                    deleted += 1
+                except Exception:
+                    pass
+
+        # 2. Kick
+        kicked = False
+        try:
+            await member.kick(reason="Auto-spam: cross-channel image/message flood")
+            kicked = True
+        except Exception as ke:
+            logger.warning("Spam kick failed for %s: %s", member, ke)
+
+        channels_hit = {e[1] for e in entries}
+        img_count = sum(1 for e in entries if e[3])
+
+        # 3. Private log in mirror/backup channel
+        log_ch = await self._mirror_dest()
+        if log_ch:
+            lines = [
+                "🚨 **SPAM AUTO-ACTION**",
+                f"**User:** {member.mention} (**{member}** — ID: `{member.id}`)",
+                f"**Messages detected:** {len(entries)} across {len(channels_hit)} channel(s)",
+                f"**Image-only messages:** {img_count}",
+                f"**Messages deleted:** {deleted}",
+                f"**Kicked:** {'✅ Yes' if kicked else '❌ Failed — check bot permissions'}",
+            ]
+            try:
+                await log_ch.send("\n".join(lines))
+            except Exception:
+                pass
+
+        # 4. Public notice in the community channel
+        public_ch = self.get_channel(1158395982485147689)
+        if public_ch and kicked:
+            try:
+                await public_ch.send(
+                    f"⚠️ **{member}** was automatically kicked for spamming images across multiple channels. "
+                    f"Their messages have been removed."
+                )
+            except Exception:
+                pass
+
+        logger.info("Spam punished: user=%s kicked=%s deleted=%d", member, kicked, deleted)
+
     async def on_message(self, message: discord.Message) -> None:
         # Mirror all messages from the source channel to the backup channel.
         if message.channel.id == MIRROR_SOURCE_CHANNEL_ID and MIRROR_DEST_CHANNEL_ID:
@@ -3224,6 +3350,10 @@ class FeedbackBot(discord.Client):
                 logger.warning("Mirror error: %s", _me)
 
         if message.author.bot:
+            return
+
+        # Spam detection runs on every non-bot message
+        if await self._check_spam(message):
             return
         # Trigger if bot is @mentioned OR if someone replies to one of the bot's messages
         is_mention = self.user in message.mentions
