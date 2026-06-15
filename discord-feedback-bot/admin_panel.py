@@ -199,7 +199,7 @@ async def handle_link_clicks(request: web.Request) -> web.Response:
     """
     if not _check_token(request):
         raise web.HTTPUnauthorized()
-    prefix = request.match_info["prefix"]
+    prefix = request.match_info["prefix"].lower()   # links are stored with a lowercased prefix
     slug = request.match_info["slug"]
     from shortener import _conn
     with _conn() as db:
