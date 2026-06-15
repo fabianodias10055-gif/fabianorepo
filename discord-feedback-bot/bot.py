@@ -3434,8 +3434,14 @@ class FeedbackBot(discord.Client):
             except Exception:
                 pass
         if not is_mention and not is_reply_to_bot:
-            # Proactively answer questions in support channels from the KB
-            if message.channel.id in KB_CHANNEL_IDS:
+            # Proactively answer questions in support channels OR project forum threads
+            in_kb_channel = message.channel.id in KB_CHANNEL_IDS
+            in_project_thread = (
+                PROJECTS_FORUM_CHANNEL_ID
+                and isinstance(message.channel, discord.Thread)
+                and str(getattr(message.channel, "parent_id", None)) == PROJECTS_FORUM_CHANNEL_ID
+            )
+            if in_kb_channel or in_project_thread:
                 await self._try_kb_auto_reply(message)
             return
         if not ANTHROPIC_API_KEY:
