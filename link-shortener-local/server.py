@@ -13,6 +13,9 @@ load_dotenv()
 
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
 PORT = int(os.getenv("PORT", "8080"))
+# Bind to localhost by default so the admin panel isn't exposed to the whole LAN.
+# Set HOST=0.0.0.0 in .env only if you deliberately want network access.
+HOST = os.getenv("HOST", "127.0.0.1")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,10 +38,10 @@ async def main():
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    site = web.TCPSite(runner, HOST, PORT)
     await site.start()
 
-    logger.info("Server running at http://localhost:%d", PORT)
+    logger.info("Server running at http://localhost:%d (bound to %s)", PORT, HOST)
     logger.info("Admin panel:    http://localhost:%d/adminlocoILco", PORT)
 
     await asyncio.Event().wait()

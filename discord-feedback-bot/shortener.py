@@ -8,9 +8,14 @@ import csv
 import hashlib
 import logging
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
+
+# A referrer is just a hostname; strip anything that isn't host-safe so a crafted
+# Referer header can't smuggle HTML (e.g. <img onerror=...>) into the admin UI.
+_REF_SANITIZE = re.compile(r"[^A-Za-z0-9.\-:_\[\]]")
 
 import aiohttp
 from aiohttp import web
@@ -319,7 +324,7 @@ async def _do_redirect(request: web.Request, slug: str, prefix: str) -> web.Resp
     ip = forwarded.split(",")[0].strip() if forwarded else (request.remote or "")
     raw_ref = request.headers.get("Referer", "") or request.headers.get("Referrer", "") or ""
     try:
-        referrer = urlparse(raw_ref).netloc or "direct"
+        referrer = _REF_SANITIZE.sub("", urlparse(raw_ref).netloc)[:128] or "direct"
     except Exception:
         referrer = "direct"
 
