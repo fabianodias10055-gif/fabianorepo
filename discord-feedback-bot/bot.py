@@ -42,6 +42,10 @@ ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
 # Proactive KB auto-reply thresholds
 KB_AUTO_MIN_SCORE = int(os.getenv("KB_AUTO_MIN_SCORE", "3"))   # min non-stopword word overlap
 KB_AUTO_COOLDOWN = int(os.getenv("KB_AUTO_COOLDOWN", "120"))   # seconds between KB replies per user per channel
+# Unanswered-question escalation
+UNANSWERED_ESCALATION_MINUTES = int(os.getenv("UNANSWERED_ESCALATION_MINUTES", "15"))  # 0 disables
+UNANSWERED_ALERT_CHANNEL_ID = int(os.getenv("UNANSWERED_ALERT_CHANNEL_ID", "0")) or None  # falls back to mirror channel
+UNANSWERED_PUSHOVER = os.getenv("UNANSWERED_PUSHOVER", "").lower() in ("1", "true", "yes")  # also ping owner's phone
 # Spam detection thresholds (image-only flood across channels)
 SPAM_IMAGE_COUNT = int(os.getenv("SPAM_IMAGE_COUNT", "3"))      # image-only msgs within window
 SPAM_IMAGE_CHANNELS = int(os.getenv("SPAM_IMAGE_CHANNELS", "2")) # across this many channels
@@ -2685,6 +2689,8 @@ class FeedbackBot(discord.Client):
         # Proactive KB auto-reply state
         self._kb_auto_replied: set[int] = set()                                # message IDs already answered
         self._kb_auto_cooldown: dict[tuple[int, int], float] = {}             # (user_id, channel_id) → timestamp
+        # Unanswered-question escalation: question message IDs with a pending check
+        self._unanswered_scheduled: set[int] = set()
 
     def _clean_post_title(self, title: str) -> str:
         import re
@@ -3082,21 +3088,62 @@ class FeedbackBot(discord.Client):
         else:
             logger.warning("Role 'Member' not found in guild %s", member.guild.name)
 
+    def _reactor_is_staff(self, payload: discord.RawReactionActionEvent) -> bool:
+        """True if the reacting user is the server owner or has the LocoDev role."""
+        if OWNER_DISCORD_ID and payload.user_id == OWNER_DISCORD_ID:
+            return True
+        member = payload.member  # populated for guild reaction-add events
+        if member is None:
+            return False
+        try:
+            return any(r.name == "LocoDev" for r in getattr(member, "roles", []))
+        except Exception:
+            return False
+
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
-        """Save Q&A to knowledge base when ✅ is added to a message in KB channel."""
+        """Save a Q&A to the knowledge base when ✅ is added to an answer.
+
+        Works in the dedicated support channels and in project forum threads.
+        The approved message can be a human reply OR one of the bot's own
+        answers — approving a bot answer lets the KB grow automatically from
+        good AI/FAQ replies. To prevent KB poisoning, only a staff member
+        (server owner or LocoDev role) may approve the bot's own answers.
+        """
         if str(payload.emoji) != _KB_APPROVE_EMOJI:
             return
-        if payload.channel_id not in KB_CHANNEL_IDS:
+        in_kb_channel = payload.channel_id in KB_CHANNEL_IDS
+        channel = self.get_channel(payload.channel_id)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(payload.channel_id)
+            except Exception:
+                return
+        in_project_thread = bool(
+            PROJECTS_FORUM_CHANNEL_ID
+            and isinstance(channel, discord.Thread)
+            and str(getattr(channel, "parent_id", None)) == PROJECTS_FORUM_CHANNEL_ID
+        )
+        if not (in_kb_channel or in_project_thread):
             return
         try:
-            channel = self.get_channel(payload.channel_id) or await self.fetch_channel(payload.channel_id)
             answer_msg = await channel.fetch_message(payload.message_id)
             # The answer must be a reply to a question
             if not answer_msg.reference:
                 return
+
+            is_bot_answer = bool(self.user) and answer_msg.author.id == self.user.id
+            if is_bot_answer and not self._reactor_is_staff(payload):
+                # Only staff may curate the bot's own answers into the KB
+                return
+
             question_msg = await channel.fetch_message(answer_msg.reference.message_id)
             question = question_msg.content.strip()
             answer = answer_msg.content.strip()
+            # Strip the bot's own FAQ prefix so the stored answer is clean
+            if is_bot_answer:
+                _faq_prefix = "📚 **From our FAQ:**"
+                if answer.startswith(_faq_prefix):
+                    answer = answer[len(_faq_prefix):].lstrip("\n").strip()
             # Collect image URLs from both messages
             images = [
                 a.url for m in (question_msg, answer_msg)
@@ -3104,7 +3151,8 @@ class FeedbackBot(discord.Client):
                 if a.content_type and a.content_type.startswith("image/")
             ]
             if question and answer:
-                _kb_add(question, answer, answer_msg.author.display_name, images=images or None)
+                author_label = "LocoBOT (approved)" if is_bot_answer else answer_msg.author.display_name
+                _kb_add(question, answer, author_label, images=images or None)
                 await answer_msg.add_reaction("📚")  # confirm saved
         except Exception as _ke:
             logger.warning("KB reaction handler error: %s", _ke)
@@ -3390,6 +3438,78 @@ class FeedbackBot(discord.Client):
             logger.warning("KB auto-reply error: %s", _e)
             return False
 
+    async def _unanswered_alert_dest(self):
+        """Resolve the channel where unanswered-question alerts are posted."""
+        cid = UNANSWERED_ALERT_CHANNEL_ID or MIRROR_DEST_CHANNEL_ID
+        if not cid:
+            return None
+        return self.get_channel(cid) or await self.fetch_channel(cid)
+
+    def _schedule_unanswered_check(self, message: discord.Message) -> None:
+        """Start a background timer that escalates the question if it stays ignored."""
+        if UNANSWERED_ESCALATION_MINUTES <= 0:
+            return
+        if message.id in self._unanswered_scheduled:
+            return
+        # Bound the tracking set so long uptimes can't leak it
+        if len(self._unanswered_scheduled) > 1000:
+            self._unanswered_scheduled.clear()
+        self._unanswered_scheduled.add(message.id)
+        asyncio.create_task(self._check_unanswered(message))
+
+    async def _check_unanswered(self, message: discord.Message) -> None:
+        """After a delay, alert staff if nobody (bot or human) answered the question."""
+        try:
+            await asyncio.sleep(UNANSWERED_ESCALATION_MINUTES * 60)
+            channel = message.channel
+            # If the question was deleted in the meantime, drop it silently
+            try:
+                await channel.fetch_message(message.id)
+            except discord.NotFound:
+                return
+            except Exception:
+                pass
+            # Answered if the bot or any user other than the asker posted afterward
+            answered = False
+            try:
+                async for m in channel.history(limit=50, after=discord.Object(id=message.id)):
+                    if m.id == message.id:
+                        continue
+                    if m.author.bot or m.author.id != message.author.id:
+                        answered = True
+                        break
+            except Exception as _he:
+                logger.warning("Unanswered-check history error: %s", _he)
+                return
+            if answered:
+                return
+
+            text = (message.content or "").strip()
+            ch_label = getattr(channel, "mention", None) or f"#{getattr(channel, 'name', channel.id)}"
+            alert = (
+                f"🆘 **Unanswered question** — no reply in {UNANSWERED_ESCALATION_MINUTES} min\n"
+                f"**From:** {message.author.mention} in {ch_label}\n"
+                f"**Q:** {text[:500]}\n"
+                f"**Jump:** {message.jump_url}"
+            )
+            dest = await self._unanswered_alert_dest()
+            if dest:
+                try:
+                    await dest.send(alert)
+                except Exception as _se:
+                    logger.warning("Unanswered alert send failed: %s", _se)
+            if UNANSWERED_PUSHOVER:
+                await _send_pushover(
+                    title="🆘 Unanswered question",
+                    message=f"{message.author.display_name}: {text[:200]}",
+                    sound="none",
+                )
+            logger.info("Escalated unanswered question from %s: %s", message.author, text[:60])
+        except Exception as _e:
+            logger.warning("Unanswered-question check error: %s", _e)
+        finally:
+            self._unanswered_scheduled.discard(message.id)
+
     async def on_message(self, message: discord.Message) -> None:
         # Mirror all messages from the source channel to the backup channel.
         if message.channel.id == MIRROR_SOURCE_CHANNEL_ID and MIRROR_DEST_CHANNEL_ID:
@@ -3442,7 +3562,12 @@ class FeedbackBot(discord.Client):
                 and str(getattr(message.channel, "parent_id", None)) == PROJECTS_FORUM_CHANNEL_ID
             )
             if in_kb_channel or in_project_thread:
-                await self._try_kb_auto_reply(message)
+                replied = await self._try_kb_auto_reply(message)
+                # If neither the bot nor (yet) a human has answered, watch the
+                # question and escalate to staff if it stays ignored.
+                _qtext = message.content.strip()
+                if not replied and len(_qtext) >= 10 and _looks_like_question(_qtext):
+                    self._schedule_unanswered_check(message)
             return
         if not ANTHROPIC_API_KEY:
             return
