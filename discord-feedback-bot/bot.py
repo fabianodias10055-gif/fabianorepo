@@ -3234,6 +3234,17 @@ class FeedbackBot(discord.Client):
         while deque and (now - deque[0][0]).total_seconds() > max_window:
             deque.popleft()
 
+        # Periodically sweep the whole tracker so deques (and the Message objects
+        # they retain) for one-time posters don't accumulate over long uptime.
+        if len(self._spam_tracker) > 200:
+            for _uid in [u for u, dq in self._spam_tracker.items()
+                         if not dq or (now - dq[-1][0]).total_seconds() > max_window]:
+                if _uid != uid:
+                    self._spam_tracker.pop(_uid, None)
+        # Bound the actioned set so it can't grow without limit.
+        if len(self._spam_actioned) > 1000:
+            self._spam_actioned.clear()
+
         if uid in self._spam_actioned:
             # Already kicked — just silently delete any new messages they sneak in
             try:

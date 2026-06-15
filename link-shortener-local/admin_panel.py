@@ -3,9 +3,12 @@ Admin dashboard for locodev.dev link management.
 Served at /admin — protected by ADMIN_SECRET env var (Bearer token auth).
 All link CRUD and analytics are exposed as JSON API endpoints.
 """
+import asyncio
 import logging
 import secrets
+import time
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from aiohttp import web
 
@@ -13,6 +16,24 @@ logger = logging.getLogger("admin_panel")
 
 _admin_secret: str = ""
 _session_token: str = secrets.token_hex(32)   # fresh on each server start
+
+# ── Login brute-force throttling ───────────────────────────────────────────────
+_login_attempts: dict[str, list] = {}   # client ip -> recent failed-attempt timestamps
+_LOGIN_MAX_ATTEMPTS = 5                  # per IP within the window
+_LOGIN_WINDOW = 300                      # seconds
+
+
+def _client_ip(request: web.Request) -> str:
+    fwd = request.headers.get("X-Forwarded-For", "")
+    return (fwd.split(",")[0].strip() if fwd else (request.remote or "?")) or "?"
+
+
+def _is_safe_http_url(url: str) -> bool:
+    """Only allow http/https destinations — blocks javascript:, data:, file:, etc."""
+    try:
+        return urlparse(url).scheme.lower() in ("http", "https")
+    except Exception:
+        return False
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -23,13 +44,26 @@ def _check_token(request: web.Request) -> bool:
 
 
 async def handle_login(request: web.Request) -> web.Response:
+    ip = _client_ip(request)
+    now = time.monotonic()
+    attempts = [t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_WINDOW]
+    if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
+        _login_attempts[ip] = attempts
+        logger.warning("Admin login throttled for %s", ip)
+        raise web.HTTPTooManyRequests(text="Too many attempts. Try again later.")
     try:
         body = await request.json()
     except Exception:
         raise web.HTTPBadRequest(text="Invalid JSON")
     password = body.get("password", "")
     if not _admin_secret or not secrets.compare_digest(password, _admin_secret):
+        attempts.append(now)
+        _login_attempts[ip] = attempts
+        # Small constant delay caps global brute-force throughput even if the
+        # attacker rotates the X-Forwarded-For header to dodge the per-IP limit.
+        await asyncio.sleep(0.5)
         raise web.HTTPUnauthorized(text="Invalid password")
+    _login_attempts.pop(ip, None)   # clear on success
     return web.json_response({"token": _session_token})
 
 
@@ -117,6 +151,8 @@ async def handle_create_link(request: web.Request) -> web.Response:
     url = body.get("url", "").strip()
     if not slug or not url:
         raise web.HTTPBadRequest(text="slug and url are required")
+    if not _is_safe_http_url(url):
+        raise web.HTTPBadRequest(text="url must start with http:// or https://")
     from shortener import create_link
     if not create_link(slug, url, prefix):
         raise web.HTTPConflict(text=f"/{prefix}/{slug} already exists")
@@ -136,6 +172,8 @@ async def handle_update_link(request: web.Request) -> web.Response:
     url = body.get("url", "").strip()
     if not url:
         raise web.HTTPBadRequest(text="url is required")
+    if not _is_safe_http_url(url):
+        raise web.HTTPBadRequest(text="url must start with http:// or https://")
     from shortener import update_link
     if not update_link(slug, url, prefix):
         raise web.HTTPNotFound(text="Link not found")
@@ -155,6 +193,72 @@ async def handle_delete_link(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def handle_link_clicks(request: web.Request) -> web.Response:
+    """GET /adminlocoILco/api/link/{prefix}/{slug}/clicks
+    Returns the link details + every click row (capped at 500, newest first).
+    """
+    if not _check_token(request):
+        raise web.HTTPUnauthorized()
+    prefix = request.match_info["prefix"]
+    slug = request.match_info["slug"]
+    from shortener import _conn
+    with _conn() as db:
+        link = db.execute(
+            "SELECT id, prefix, slug, url, created_at FROM links WHERE prefix=? AND slug=?",
+            (prefix, slug),
+        ).fetchone()
+        if not link:
+            raise web.HTTPNotFound(text="Link not found")
+        total = db.execute(
+            "SELECT COUNT(*) FROM clicks WHERE link_id=?", (link["id"],)
+        ).fetchone()[0]
+        rows = db.execute(
+            """SELECT clicked_at, country, country_code, referrer,
+                      user_agent, ip_hash, timezone
+               FROM clicks WHERE link_id=?
+               ORDER BY clicked_at DESC LIMIT 500""",
+            (link["id"],),
+        ).fetchall()
+    return web.json_response({
+        "link": {
+            "prefix": link["prefix"],
+            "slug": link["slug"],
+            "url": link["url"],
+            "created_at": link["created_at"],
+            "total_clicks": total,
+        },
+        "clicks": [dict(r) for r in rows],
+    })
+
+
+async def handle_clicks_by_country(request: web.Request) -> web.Response:
+    """GET /adminlocoILco/api/clicks/by-country?window=24h|7d|all
+    Returns clicks grouped by country over the chosen window. Used by the chart
+    on blueprint.locodev.dev/app/admin/links.
+    """
+    if not _check_token(request):
+        raise web.HTTPUnauthorized()
+    window = request.query.get("window", "7d")
+    if window == "24h":
+        time_filter = "AND clicked_at >= datetime('now', '-1 day')"
+    elif window == "7d":
+        time_filter = "AND clicked_at >= datetime('now', '-7 days')"
+    elif window == "all":
+        time_filter = ""
+    else:
+        raise web.HTTPBadRequest(text="invalid window (24h|7d|all)")
+    from shortener import _conn
+    with _conn() as db:
+        rows = db.execute(
+            f"""SELECT country, country_code, COUNT(*) AS clicks
+                FROM clicks
+                WHERE country IS NOT NULL AND country != 'Unknown' {time_filter}
+                GROUP BY country, country_code
+                ORDER BY clicks DESC"""
+        ).fetchall()
+    return web.json_response([dict(r) for r in rows])
+
+
 # ── HTML dashboard ────────────────────────────────────────────────────────────
 
 async def handle_admin_html(request: web.Request) -> web.Response:
@@ -170,11 +274,15 @@ def setup_admin_routes(app: web.Application, secret: str):
         logger.warning("ADMIN_SECRET not set — admin panel disabled")
         return
     p = "/adminlocoILco"
-    # Admin routes must be registered BEFORE shortener catch-all routes
+    # Admin routes must be registered BEFORE shortener catch-all routes.
+    # Note: per-link /clicks must be registered BEFORE the {slug:.+} PUT/DELETE
+    # so the static "clicks" suffix takes precedence over the catch-all slug.
     app.router.add_get(p, handle_admin_html)
     app.router.add_post(p + "/login", handle_login)
     app.router.add_get(p + "/api/links", handle_list_links)
     app.router.add_post(p + "/api/links", handle_create_link)
+    app.router.add_get(p + "/api/clicks/by-country", handle_clicks_by_country)
+    app.router.add_get(p + "/api/link/{prefix}/{slug:.+}/clicks", handle_link_clicks)
     app.router.add_put(p + "/api/link/{prefix}/{slug:.+}", handle_update_link)
     app.router.add_delete(p + "/api/link/{prefix}/{slug:.+}", handle_delete_link)
     app.router.add_get(p + "/api/stats", handle_stats)
@@ -387,8 +495,15 @@ input:focus,select:focus{border-color:#4ade80}
 'use strict';
 let TOKEN = localStorage.getItem('adm_tok') || '';
 let links = [];
+let shownLinks = [];   // currently-rendered (filtered+sorted) rows, indexed by table row
 let sKey = 'total_clicks', sDir = -1;
 let timer = null;
+
+// HTML-escape any value that came from the database / a visitor before we drop
+// it into innerHTML. Without this, a click's Referer header (attacker-controlled)
+// could inject <img onerror=...> and run script in the admin's session.
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 async function tryLogin() {
@@ -490,10 +605,10 @@ function renderFeed(clicks) {
     const slug = c.prefix && c.prefix!=='root' ? `/${c.prefix}/${c.slug}` : `/${c.slug}`;
     const t = (c.clicked_at||'').slice(11,19);
     return `<div class="fi">
-      <span class="fi-slug">${slug}</span>
-      <span class="fi-time">${t}</span>
-      <span class="fi-country">${flag} ${c.country||'??'}</span>
-      <span class="fi-ref">${c.referrer||'direct'}</span>
+      <span class="fi-slug">${esc(slug)}</span>
+      <span class="fi-time">${esc(t)}</span>
+      <span class="fi-country">${flag} ${esc(c.country||'??')}</span>
+      <span class="fi-ref">${esc(c.referrer||'direct')}</span>
     </div>`;
   }).join('');
 }
@@ -513,17 +628,19 @@ function renderLinks() {
     const av=a[sKey]??'', bv=b[sKey]??'';
     return typeof av==='number' ? (av-bv)*sDir : String(av).localeCompare(String(bv))*sDir;
   });
-  document.getElementById('tbody').innerHTML = data.map(l => {
+  shownLinks = data;   // row index === position in this array
+  document.getElementById('tbody').innerHTML = data.map((l, i) => {
     const short = l.prefix==='root' ? '/'+l.slug : '/'+l.prefix+'/'+l.slug;
+    const safeShort = esc(short), safeUrl = esc(l.url);
     return `<tr>
-      <td class="td-slug"><a href="https://locodev.dev${short}" target="_blank">${short}</a></td>
-      <td class="td-url" title="${l.url}"><a href="${l.url}" target="_blank">${l.url}</a></td>
+      <td class="td-slug"><a href="https://locodev.dev${safeShort}" target="_blank">${safeShort}</a></td>
+      <td class="td-url" title="${safeUrl}"><a href="${safeUrl}" target="_blank">${safeUrl}</a></td>
       <td class="td-num ${l.clicks_1h>0?'hot':''}">${l.clicks_1h||0}</td>
       <td class="td-num ${l.clicks_7d>4?'hot':''}">${l.clicks_7d||0}</td>
       <td class="td-num">${l.total_clicks||0}</td>
       <td class="td-act">
-        <button class="btn btn-gray btn-sm" onclick="startEdit('${l.prefix}','${l.slug}',\`${l.url.replace(/\`/g,'')}\`)">Edit</button>
-        <button class="btn btn-red btn-sm" style="margin-left:4px" onclick="delLink('${l.prefix}','${l.slug}')">Del</button>
+        <button class="btn btn-gray btn-sm" onclick="startEdit(${i})">Edit</button>
+        <button class="btn btn-red btn-sm" style="margin-left:4px" onclick="delLink(${i})">Del</button>
       </td>
     </tr>`;
   }).join('');
@@ -531,35 +648,41 @@ function renderLinks() {
 
 document.getElementById('search').addEventListener('input', renderLinks);
 
-function startEdit(pfx, slg, url) {
-  const rows = document.getElementById('tbody').querySelectorAll('tr');
-  const short = pfx==='root' ? '/'+slg : '/'+pfx+'/'+slg;
-  for (const row of rows) {
-    if (row.cells[0].textContent.trim()===short) {
-      row.cells[1].innerHTML =
-        `<input class="edit-inp" id="ei-${pfx}-${slg}" value="">` +
-        `<button class="btn btn-green btn-sm" style="margin-left:6px" onclick="saveEdit('${pfx}','${slg}')">Save</button>` +
-        `<button class="btn btn-gray btn-sm" style="margin-left:4px" onclick="renderLinks()">&#x2715;</button>`;
-      const inp = document.getElementById('ei-'+pfx+'-'+slg);
-      inp.value = url;
-      inp.focus();
-      break;
-    }
-  }
+function startEdit(i) {
+  const l = shownLinks[i];
+  const row = document.getElementById('tbody').rows[i];
+  if (!l || !row) return;
+  row.cells[1].innerHTML =
+    `<input class="edit-inp" id="ei-edit" value="">` +
+    `<button class="btn btn-green btn-sm" style="margin-left:6px" onclick="saveEdit(${i})">Save</button>` +
+    `<button class="btn btn-gray btn-sm" style="margin-left:4px" onclick="renderLinks()">&#x2715;</button>`;
+  const inp = document.getElementById('ei-edit');
+  inp.value = l.url;   // assigning to .value is safe (not parsed as HTML)
+  inp.focus();
 }
 
-async function saveEdit(pfx, slg) {
-  const inp = document.getElementById('ei-'+pfx+'-'+slg);
-  if (!inp) return;
-  const r = await req('PUT', '/adminlocoILco/api/link/'+pfx+'/'+slg, {url:inp.value.trim()});
+function _linkPath(l) {
+  // Slugs may legitimately contain '/' (e.g. download/foo/abc123), so encode each
+  // path segment individually to keep the separators intact for the {slug:.+} route.
+  const encSlug = String(l.slug).split('/').map(encodeURIComponent).join('/');
+  return encodeURIComponent(l.prefix) + '/' + encSlug;
+}
+
+async function saveEdit(i) {
+  const l = shownLinks[i];
+  const inp = document.getElementById('ei-edit');
+  if (!l || !inp) return;
+  const r = await req('PUT', '/adminlocoILco/api/link/'+_linkPath(l), {url:inp.value.trim()});
   if (r && r.ok) { toast('Updated', 'ok'); refresh(); }
   else toast('Update failed', 'err');
 }
 
-async function delLink(pfx, slg) {
-  const short = pfx==='root' ? '/'+slg : '/'+pfx+'/'+slg;
+async function delLink(i) {
+  const l = shownLinks[i];
+  if (!l) return;
+  const short = l.prefix==='root' ? '/'+l.slug : '/'+l.prefix+'/'+l.slug;
   if (!confirm('Delete '+short+'?')) return;
-  const r = await req('DELETE', '/adminlocoILco/api/link/'+pfx+'/'+slg);
+  const r = await req('DELETE', '/adminlocoILco/api/link/'+_linkPath(l));
   if (r && r.ok) { toast('Deleted', 'ok'); refresh(); }
   else toast('Delete failed', 'err');
 }
