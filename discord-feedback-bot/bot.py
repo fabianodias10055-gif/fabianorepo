@@ -3265,6 +3265,69 @@ class FeedbackBot(discord.Client):
 
     # ── Spam detection ────────────────────────────────────────────────────────
 
+    async def _check_invite_link(self, message: discord.Message) -> bool:
+        """Delete unsolicited Discord invite links and timeout the sender.
+
+        Returns True if the message was actioned so the caller can skip
+        further processing.  Staff (admins, server owner, LocoDev role) are
+        always exempt.
+        """
+        import re as _re
+        if not message.guild:
+            return False
+        member = message.author
+        if not isinstance(member, discord.Member):
+            return False
+        if member.guild_permissions.administrator or member.id == message.guild.owner_id:
+            return False
+        if any(r.name == "LocoDev" for r in getattr(member, "roles", [])):
+            return False
+
+        text = message.content or ""
+        # Catch discord.gg/xxx and discord.com/invite/xxx
+        _invite_re = re.compile(
+            r"(?:https?://)?(?:www\.)?discord(?:\.gg|(?:app)?\.com/invite)/[\w-]+",
+            re.IGNORECASE,
+        )
+        if not _invite_re.search(text):
+            return False
+
+        # Delete the message immediately
+        try:
+            await message.delete()
+        except Exception as _de:
+            logger.warning("Invite-link delete failed: %s", _de)
+
+        # Timeout for 10 minutes so the user can't immediately re-post
+        timed_out = False
+        try:
+            from datetime import timedelta as _td, timezone as _tz
+            until = datetime.now(_tz.utc) + _td(minutes=10)
+            await member.timeout(until, reason="Auto-mod: posted an unsolicited server invite link")
+            timed_out = True
+        except Exception as _te:
+            logger.warning("Invite-link timeout failed for %s: %s", member, _te)
+
+        # Log to mirror/backup channel
+        log_ch = await self._mirror_dest()
+        if log_ch:
+            try:
+                invite_url = _invite_re.search(text).group(0)
+                lines = [
+                    "🔗 **INVITE LINK REMOVED**",
+                    f"**User:** {member.mention} (**{member}** — ID: `{member.id}`)",
+                    f"**Channel:** {message.channel.mention}",
+                    f"**Link:** `{invite_url}`",
+                    f"**Timed out 10 min:** {'✅ Yes' if timed_out else '❌ Failed — check bot permissions'}",
+                    f"**Original message:** {text[:400]}",
+                ]
+                await log_ch.send("\n".join(lines))
+            except Exception as _le:
+                logger.warning("Invite-link log error: %s", _le)
+
+        logger.info("Invite link removed from %s in #%s — timed_out=%s", member, message.channel, timed_out)
+        return True
+
     async def _check_spam(self, message: discord.Message) -> bool:
         """Track message; return True and take action if spam is detected."""
         if not message.guild:
@@ -3538,6 +3601,10 @@ class FeedbackBot(discord.Client):
                 logger.warning("Mirror error: %s", _me)
 
         if message.author.bot:
+            return
+
+        # Invite-link filter — runs before flood check so a single drop is caught
+        if await self._check_invite_link(message):
             return
 
         # Spam detection runs on every non-bot message
