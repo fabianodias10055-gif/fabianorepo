@@ -42,6 +42,11 @@ ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
 # Proactive KB auto-reply thresholds
 KB_AUTO_MIN_SCORE = int(os.getenv("KB_AUTO_MIN_SCORE", "3"))   # min non-stopword word overlap
 KB_AUTO_COOLDOWN = int(os.getenv("KB_AUTO_COOLDOWN", "120"))   # seconds between KB replies per user per channel
+# Whether to attach a KB entry's stored images to FAQ auto-replies. Off by
+# default because historical entries also stored the asker's own question
+# screenshots, which made the bot post unrelated images. Re-enable once the
+# stored KB images are curated.
+KB_POST_IMAGES = os.getenv("KB_POST_IMAGES", "").lower() in ("1", "true", "yes")
 # Unanswered-question escalation
 UNANSWERED_ESCALATION_MINUTES = int(os.getenv("UNANSWERED_ESCALATION_MINUTES", "15"))  # 0 disables
 UNANSWERED_ALERT_CHANNEL_ID = int(os.getenv("UNANSWERED_ALERT_CHANNEL_ID", "0")) or None  # falls back to mirror channel
@@ -2232,8 +2237,7 @@ async def kb_scan_slash(interaction: discord.Interaction, limit: int = 500) -> N
                     question = question_msg.content.strip()
                     answer = msg.content.strip()
                     images = [
-                        a.url for m in (question_msg, msg)
-                        for a in m.attachments
+                        a.url for a in msg.attachments
                         if a.content_type and a.content_type.startswith("image/")
                     ]
                     if question and answer:
@@ -3144,10 +3148,10 @@ class FeedbackBot(discord.Client):
                 _faq_prefix = "📚 **From our FAQ:**"
                 if answer.startswith(_faq_prefix):
                     answer = answer[len(_faq_prefix):].lstrip("\n").strip()
-            # Collect image URLs from both messages
+            # Store only the ANSWER message's images. The asker's own question
+            # screenshots are usually irrelevant to resurface on a later question.
             images = [
-                a.url for m in (question_msg, answer_msg)
-                for a in m.attachments
+                a.url for a in answer_msg.attachments
                 if a.content_type and a.content_type.startswith("image/")
             ]
             if question and answer:
@@ -3486,7 +3490,7 @@ class FeedbackBot(discord.Client):
 
         try:
             await message.reply(reply_text, mention_author=False)
-            if images:
+            if KB_POST_IMAGES and images:
                 await message.channel.send("\n".join(images[:4]))
             self._kb_auto_replied.add(message.id)
             if len(self._kb_auto_replied) > 500:
@@ -4055,7 +4059,6 @@ class FeedbackBot(discord.Client):
 
         # Search knowledge base for relevant past Q&A
         kb_context = ""
-        kb_images: list[str] = []
         if question:
             kb_matches = _kb_search(question, top_n=3)
             if kb_matches:
@@ -4065,9 +4068,6 @@ class FeedbackBot(discord.Client):
                     for e in kb_matches
                 ]
                 kb_context = "\n\n".join(kb_lines)
-                # Collect all images from matching KB entries to send after the reply
-                for e in kb_matches:
-                    kb_images.extend(e.get("images") or [])
 
         # Build the final text prompt, including context from replied-to message
         parts = []
@@ -4565,12 +4565,12 @@ class FeedbackBot(discord.Client):
                 # Send link creation results as follow-up (only if not already consumed above)
                 if _link_results:
                     await message.channel.send("\n".join(_link_results))
-                # Send KB images as follow-up if any
-                if kb_images:
-                    try:
-                        await message.channel.send("\n".join(kb_images[:4]))
-                    except Exception as _ie:
-                        logger.warning("Failed to send KB images: %s", _ie)
+                # NOTE: KB-entry images are intentionally NOT auto-posted here.
+                # The fuzzy KB match often pulled in loosely-related entries — and
+                # their stored images included the original asker's screenshots — so
+                # the bot tacked a random, unrelated image onto nearly every answer.
+                # Claude still receives the image URLs inside kb_context and can link
+                # one itself when it's genuinely relevant.
             except Exception as exc:
                 logger.warning("AI responder error: %s", exc, exc_info=True)
                 if _is_owner:
