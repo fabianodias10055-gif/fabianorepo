@@ -16,16 +16,27 @@ logger = logging.getLogger("admin_panel")
 
 _admin_secret: str = ""
 _session_token: str = secrets.token_hex(32)   # fresh on each server start
+_session_issued_at: float = 0.0               # monotonic time the token was last (re)issued
+_TOKEN_TTL = 12 * 3600                         # token is valid at most 12h after login
 
 # ── Login brute-force throttling ───────────────────────────────────────────────
-_login_attempts: dict[str, list] = {}   # client ip -> recent failed-attempt timestamps
-_LOGIN_MAX_ATTEMPTS = 5                  # per IP within the window
+# Per-peer counters are best-effort only (a proxied/​spoofed client key can dodge
+# them), so the real protection is a GLOBAL failed-attempt ceiling plus a lock
+# that serializes verification — an attacker cannot outrun it with concurrency.
+_login_attempts: dict[str, list] = {}   # peer -> recent failed-attempt monotonic timestamps
+_login_failures_global: list = []       # recent failed-attempt timestamps across all peers
+_login_lock = asyncio.Lock()
+_LOGIN_MAX_ATTEMPTS = 5                  # per peer within the window
+_LOGIN_MAX_GLOBAL = 30                  # across all peers within the window (anti-spoof backstop)
 _LOGIN_WINDOW = 300                      # seconds
+_LOGIN_ATTEMPTS_MAXKEYS = 4096          # cap the dict so forged keys can't exhaust memory
 
 
 def _client_ip(request: web.Request) -> str:
-    fwd = request.headers.get("X-Forwarded-For", "")
-    return (fwd.split(",")[0].strip() if fwd else (request.remote or "?")) or "?"
+    # request.remote is the actual socket peer (the proxy in prod); it cannot be
+    # spoofed by a header the way X-Forwarded-For can. Used only for logging and
+    # best-effort per-peer counting — never as the sole rate-limit key.
+    return (request.remote or "?") or "?"
 
 
 def _is_safe_http_url(url: str) -> bool:
@@ -40,30 +51,53 @@ def _is_safe_http_url(url: str) -> bool:
 
 def _check_token(request: web.Request) -> bool:
     auth = request.headers.get("Authorization", "")
-    return auth.startswith("Bearer ") and secrets.compare_digest(auth[7:], _session_token)
+    if not auth.startswith("Bearer "):
+        return False
+    if _session_issued_at and (time.monotonic() - _session_issued_at) > _TOKEN_TTL:
+        return False  # expired — force re-login
+    return secrets.compare_digest(auth[7:], _session_token)
 
 
 async def handle_login(request: web.Request) -> web.Response:
+    global _session_issued_at, _login_failures_global
     ip = _client_ip(request)
-    now = time.monotonic()
-    attempts = [t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_WINDOW]
-    if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
-        _login_attempts[ip] = attempts
-        logger.warning("Admin login throttled for %s", ip)
-        raise web.HTTPTooManyRequests(text="Too many attempts. Try again later.")
-    try:
-        body = await request.json()
-    except Exception:
-        raise web.HTTPBadRequest(text="Invalid JSON")
-    password = body.get("password", "")
-    if not _admin_secret or not secrets.compare_digest(password, _admin_secret):
-        attempts.append(now)
-        _login_attempts[ip] = attempts
-        # Small constant delay caps global brute-force throughput even if the
-        # attacker rotates the X-Forwarded-For header to dodge the per-IP limit.
-        await asyncio.sleep(0.5)
-        raise web.HTTPUnauthorized(text="Invalid password")
-    _login_attempts.pop(ip, None)   # clear on success
+    # Serialize verification so N concurrent connections can't each slip a guess
+    # through before the counters update.
+    async with _login_lock:
+        now = time.monotonic()
+        _login_failures_global = [t for t in _login_failures_global if now - t < _LOGIN_WINDOW]
+        attempts = [t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_WINDOW]
+        # Global ceiling: the real anti-brute-force backstop, key-independent.
+        if len(_login_failures_global) >= _LOGIN_MAX_GLOBAL:
+            logger.warning("Admin login globally throttled (%d recent failures)", len(_login_failures_global))
+            raise web.HTTPTooManyRequests(text="Too many attempts. Try again later.")
+        if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
+            _login_attempts[ip] = attempts
+            logger.warning("Admin login throttled for %s", ip)
+            raise web.HTTPTooManyRequests(text="Too many attempts. Try again later.")
+        try:
+            body = await request.json()
+        except Exception:
+            raise web.HTTPBadRequest(text="Invalid JSON")
+        password = body.get("password", "")
+        # Compare as bytes so a non-ASCII password can't raise TypeError and
+        # escape the throttling path with an unhandled 500.
+        pw_bytes = password.encode("utf-8") if isinstance(password, str) else b""
+        secret_bytes = _admin_secret.encode("utf-8") if _admin_secret else b""
+        if not secret_bytes or not secrets.compare_digest(pw_bytes, secret_bytes):
+            attempts.append(now)
+            _login_attempts[ip] = attempts
+            _login_failures_global.append(now)
+            # Bound the per-peer dict so forged/rotated peers can't grow it forever.
+            if len(_login_attempts) > _LOGIN_ATTEMPTS_MAXKEYS:
+                for k in [k for k, v in _login_attempts.items()
+                          if not v or now - max(v) >= _LOGIN_WINDOW]:
+                    _login_attempts.pop(k, None)
+            # Backoff scaled by recent global pressure; the lock makes it serialize.
+            await asyncio.sleep(min(0.5 + 0.1 * len(_login_failures_global), 3.0))
+            raise web.HTTPUnauthorized(text="Invalid password")
+        _login_attempts.pop(ip, None)   # clear on success
+        _session_issued_at = now        # (re)start the token TTL on each login
     return web.json_response({"token": _session_token})
 
 
@@ -632,9 +666,16 @@ function renderLinks() {
   document.getElementById('tbody').innerHTML = data.map((l, i) => {
     const short = l.prefix==='root' ? '/'+l.slug : '/'+l.prefix+'/'+l.slug;
     const safeShort = esc(short), safeUrl = esc(l.url);
+    // Only render a clickable href for http(s). esc() neutralizes HTML but NOT
+    // the URL scheme, so a stored javascript:/data: destination would still run
+    // on click — render it as inert text instead.
+    const isHttp = /^https?:\\/\\//i.test(l.url || '');
+    const destCell = isHttp
+      ? `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeUrl}</a>`
+      : safeUrl;
     return `<tr>
-      <td class="td-slug"><a href="https://locodev.dev${safeShort}" target="_blank">${safeShort}</a></td>
-      <td class="td-url" title="${safeUrl}"><a href="${safeUrl}" target="_blank">${safeUrl}</a></td>
+      <td class="td-slug"><a href="https://locodev.dev${safeShort}" target="_blank" rel="noopener noreferrer">${safeShort}</a></td>
+      <td class="td-url" title="${safeUrl}">${destCell}</td>
       <td class="td-num ${l.clicks_1h>0?'hot':''}">${l.clicks_1h||0}</td>
       <td class="td-num ${l.clicks_7d>4?'hot':''}">${l.clicks_7d||0}</td>
       <td class="td-num">${l.total_clicks||0}</td>

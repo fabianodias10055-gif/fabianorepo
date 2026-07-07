@@ -5,6 +5,9 @@ import json
 import logging
 import os
 import re
+import tempfile
+import threading
+import time
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -18,6 +21,28 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "data"
+
+# Serializes all local JSON state writes (KB, Patreon events, webhook-seen).
+_json_write_lock = threading.Lock()
+
+
+def _atomic_write_json(path: str, obj) -> None:
+    """Write JSON to `path` atomically (temp file + os.replace) under a lock, so a
+    crash mid-write or an interleaved writer can't truncate/corrupt the file."""
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    with _json_write_lock:
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp_", suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(obj, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+            raise
 TESTIMONIALS_PATH = OUTPUT_DIR / "testimonials.json"
 MESSAGE_LINK_RE = re.compile(
     r"https://(?:canary\.|ptb\.)?discord(?:app)?\.com/channels/(\d+)/(\d+)/(\d+)"
@@ -42,6 +67,8 @@ ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
 # Proactive KB auto-reply thresholds
 KB_AUTO_MIN_SCORE = int(os.getenv("KB_AUTO_MIN_SCORE", "3"))   # min non-stopword word overlap
 KB_AUTO_COOLDOWN = int(os.getenv("KB_AUTO_COOLDOWN", "120"))   # seconds between KB replies per user per channel
+# Per-user cooldown on the expensive @mention/reply AI path (subprocess + fetches)
+AI_USER_COOLDOWN = int(os.getenv("AI_USER_COOLDOWN", "8"))     # seconds between AI answers per user
 # Whether to attach a KB entry's stored images to FAQ auto-replies. Off by
 # default because historical entries also stored the asker's own question
 # screenshots, which made the bot post unrelated images. Re-enable once the
@@ -1647,7 +1674,11 @@ async def report_command_slash(
     interaction: discord.Interaction,
     type: app_commands.Choice[str],
 ) -> None:
-    await interaction.response.defer(thinking=True)
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
     try:
         loop = asyncio.get_event_loop()
         if type.value == "clicks":
@@ -2149,10 +2180,13 @@ def _send_meta_conversion(name: str, phone: str, email: str, value: float) -> st
                 "value": value,
                 "currency": "BRL",
             },
-        }]
+        }],
+        # Sent in the POST body, not the URL query string, so the token doesn't
+        # land in proxy/access logs or error messages.
+        "access_token": META_ACCESS_TOKEN,
     }).encode()
 
-    url = f"https://graph.facebook.com/v21.0/{META_PIXEL_ID}/events?access_token={META_ACCESS_TOKEN}"
+    url = f"https://graph.facebook.com/v21.0/{META_PIXEL_ID}/events"
     from urllib.error import HTTPError
     req = _req.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
     try:
@@ -2449,6 +2483,66 @@ _ALLOWED_DOWNLOAD_DOMAINS = {
 }
 
 
+# Max bytes to read from any server-side fetch (web page / image) before giving
+# up — prevents a malicious endpoint from OOM-killing the process with a huge body.
+MAX_FETCH_BYTES = 512 * 1024
+# Per-image byte cap and per-message image count cap for the AI vision path.
+MAX_IMAGE_BYTES = 5 * 1024 * 1024   # Claude vision per-image limit is ~5 MB
+MAX_IMAGES_PER_MSG = 4
+
+
+def _url_host_is_public(host: str) -> bool:
+    """True only if EVERY address `host` resolves to is a global/public IP.
+    Blocks SSRF to loopback/link-local/private/reserved ranges (incl. the cloud
+    metadata endpoint and the bot's own localhost admin panel)."""
+    import socket
+    import ipaddress
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+                or not ip.is_global):
+            return False
+    return True
+
+
+def _is_safe_fetch_url(url: str) -> bool:
+    """Gate for server-side URL fetches: http(s) only, resolving to a public IP."""
+    from urllib.parse import urlparse as _up
+    try:
+        p = _up(url)
+    except Exception:
+        return False
+    if p.scheme.lower() not in ("http", "https") or not p.hostname:
+        return False
+    return _url_host_is_public(p.hostname)
+
+
+async def _fetch_capped(session, url, **kwargs):
+    """GET `url` with redirects disabled and the body capped at MAX_FETCH_BYTES.
+    Returns (status, body_bytes) or (None, b'') on error/oversize."""
+    kwargs.setdefault("allow_redirects", False)
+    try:
+        async with session.get(url, **kwargs) as resp:
+            body = await resp.content.read(MAX_FETCH_BYTES + 1)
+            if len(body) > MAX_FETCH_BYTES:
+                logger.warning("Fetch aborted — body exceeds %d bytes: %s", MAX_FETCH_BYTES, url)
+                return None, b""
+            return resp.status, body
+    except Exception as _fe:
+        logger.warning("Capped fetch failed for %s: %s", url, _fe)
+        return None, b""
+
+
 def _random_slug_suffix(length: int = 8) -> str:
     """Random base62 suffix appended to download/ slugs so they're unguessable."""
     import secrets, string
@@ -2503,6 +2597,11 @@ def _check_link_permission(interaction: discord.Interaction, prefix: str, url: s
     roles = [r.name for r in getattr(interaction.user, "roles", [])]
     if "LocoDev" not in roles:
         return "❌ You don't have permission to manage links."
+
+    # Scheme check for EVERY prefix (not just protected ones): a javascript:/data:
+    # destination becomes clickable XSS in the admin dashboard.
+    if url and _urlparse(url).scheme.lower() not in ("http", "https"):
+        return "🚫 Destination URL must start with http:// or https://."
 
     if prefix in _PROTECTED_PREFIXES:
         # Must be the owner
@@ -2676,7 +2775,16 @@ class FeedbackBot(discord.Client):
         intents.guild_messages = True
         intents.message_content = True
         intents.members = True
-        super().__init__(intents=intents)
+        # Default to suppressing ALL mentions the bot emits. The bot echoes
+        # user-controlled content (message mirrors, nickname/username changes,
+        # AI replies, RSS titles); without this, a member could launder an
+        # @everyone / role ping through the bot, which Discord would resolve
+        # with the bot's permissions. Opt back in explicitly where a real ping
+        # is intended.
+        super().__init__(
+            intents=intents,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
         self.tree = app_commands.CommandTree(self)
         self.synced = False
         self._status_task: asyncio.Task | None = None
@@ -2686,6 +2794,8 @@ class FeedbackBot(discord.Client):
         self._ue_seen_video_ids: set[str] = set()
         self._conversation_history: dict[int, list[dict]] = {}
         self._processed_messages: set[int] = set()
+        # Per-user last-AI-call time (monotonic) for the AI-path cooldown
+        self._ai_last_call: dict[int, float] = {}
         # Spam detection: user_id → deque of (datetime, channel_id, Message, is_image_only)
         self._spam_tracker: dict[int, collections.deque] = {}
         # Users already actioned this session (avoid double-kick)
@@ -3136,8 +3246,12 @@ class FeedbackBot(discord.Client):
                 return
 
             is_bot_answer = bool(self.user) and answer_msg.author.id == self.user.id
-            if is_bot_answer and not self._reactor_is_staff(payload):
-                # Only staff may curate the bot's own answers into the KB
+            # Only staff (server owner or LocoDev) may curate ANY answer into the
+            # KB. Human replies must be staff-approved too — otherwise any member
+            # could ✅ their own message and inject arbitrary text that is later
+            # served to users and fed into the AI system prompt (stored prompt
+            # injection / KB poisoning).
+            if not self._reactor_is_staff(payload):
                 return
 
             question_msg = await channel.fetch_message(answer_msg.reference.message_id)
@@ -3287,13 +3401,22 @@ class FeedbackBot(discord.Client):
         if any(r.name == "LocoDev" for r in getattr(member, "roles", [])):
             return False
 
-        text = message.content or ""
-        # Catch discord.gg/xxx and discord.com/invite/xxx
+        # Normalize so simple obfuscation (spaces, zero-width chars, "dot"/"[.]"
+        # tricks) can't slip an invite past the regex.
+        import unicodedata as _ud
+        text = _ud.normalize("NFKC", message.content or "")
+        # Strip whitespace + zero-width / bidi control chars used to break the URL up.
+        _norm = re.sub("[\\s\u200b-\u200f\u202a-\u202e\u2060\ufeff]+", "", text.lower())
+        _norm = _norm.replace("[.]", ".").replace("(.)", ".").replace("(dot)", ".").replace("[dot]", ".").replace(" dot ", ".")
+        # Catch discord.gg/xxx, discord.com/invite/xxx and common alt invite hosts.
         _invite_re = re.compile(
-            r"(?:https?://)?(?:www\.)?discord(?:\.gg|(?:app)?\.com/invite)/[\w-]+",
+            r"(?:https?://)?(?:www\.)?("
+            r"discord(?:\.gg|(?:app)?\.com/invite)"
+            r"|discord\.me|dsc\.gg|invite\.gg|disboard\.org/server/join"
+            r")/[\w-]+",
             re.IGNORECASE,
         )
-        if not _invite_re.search(text):
+        if not (_invite_re.search(text) or _invite_re.search(_norm)):
             return False
 
         # Delete the message immediately
@@ -3649,6 +3772,18 @@ class FeedbackBot(discord.Client):
         if len(self._processed_messages) > 1000:
             self._processed_messages.clear()
 
+        # Per-user rate limit: the AI path spawns yt-dlp subprocesses and outbound
+        # fetches, so a rapid message stream from one account could saturate CPU /
+        # sockets / memory. Drop calls that arrive within the cooldown.
+        _now_mono = time.monotonic()
+        if _now_mono - self._ai_last_call.get(message.author.id, 0.0) < AI_USER_COOLDOWN:
+            return
+        self._ai_last_call[message.author.id] = _now_mono
+        if len(self._ai_last_call) > 5000:
+            self._ai_last_call = {
+                k: v for k, v in self._ai_last_call.items() if _now_mono - v < 3600
+            }
+
         question = message.content.replace(f"<@{self.user.id}>", "").strip()
         _image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
         def _is_image_attachment(a):
@@ -3733,10 +3868,18 @@ class FeedbackBot(discord.Client):
                 except Exception as _te:
                     logger.warning("Could not read text attachment %s: %s", attachment.filename, _te)
             elif _is_image_attachment(attachment):
+                if image_count >= MAX_IMAGES_PER_MSG:
+                    logger.info("Per-message image cap (%d) reached; skipping %s",
+                                MAX_IMAGES_PER_MSG, attachment.filename)
+                    continue
                 async with _aiohttp.ClientSession() as session:
                     async with session.get(attachment.url) as resp:
                         if resp.status == 200:
-                            img_bytes = await resp.read()
+                            img_bytes = await resp.content.read(MAX_IMAGE_BYTES + 1)
+                            if len(img_bytes) > MAX_IMAGE_BYTES:
+                                logger.warning("Skipping oversize image %s (> %d bytes)",
+                                               attachment.filename, MAX_IMAGE_BYTES)
+                                continue
                             import base64 as _base64
                             img_b64 = _base64.b64encode(img_bytes).decode("utf-8")
                             # Detect actual image type from bytes (Discord may report wrong content_type)
@@ -3869,7 +4012,11 @@ class FeedbackBot(discord.Client):
             # Use yt-dlp to get metadata + subtitles in one call
             loop = asyncio.get_event_loop()
             def _get_yt_info():
-                import subprocess, json as _json
+                import subprocess, json as _json, shutil, tempfile
+                # Run in a throwaway dir so the subtitle files yt-dlp writes land
+                # there (not the process CWD) and are deleted afterwards — otherwise
+                # they accumulate forever and can fill the disk.
+                _tmpd = tempfile.mkdtemp(prefix="ytsub_")
                 try:
                     result = subprocess.run(
                         [
@@ -3880,9 +4027,10 @@ class FeedbackBot(discord.Client):
                             "--write-sub",
                             "--sub-lang", "en,pt",
                             "--sub-format", "json3",
+                            "-o", "%(id)s.%(ext)s",
                             f"https://www.youtube.com/watch?v={video_id}",
                         ],
-                        capture_output=True, text=True, timeout=30
+                        capture_output=True, text=True, timeout=30, cwd=_tmpd,
                     )
                     if result.returncode != 0:
                         return {}, ""
@@ -3895,7 +4043,10 @@ class FeedbackBot(discord.Client):
                         sub_info = req_subs.get(lang)
                         if sub_info and sub_info.get("filepath"):
                             try:
-                                with open(sub_info["filepath"], "r", encoding="utf-8") as f:
+                                _fp = sub_info["filepath"]
+                                if not os.path.isabs(_fp):
+                                    _fp = os.path.join(_tmpd, _fp)
+                                with open(_fp, "r", encoding="utf-8") as f:
                                     sub_data = _json.load(f)
                                 events = sub_data.get("events", [])
                                 segments = []
@@ -3913,6 +4064,8 @@ class FeedbackBot(discord.Client):
                 except Exception as e:
                     logger.warning("yt-dlp failed for %s: %s", video_id, e)
                     return {}, ""
+                finally:
+                    shutil.rmtree(_tmpd, ignore_errors=True)
 
             try:
                 yt_info, subs = await loop.run_in_executor(None, _get_yt_info)
@@ -4021,22 +4174,29 @@ class FeedbackBot(discord.Client):
         _other_urls = [u for u in _all_urls if not _re.search(_yt_pattern, u)]
         if _other_urls and not _yt_match:
             url_to_fetch = _other_urls[0]  # fetch the first non-YT URL
-            logger.info("Attempting to fetch web content from: %s", url_to_fetch)
-            try:
-                import aiohttp as _aiohttp
-                async with _aiohttp.ClientSession() as session:
-                    async with session.get(
-                        url_to_fetch,
-                        timeout=_aiohttp.ClientTimeout(total=15),
-                        allow_redirects=True,
-                        headers={
-                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                        }
-                    ) as resp:
-                        logger.info("URL %s returned status %s", url_to_fetch, resp.status)
-                        if resp.status == 200:
-                            html = await resp.text()
+            # SSRF guard: only fetch public http(s) hosts. Blocks localhost / cloud
+            # metadata / internal ranges that a member could otherwise reach and
+            # exfiltrate through the bot's reply.
+            if not _is_safe_fetch_url(url_to_fetch):
+                logger.warning("Refusing to fetch non-public/unsafe URL: %s", url_to_fetch)
+            else:
+                logger.info("Attempting to fetch web content from: %s", url_to_fetch)
+                try:
+                    import aiohttp as _aiohttp
+                    async with _aiohttp.ClientSession() as session:
+                        status, body = await _fetch_capped(
+                            session,
+                            url_to_fetch,
+                            timeout=_aiohttp.ClientTimeout(total=15),
+                            allow_redirects=False,  # no redirect-based allowlist bypass
+                            headers={
+                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                            },
+                        )
+                        logger.info("URL %s returned status %s", url_to_fetch, status)
+                        if status == 200 and body:
+                            html = body.decode("utf-8", errors="replace")
                             from bs4 import BeautifulSoup
                             soup = BeautifulSoup(html, "html.parser")
                             for tag in soup(["script", "style", "nav", "footer", "header"]):
@@ -4048,10 +4208,10 @@ class FeedbackBot(discord.Client):
                             if page_title:
                                 web_context = f"Page title: {page_title}\n\n{web_context}"
                             logger.info("Fetched web content from %s (%d chars)", url_to_fetch, len(web_context))
-                        else:
-                            logger.warning("URL %s returned non-200 status: %s", url_to_fetch, resp.status)
-            except Exception as _we:
-                logger.warning("Failed to fetch URL %s: %s", url_to_fetch, _we)
+                        elif status not in (200, None):
+                            logger.warning("URL %s returned non-200 status: %s", url_to_fetch, status)
+                except Exception as _we:
+                    logger.warning("Failed to fetch URL %s: %s", url_to_fetch, _we)
             # If fetch failed, use Discord embed info as fallback
             if not web_context and _embed_info:
                 web_context = f"Page: {url_to_fetch}\n{_embed_info.strip()}"
@@ -4364,6 +4524,10 @@ class FeedbackBot(discord.Client):
         # Build conversation history for this user (last 10 exchanges)
         user_id = message.author.id
         if user_id not in self._conversation_history:
+            # Bound the number of tracked users so history can't grow unbounded
+            # (every distinct sender, including DMs, would otherwise persist forever).
+            if len(self._conversation_history) >= 2000:
+                self._conversation_history.pop(next(iter(self._conversation_history)), None)
             self._conversation_history[user_id] = []
         history = self._conversation_history[user_id]
         # Store only the raw question in history — NOT the full injected context.
@@ -4603,9 +4767,7 @@ def _load_webhook_seen() -> dict:
 
 def _save_webhook_seen(seen: dict) -> None:
     try:
-        os.makedirs(os.path.dirname(_WEBHOOK_SEEN_PATH), exist_ok=True)
-        with open(_WEBHOOK_SEEN_PATH, "w") as _f:
-            json.dump(seen, _f)
+        _atomic_write_json(_WEBHOOK_SEEN_PATH, seen)
     except Exception as _exc:
         logger.warning("Could not save webhook seen file: %s", _exc)
 
@@ -4621,9 +4783,7 @@ def _kb_load() -> list[dict]:
         return []
 
 def _kb_save(entries: list[dict]) -> None:
-    os.makedirs(os.path.dirname(_KB_PATH), exist_ok=True)
-    with open(_KB_PATH, "w", encoding="utf-8") as f:
-        json.dump(entries, f, ensure_ascii=False, indent=2)
+    _atomic_write_json(_KB_PATH, entries)
 
 def _kb_add(question: str, answer: str, author: str, images: list[str] | None = None) -> None:
     entries = _kb_load()
@@ -4711,9 +4871,7 @@ def _load_events() -> list[dict]:
 
 def _save_events(events: list[dict]) -> None:
     try:
-        os.makedirs(os.path.dirname(_EVENTS_LOG_PATH), exist_ok=True)
-        with open(_EVENTS_LOG_PATH, "w") as f:
-            json.dump(events, f)
+        _atomic_write_json(_EVENTS_LOG_PATH, events)
     except Exception as exc:
         logger.warning("Could not save events log: %s", exc)
 
@@ -4731,13 +4889,20 @@ async def patreon_webhook_handler(request):
     from aiohttp import web
     body = await request.read()
     sig = request.headers.get("X-Patreon-Signature", "")
-    logger.info("Patreon webhook received: event=%s sig=%s body_len=%d",
-                request.headers.get("X-Patreon-Event", ""), sig[:10] if sig else "none", len(body))
-    if PATREON_WEBHOOK_SECRET:
-        expected = hmac.new(PATREON_WEBHOOK_SECRET.encode(), body, hashlib.md5).hexdigest()
-        if not hmac.compare_digest(sig, expected):
-            logger.warning("Patreon webhook signature mismatch — got %s expected %s", sig[:10], expected[:10])
-            return web.Response(status=403, text="Invalid signature")
+    logger.info("Patreon webhook received: event=%s has_sig=%s body_len=%d",
+                request.headers.get("X-Patreon-Event", ""), bool(sig), len(body))
+    # Fail CLOSED: if no secret is configured the endpoint is unauthenticated,
+    # and this handler grants/strips paid Discord roles from the request body.
+    # Refuse to process anything unless we can verify the HMAC signature.
+    if not PATREON_WEBHOOK_SECRET:
+        logger.error("Patreon webhook rejected: PATREON_WEBHOOK_SECRET is not set")
+        return web.Response(status=503, text="Webhook not configured")
+    if not sig:
+        return web.Response(status=403, text="Missing signature")
+    expected = hmac.new(PATREON_WEBHOOK_SECRET.encode(), body, hashlib.md5).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        logger.warning("Patreon webhook signature mismatch")
+        return web.Response(status=403, text="Invalid signature")
     event = request.headers.get("X-Patreon-Event", "")
     try:
         data = json.loads(body)
@@ -4816,6 +4981,12 @@ async def patreon_webhook_handler(request):
         logger.info("Skipping duplicate Patreon event %s for %s", event, member_id)
         return web.Response(status=200, text="OK")
     _patreon_event_cache[cache_key] = now
+    # Evict entries older than the longest dedup window so the cache can't grow
+    # without bound (member_id/event come from the request).
+    if len(_patreon_event_cache) > 512:
+        _evict_before = now - 21600
+        for _k in [k for k, t in _patreon_event_cache.items() if t < _evict_before]:
+            _patreon_event_cache.pop(_k, None)
 
     # Track event for daily and weekly summaries
     from datetime import timezone as _tz
@@ -4928,7 +5099,7 @@ async def patreon_webhook_handler(request):
                         role = discord.utils.get(guild.roles, name=tier_title)
                         if role and role not in member.roles:
                             await member.add_roles(role, reason=f"Patreon {event}")
-                            logger.info("Assigned role '%s' to %s (Discord ID %s)", tier_title, full_name, discord_id)
+                            logger.info("Assigned role '%s' to patreon member %s", tier_title, member_id)
                     elif event == "members:update" and attrs.get("patron_status") == "active_patron" and tier_title in _tier_roles:
                         # Payment received — ensure they still have the correct role
                         role = discord.utils.get(guild.roles, name=tier_title)
@@ -4937,13 +5108,13 @@ async def patreon_webhook_handler(request):
                             if roles_to_remove:
                                 await member.remove_roles(*roles_to_remove, reason="Patreon payment confirmed")
                             await member.add_roles(role, reason="Patreon payment confirmed")
-                            logger.info("Re-assigned role '%s' to %s after payment", tier_title, full_name)
+                            logger.info("Re-assigned role '%s' to patreon member %s after payment", tier_title, member_id)
                     elif event == "members:pledge:delete":
                         # Cancelled — remove all tier roles
                         roles_to_remove = [r for r in member.roles if r.name in _tier_roles]
                         if roles_to_remove:
                             await member.remove_roles(*roles_to_remove, reason="Patreon cancelled")
-                            logger.info("Removed tier roles from %s (Discord ID %s) — cancelled", full_name, discord_id)
+                            logger.info("Removed tier roles from patreon member %s — cancelled", member_id)
             except discord.NotFound:
                 logger.warning("Discord member %s not found in guild for role assignment", discord_id)
             except Exception as _re:
