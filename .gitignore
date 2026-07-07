@@ -1,5 +1,15 @@
 .env
 **/.env
+.env.*
+!.env.example
 *.pyc
 __pycache__/
 discord-feedback-bot/data/
+# Secrets / local state that must never be committed
+*.db
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+*service-account*.json
+*credentials*.json

@@ -6,6 +6,7 @@ Routes are registered on the existing aiohttp server (port 8080).
 import asyncio
 import csv
 import hashlib
+import hmac
 import logging
 import os
 import re
@@ -33,7 +34,19 @@ def hash_ip(ip: str) -> str:
     """Returns a stable opaque identifier for a visitor IP, or '' if unhashable."""
     if not ip or not _IP_SALT:
         return ""
-    return hashlib.sha256(f"{_IP_SALT}:{ip}".encode("utf-8")).hexdigest()
+    # HMAC (keyed) rather than a bare hash: a plain SHA-256 over the small IPv4
+    # space is trivially rainbow-tabled if the DB and salt ever leak.
+    return hmac.new(_IP_SALT.encode("utf-8"), ip.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def is_safe_http_url(url: str) -> bool:
+    """Storage choke point: only http/https destinations may be persisted.
+    Blocks javascript:, data:, file: etc. that would become clickable XSS when
+    rendered as an <a href> in the admin dashboard."""
+    try:
+        return urlparse(url).scheme.lower() in ("http", "https")
+    except Exception:
+        return False
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -41,6 +54,14 @@ def hash_ip(ip: str) -> str:
 def _conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    # WAL lets readers (analytics) and a writer (click logging) proceed
+    # concurrently; busy_timeout bounds how long a contended call blocks the
+    # shared event loop instead of the default indefinite/rollback stall.
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=3000")
+    except Exception:
+        pass
     return conn
 
 
@@ -99,7 +120,10 @@ def init_db():
 # ── Link CRUD ─────────────────────────────────────────────────────────────────
 
 def create_link(slug: str, url: str, prefix: str = "p") -> bool:
-    """Returns True if created, False if slug already taken."""
+    """Returns True if created, False if slug already taken (or url unsafe)."""
+    if not is_safe_http_url(url):
+        logger.warning("Refused to create link with non-http(s) url: %.80s", url)
+        return False
     try:
         with _conn() as db:
             db.execute(
@@ -122,6 +146,9 @@ def get_link(slug: str, prefix: str = "p") -> dict | None:
 
 
 def update_link(slug: str, new_url: str, prefix: str = "p") -> bool:
+    if not is_safe_http_url(new_url):
+        logger.warning("Refused to update link with non-http(s) url: %.80s", new_url)
+        return False
     with _conn() as db:
         cur = db.execute(
             "UPDATE links SET url=? WHERE prefix=? AND slug=?",
@@ -204,21 +231,34 @@ def update_click_geo(
         logger.warning("update_click_geo error: %s", exc)
 
 
+def _clean_geo(value, maxlen: int = 64) -> str:
+    """Clamp a geo field returned by the upstream API to a safe short string."""
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"[^A-Za-z0-9 .,'\-_/]", "", value)[:maxlen]
+
+
 async def lookup_geo(ip: str) -> tuple[str, str, str | None]:
     """Returns (country_name, country_code, timezone_name). Fails silently."""
+    # Only query with a syntactically valid IP so a spoofed X-Forwarded-For
+    # can't steer the request path/query on the upstream service.
+    try:
+        import ipaddress
+        ipaddress.ip_address(ip)
+    except Exception:
+        return "Unknown", "??", None
     try:
         timeout = aiohttp.ClientTimeout(total=2)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(
-                f"http://ip-api.com/json/{ip}?fields=country,countryCode,timezone"
+                f"https://ip-api.com/json/{ip}?fields=country,countryCode,timezone"
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return (
-                        data.get("country", "Unknown"),
-                        data.get("countryCode", "??"),
-                        data.get("timezone") or None,
-                    )
+                    country = _clean_geo(data.get("country")) or "Unknown"
+                    code = _clean_geo(data.get("countryCode"), 4) or "??"
+                    tz = _clean_geo(data.get("timezone")) or None
+                    return country, code, tz
     except Exception:
         pass
     return "Unknown", "??", None
@@ -328,7 +368,9 @@ async def _do_redirect(request: web.Request, slug: str, prefix: str) -> web.Resp
     except Exception:
         referrer = "direct"
 
-    user_agent = request.headers.get("User-Agent", "")[:512]
+    # Strip HTML-significant and control chars so a crafted UA can't inject markup
+    # into any dashboard that renders it (defense in depth, like `referrer` above).
+    user_agent = re.sub(r"[<>\x00-\x1f\x7f]", "", request.headers.get("User-Agent", ""))[:512]
     ip_h = hash_ip(ip)
 
     # Always log the click immediately (synchronous DB write, sub-ms).
