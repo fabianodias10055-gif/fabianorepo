@@ -1,0 +1,66 @@
+# ============================================================================
+# .gitignore for an Unreal Engine project
+# ----------------------------------------------------------------------------
+# Copy this file to the ROOT of your Unreal project (next to your .uproject)
+# and RENAME it to exactly ".gitignore" (with the leading dot).
+# It keeps all of Unreal's generated/build files out of the repo so teammates
+# only sync source + assets, not gigabytes of machine-specific junk.
+# ============================================================================
+
+# --- Unreal generated folders (never commit these) --------------------------
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+Script/
+.vs/
+
+# Some teams DO want to keep default config. If so, delete the next line.
+# By default we keep the project Config folder (it is small text and important):
+!Config/
+
+# Plugin generated folders
+Plugins/**/Binaries/
+Plugins/**/Intermediate/
+
+# --- IDE / editor files -----------------------------------------------------
+.idea/
+.vscode/
+*.VC.db
+*.VC.opendb
+*.opensdf
+*.opendb
+*.sdf
+*.suo
+*.sln
+*.xcodeproj/
+*.xcworkspace/
+.DS_Store
+
+# --- Compiled binaries ------------------------------------------------------
+*.exe
+*.dll
+*.dylib
+*.so
+*.o
+*.obj
+*.pdb
+*.lib
+*.a
+
+# --- Packaged / cooked builds (usually huge, ship separately) ---------------
+[Bb]uild/
+[Bb]uilds/
+Cooked/
+Packaged/
+
+# --- Crash / log artifacts --------------------------------------------------
+*.log
+*.tlog
+*.stackdump
+
+# --- OS junk ----------------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
