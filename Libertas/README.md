@@ -36,6 +36,8 @@ Libertas/
 - **Unreal Engine 5.7** (install via the Epic Games Launcher)
 - A C++ toolchain:
   - **Windows:** Visual Studio 2022 with the *Game development with C++* workload
+    — see [`../unreal-engine-github-setup/VISUAL_STUDIO_SETUP.md`](../unreal-engine-github-setup/VISUAL_STUDIO_SETUP.md)
+    for the exact components and build steps
   - **macOS:** Xcode
   - **Linux:** the cross-compile toolchain / clang
 

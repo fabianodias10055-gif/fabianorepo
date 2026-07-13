@@ -10,6 +10,10 @@ configured correctly for large binary assets.
 (create the repo → add collaborators → configure LFS → publish → teammate
 workflow → troubleshooting).
 
+🛠️ **[VISUAL_STUDIO_SETUP.md](./VISUAL_STUDIO_SETUP.md)** — for C++ contributors:
+installing Visual Studio 2022 with the right workloads, generating project
+files, and building/debugging the project.
+
 ## Template files (`templates/`)
 
 Copy these into the **root of your Unreal project** (next to the `.uproject`)
