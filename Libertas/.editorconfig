@@ -1,0 +1,24 @@
+# EditorConfig for the Libertas Unreal Engine project
+# Keeps C++ formatting consistent across Visual Studio, Rider, and VS Code.
+# https://editorconfig.org
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Unreal Engine C++ uses tabs for indentation.
+[*.{h,hpp,c,cpp,inl,cs}]
+indent_style = tab
+indent_size = 4
+
+# Config/build files
+[*.{ini,uproject,uplugin}]
+indent_style = tab
+indent_size = 4
+
+[*.{json,yml,yaml,md}]
+indent_style = space
+indent_size = 2
