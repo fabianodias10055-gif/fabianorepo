@@ -1,8 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-#include "MyGameGameModeBase.h"
+#include "LibertasGameModeBase.h"
 
-AMyGameGameModeBase::AMyGameGameModeBase()
+ALibertasGameModeBase::ALibertasGameModeBase()
 {
 	// Set default classes here once you have them, e.g.:
 	// DefaultPawnClass = AMyCharacter::StaticClass();

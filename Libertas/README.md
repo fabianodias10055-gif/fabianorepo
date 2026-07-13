@@ -1,4 +1,4 @@
-# MyGame — Unreal Engine 5.7 base project
+# Libertas — Unreal Engine 5.7 base project
 
 A minimal, ready-to-open **Unreal Engine 5.7 C++** project set up for team
 collaboration with Git + Git LFS. Use it as the starting point for a new game.
@@ -6,8 +6,8 @@ collaboration with Git + Git LFS. Use it as the starting point for a new game.
 ## What's included
 
 ```
-MyGame/
-├─ MyGame.uproject            # Project descriptor (EngineAssociation 5.7)
+Libertas/
+├─ Libertas.uproject            # Project descriptor (EngineAssociation 5.7)
 ├─ .gitignore                 # Ignores Unreal's generated folders
 ├─ .gitattributes            # Git LFS for binary assets (+ lockable)
 ├─ Config/
@@ -17,12 +17,12 @@ MyGame/
 │  └─ DefaultEditor.ini
 ├─ Content/                   # Your .uasset / .umap files go here (empty for now)
 └─ Source/
-   ├─ MyGame.Target.cs        # Game build target
-   ├─ MyGameEditor.Target.cs  # Editor build target
-   └─ MyGame/
-      ├─ MyGame.Build.cs      # Module dependencies
-      ├─ MyGame.cpp / .h      # Primary game module
-      └─ MyGameGameModeBase.cpp / .h   # Starter GameMode class
+   ├─ Libertas.Target.cs        # Game build target
+   ├─ LibertasEditor.Target.cs  # Editor build target
+   └─ Libertas/
+      ├─ Libertas.Build.cs      # Module dependencies
+      ├─ Libertas.cpp / .h      # Primary game module
+      └─ LibertasGameModeBase.cpp / .h   # Starter GameMode class
 ```
 
 > **Note:** This is the *source* of the project. Unreal generates the binary
@@ -40,7 +40,7 @@ MyGame/
 
 ## How to open it the first time
 
-1. Double-click `MyGame.uproject`.
+1. Double-click `Libertas.uproject`.
    - If it asks which engine version, pick **5.7**.
    - Because this is a C++ project, it will ask to build the module — click **Yes**.
      (First build takes a few minutes.)
@@ -49,26 +49,26 @@ MyGame/
 3. Set it as the startup map under **Edit → Project Settings → Maps & Modes** if
    you want it to load automatically.
 
-If double-clicking doesn't build, right-click `MyGame.uproject` →
+If double-clicking doesn't build, right-click `Libertas.uproject` →
 **Generate Visual Studio project files**, open the generated `.sln`, and build
 the **Development Editor** configuration.
 
 ## Renaming the project
 
-The name `MyGame` appears in file names, folders, and code. To rename to
+The name `Libertas` appears in file names, folders, and code. To rename to
 `YourName`:
 
 1. Rename these so the name matches (case-sensitive):
-   - `MyGame.uproject` → `YourName.uproject`
-   - `Source/MyGame.Target.cs` → `Source/YourName.Target.cs`
-   - `Source/MyGameEditor.Target.cs` → `Source/YourNameEditor.Target.cs`
-   - folder `Source/MyGame/` → `Source/YourName/`
-   - `Source/YourName/MyGame.Build.cs` → `YourName.Build.cs`
-   - `MyGame.cpp/.h`, `MyGameGameModeBase.cpp/.h` likewise
-2. Find-and-replace `MyGame` → `YourName` and `MYGAME_API` → `YOURNAME_API`
+   - `Libertas.uproject` → `YourName.uproject`
+   - `Source/Libertas.Target.cs` → `Source/YourName.Target.cs`
+   - `Source/LibertasEditor.Target.cs` → `Source/YourNameEditor.Target.cs`
+   - folder `Source/Libertas/` → `Source/YourName/`
+   - `Source/YourName/Libertas.Build.cs` → `YourName.Build.cs`
+   - `Libertas.cpp/.h`, `LibertasGameModeBase.cpp/.h` likewise
+2. Find-and-replace `Libertas` → `YourName` and `LIBERTAS_API` → `YOURNAME_API`
    across `Source/` and `Config/DefaultEngine.ini`
    (`GlobalDefaultGameMode=/Script/YourName.YourNameGameModeBase`).
-3. Update `"Name": "MyGame"` in the `.uproject`, and `ProjectName` in
+3. Update `"Name": "Libertas"` in the `.uproject`, and `ProjectName` in
    `Config/DefaultGame.ini`.
 4. Delete any `Binaries/` and `Intermediate/` folders, then regenerate project
    files and rebuild.

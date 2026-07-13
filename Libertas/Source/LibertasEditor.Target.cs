@@ -3,13 +3,13 @@
 using UnrealBuildTool;
 using System.Collections.Generic;
 
-public class MyGameTarget : TargetRules
+public class LibertasEditorTarget : TargetRules
 {
-	public MyGameTarget(TargetInfo Target) : base(Target)
+	public LibertasEditorTarget(TargetInfo Target) : base(Target)
 	{
-		Type = TargetType.Game;
+		Type = TargetType.Editor;
 		DefaultBuildSettings = BuildSettingsVersion.Latest;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Latest;
-		ExtraModuleNames.Add("MyGame");
+		ExtraModuleNames.Add("Libertas");
 	}
 }

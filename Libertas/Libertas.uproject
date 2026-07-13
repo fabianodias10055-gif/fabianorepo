@@ -5,7 +5,7 @@
 	"Description": "Base Unreal Engine 5.7 C++ project.",
 	"Modules": [
 		{
-			"Name": "MyGame",
+			"Name": "Libertas",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
 		}

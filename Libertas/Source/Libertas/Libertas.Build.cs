@@ -2,9 +2,9 @@
 
 using UnrealBuildTool;
 
-public class MyGame : ModuleRules
+public class Libertas : ModuleRules
 {
-	public MyGame(ReadOnlyTargetRules Target) : base(Target)
+	public Libertas(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
