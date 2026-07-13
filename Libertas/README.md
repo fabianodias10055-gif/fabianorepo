@@ -41,6 +41,22 @@ Libertas/
   - **macOS:** Xcode
   - **Linux:** the cross-compile toolchain / clang
 
+## Quick setup (Windows — one script)
+
+Instead of doing the steps by hand, **double-click `Setup-Libertas.bat`** in this
+folder. It requests administrator rights (click **Yes**), then automatically:
+
+1. Installs the required **Visual Studio 2022** components from `.vsconfig`
+   (or installs VS Community if you don't have it yet).
+2. Finds your **Unreal Engine 5.7** install.
+3. **Generates** the Visual Studio project files (`Libertas.sln`).
+4. **Builds** the `LibertasEditor` target.
+
+If Unreal Engine 5.7 isn't installed yet, the script sets up Visual Studio and
+then tells you to install UE via the Epic Games Launcher and re-run it. The
+underlying logic is in `Setup-Libertas.ps1` (readable, non-destructive) — you
+can run it directly from an admin PowerShell if you prefer.
+
 ## How to open it the first time
 
 1. Double-click `Libertas.uproject`.
