@@ -22,6 +22,24 @@ and open source) from <https://visualstudio.microsoft.com/downloads/>.
 - "Visual Studio" ≠ "Visual Studio Code." You need the full **Visual Studio**
   IDE for the C++/Unreal toolchain.
 
+## Fast path — auto-select every component with the bundled `.vsconfig`
+
+The project ships a **`Libertas/.vsconfig`** file that lists exactly the
+components below. Instead of ticking boxes by hand, use one of these:
+
+- **Auto-detect (easiest):** open `Libertas.sln` in Visual Studio. If anything
+  is missing, VS shows a gold bar: **"Install missing components"** — click it
+  and confirm. VS reads the `.vsconfig` sitting next to the solution.
+- **Import during install:** in the Visual Studio Installer click **More →
+  Import configuration**, pick `Libertas\.vsconfig`, then **Install**.
+- **Command line (fully unattended):** from the folder with the downloaded
+  installer, run:
+  ```
+  vs_community.exe --config "C:\Users\LocoDevPC\Documents\Unreal Projects\Libertas\.vsconfig" --passive --norestart
+  ```
+
+Prefer to do it manually / understand what each piece is? Follow Step 2 below.
+
 ## Step 2 — Select the right workloads and components (the part people miss)
 
 In the Visual Studio Installer, on the **Workloads** tab, check:
