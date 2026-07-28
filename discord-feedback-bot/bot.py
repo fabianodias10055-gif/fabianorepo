@@ -2909,6 +2909,75 @@ def _fetch_merch_emails() -> list[dict]:
     return results
 
 
+# Words that mark a line as a merch ITEM (vs a patron name) in the recipient list.
+_MERCH_ITEM_HINTS = (
+    "mug", "shirt", "tee", "t-shirt", "hoodie", "sweatshirt", "sweater", "crewneck",
+    "long sleeve", "sticker", "poster", "hat", "cap", "beanie", "tote", "bag",
+    "pin", "socks", "exclusive", "premium", "merch",
+)
+# Lines that mark the START of the recipient list (list begins after them).
+_MERCH_LIST_START = ("subscribed long enough", "will receive your merch", "on its way to", "on their way")
+# Lines that mark the END of the recipient list (footer / boilerplate).
+_MERCH_LIST_END = (
+    "see the charges", "charges for this merch", "contact us", "get the patreon app",
+    "download on the", "get it on google", "manage your email", "this email was sent",
+    "patreon wordmark", "townsend street",
+)
+
+
+def _looks_like_merch_item(s: str) -> bool:
+    sl = (s or "").lower()
+    return any(h in sl for h in _MERCH_ITEM_HINTS)
+
+
+def _plausible_patron_name(s: str) -> bool:
+    """Heuristic: a short, name-like line (not a URL, email, or sentence)."""
+    if not s or len(s) > 48:
+        return False
+    sl = s.lower()
+    if "http" in sl or "@" in s or "://" in s:
+        return False
+    if len(s.split()) > 5:
+        return False
+    if s.rstrip().endswith((".", "!", ":", "?", ",")):
+        return False
+    return any(c.isalpha() for c in s)
+
+
+def _parse_merch_recipients(body: str) -> list[dict]:
+    """From a 'N members will receive your merch' email, extract the list of
+    {name, item} pairs. Tolerant of extra lines and HTML-stripped layout."""
+    lines = [l.strip() for l in (body or "").splitlines() if l.strip()]
+    start = 0
+    for i, l in enumerate(lines):
+        ll = l.lower()
+        if any(k in ll for k in _MERCH_LIST_START):
+            start = i + 1
+    end = len(lines)
+    for i in range(start, len(lines)):
+        ll = lines[i].lower()
+        if any(k in ll for k in _MERCH_LIST_END):
+            end = i
+            break
+    region = lines[start:end]
+    pairs: list[dict] = []
+    i = 0
+    while i < len(region):
+        name = region[i]
+        item = region[i + 1] if i + 1 < len(region) else ""
+        if _plausible_patron_name(name) and _looks_like_merch_item(item):
+            pairs.append({"name": name, "item": item})
+            i += 2
+        else:
+            i += 1
+    return pairs
+
+
+def _parse_merch_count(body: str, subject: str) -> int | None:
+    mo = re.search(r"(\d+)\s+members?", f"{subject or ''} {body or ''}")
+    return int(mo.group(1)) if mo else None
+
+
 class FeedbackBot(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.default()
@@ -3195,62 +3264,66 @@ class FeedbackBot(discord.Client):
                 logger.warning("Merch email watcher error: %s", exc)
             await asyncio.sleep(MERCH_EMAIL_POLL_SECS)
 
-    def _resolve_merch_member(self, m: dict):
-        """Best-effort: find the Discord member this merch email refers to, so we
-        can @mention them. Returns (mention_str, member) or ('', None).
-
-        Looks for a 'Hi <name>,' / 'Hello <name>' greeting in the body (Patreon
-        emails are personalized) and matches it against guild display/user names.
-        """
+    def _find_member_by_name(self, name: str):
+        """Best-effort match of a Patreon display name to a guild member so we can
+        @mention them. Returns the member or None. Conservative to avoid mis-pings:
+        requires a full-name substring match, or all name tokens present."""
         try:
             guild = self.get_guild(int(GUILD_ID)) if GUILD_ID else None
         except Exception:
             guild = None
-        if not guild:
-            return "", None
-        text = f"{m.get('subject','')}\n{m.get('body','')}"
-        # Candidate names from a personalized greeting.
-        candidates = []
-        for pat in (r"\bHi\s+([A-Za-z0-9 ._-]{2,32})[,!\n]",
-                    r"\bHello\s+([A-Za-z0-9 ._-]{2,32})[,!\n]",
-                    r"\bHey\s+([A-Za-z0-9 ._-]{2,32})[,!\n]"):
-            mo = re.search(pat, text)
-            if mo:
-                candidates.append(mo.group(1).strip())
-        if not candidates:
-            return "", None
-        cand_l = [c.lower() for c in candidates if c]
+        if not guild or not name:
+            return None
+        n = name.strip().lower()
+        tokens = [t for t in n.split() if len(t) >= 2]
         for member in guild.members:
-            names = {getattr(member, "display_name", "").lower(), member.name.lower()}
-            gname = getattr(member, "global_name", None)
-            if gname:
-                names.add(gname.lower())
-            if names & set(cand_l) or any(c and c in names for c in cand_l):
-                return member.mention, member
-        return "", None
+            hay = " ".join(filter(None, [
+                member.name,
+                getattr(member, "display_name", "") or "",
+                getattr(member, "global_name", "") or "",
+            ])).lower()
+            if n and n in hay:
+                return member
+            if len(tokens) >= 2 and all(t in hay for t in tokens):
+                return member
+        return None
 
     async def _post_merch_alert(self, m: dict) -> None:
-        """Format and post a single merch email to the merch alert channel."""
+        """Format and post a single 'members will receive your merch' email to the
+        merch alert channel, @mentioning each patron we can resolve to a member."""
         try:
             channel = self.get_channel(MERCH_ALERT_CHANNEL_ID) or await self.fetch_channel(MERCH_ALERT_CHANNEL_ID)
         except Exception as _ce:
             logger.warning("Merch alert channel %s unavailable: %s", MERCH_ALERT_CHANNEL_ID, _ce)
             return
-        subject = (m.get("subject") or "New merch").strip()
-        snippet = re.sub(r"\n{3,}", "\n\n", (m.get("body") or "").strip())[:600]
-        mention, member = self._resolve_merch_member(m)
 
-        lines = ["🛍️ **New merch just dropped!**" + (f" {mention}" if mention else "")]
-        lines.append(f"**{subject}**")
-        if snippet:
-            lines.append(snippet)
-        text = "\n".join(lines)[:1900]
-        # Only the one resolved member may be pinged — the body is untrusted, so
-        # everything else (including @everyone) is suppressed.
+        subject = (m.get("subject") or "New merch").strip()
+        recipients = _parse_merch_recipients(m.get("body", ""))
+        resolved: list = []
+
+        if recipients:
+            count = _parse_merch_count(m.get("body", ""), subject) or len(recipients)
+            lines = [f"🛍️ **{count} member{'s' if count != 1 else ''} earned LocoDev merch!** 🎉"]
+            for r in recipients:
+                member = self._find_member_by_name(r["name"])
+                if member:
+                    resolved.append(member)
+                who = member.mention if member else f"**{r['name']}**"
+                lines.append(f"🎁 {who} — {r['item']}")
+            lines.append("_Orders are printing now — shipping in the next 1–2 weeks._")
+            text = "\n".join(lines)[:1900]
+        else:
+            # Unknown/changed format — don't silently drop it; post the gist.
+            snippet = re.sub(r"\n{3,}", "\n\n", (m.get("body") or "").strip())[:600]
+            text = "\n".join([f"🛍️ **{subject}**", snippet]).strip()[:1900]
+
+        # The email body is untrusted: only the patrons we actually resolved may be
+        # pinged — @everyone/@here/roles are always suppressed.
         allowed = discord.AllowedMentions(everyone=False, roles=False,
-                                          users=[member] if member else False)
+                                          users=resolved if resolved else False)
         await channel.send(text, allowed_mentions=allowed)
-        logger.info("Posted merch alert: %s (mention=%s)", subject[:60], bool(member))
+        logger.info("Posted merch alert: %s (%d recipients, %d mentioned)",
+                    subject[:60], len(recipients), len(resolved))
 
     async def _weekly_summary(self) -> None:
         """Every Monday at 9 AM Sao Paulo, post a weekly Patreon summary."""
