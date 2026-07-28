@@ -2982,6 +2982,132 @@ def _parse_merch_count(body: str, subject: str) -> int | None:
     return int(mo.group(1)) if mo else None
 
 
+# ── Patreon-name → Discord-ID map ─────────────────────────────────────────────
+# Merch emails only carry a patron's Patreon display name, not their Discord ID.
+# This map (populated from webhook events, which DO carry the linked Discord ID,
+# and from a full Patreon API sync) lets merch alerts @mention the right person
+# reliably instead of guessing by name similarity.
+_PATREON_MAP_PATH = os.getenv("PATREON_MAP_PATH", "/app/data/patreon_discord_map.json")
+_patreon_discord_map: dict | None = None  # lazily loaded cache
+
+
+def _load_patreon_map() -> dict:
+    global _patreon_discord_map
+    if _patreon_discord_map is None:
+        try:
+            with open(_PATREON_MAP_PATH, "r", encoding="utf-8") as f:
+                _patreon_discord_map = json.load(f)
+        except Exception:
+            _patreon_discord_map = {}
+    return _patreon_discord_map
+
+
+def _remember_patreon_discord(full_name: str, discord_id) -> None:
+    """Record a Patreon full-name → Discord-ID link (idempotent, atomic write)."""
+    if not full_name or not discord_id:
+        return
+    key = full_name.strip().lower()
+    if not key:
+        return
+    m = _load_patreon_map()
+    if m.get(key) == str(discord_id):
+        return
+    m[key] = str(discord_id)
+    try:
+        _atomic_write_json(_PATREON_MAP_PATH, m)
+    except Exception as exc:
+        logger.warning("Could not save patreon->discord map: %s", exc)
+
+
+def _lookup_patreon_discord_id(full_name: str):
+    if not full_name:
+        return None
+    return _load_patreon_map().get(full_name.strip().lower())
+
+
+def _sync_patreon_discord_map() -> tuple[int, int]:
+    """Full Patreon member sweep → populate the name→Discord-ID map for everyone
+    who linked their Discord to Patreon. Returns (new_or_updated, total_linked).
+    Blocking (urllib) — call via run_in_executor."""
+    from urllib import request as _req, parse as _parse
+    if not PATREON_ACCESS_TOKEN:
+        return 0, len(_load_patreon_map())
+    req = _req.Request(
+        "https://www.patreon.com/api/oauth2/v2/campaigns",
+        headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
+    )
+    with _req.urlopen(req, timeout=30) as resp:
+        campaigns = json.load(resp)
+    campaign_id = campaigns["data"][0]["id"]
+
+    m = _load_patreon_map()
+    added = 0
+    cursor = None
+    while True:
+        params: dict = {
+            "include": "user",
+            "fields[member]": "full_name",
+            "fields[user]": "social_connections",
+            "page[count]": "1000",
+        }
+        if cursor:
+            params["page[cursor]"] = cursor
+        req = _req.Request(
+            f"https://www.patreon.com/api/oauth2/v2/campaigns/{campaign_id}/members?{_parse.urlencode(params)}",
+            headers={"Authorization": f"Bearer {PATREON_ACCESS_TOKEN}", "User-Agent": "LocoDev Bot"},
+        )
+        with _req.urlopen(req, timeout=30) as resp:
+            data = json.load(resp)
+        user_discord_map: dict = {}
+        for inc in data.get("included", []):
+            if inc.get("type") == "user":
+                social = inc.get("attributes", {}).get("social_connections") or {}
+                disc = social.get("discord") or {}
+                uid = disc.get("user_id")
+                if uid:
+                    user_discord_map[inc["id"]] = uid
+        for member in data.get("data", []):
+            patreon_uid = member.get("relationships", {}).get("user", {}).get("data", {}).get("id")
+            did = user_discord_map.get(patreon_uid)
+            full_name = (member.get("attributes", {}).get("full_name") or "").strip()
+            if did and full_name:
+                key = full_name.lower()
+                if m.get(key) != str(did):
+                    m[key] = str(did)
+                    added += 1
+        next_cursor = data.get("meta", {}).get("pagination", {}).get("cursors", {}).get("next")
+        if not next_cursor:
+            break
+        cursor = next_cursor
+    try:
+        _atomic_write_json(_PATREON_MAP_PATH, m)
+    except Exception as exc:
+        logger.warning("Could not save patreon->discord map after sync: %s", exc)
+    return added, len(m)
+
+
+@app_commands.command(name="sync_merch_mentions", description="(Owner) Sync the Patreon→Discord map so merch alerts @mention the right people.")
+async def sync_merch_mentions_slash(interaction: discord.Interaction) -> None:
+    if not (OWNER_DISCORD_ID and interaction.user.id == OWNER_DISCORD_ID):
+        await interaction.response.send_message("You don't have permission.", ephemeral=True)
+        return
+    if not PATREON_ACCESS_TOKEN:
+        await interaction.response.send_message("PATREON_ACCESS_TOKEN is not configured.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    try:
+        loop = asyncio.get_event_loop()
+        added, total = await loop.run_in_executor(None, _sync_patreon_discord_map)
+    except Exception as exc:
+        await interaction.followup.send(f"❌ Patreon sync failed: `{exc}`", ephemeral=True)
+        return
+    await interaction.followup.send(
+        f"✅ Synced Patreon→Discord map: **{total}** linked patron(s) total (**{added}** new/updated).\n"
+        f"Merch @mentions will now resolve anyone who linked their Discord to Patreon.",
+        ephemeral=True,
+    )
+
+
 @app_commands.command(name="test_merch", description="(Owner) Post the most recent Patreon merch email now — tests the watcher.")
 async def test_merch_slash(interaction: discord.Interaction) -> None:
     if not (OWNER_DISCORD_ID and interaction.user.id == OWNER_DISCORD_ID):
@@ -3315,6 +3441,18 @@ class FeedbackBot(discord.Client):
             guild = None
         if not guild or not name:
             return None
+        # 1) Authoritative: the Patreon→Discord link map (populated by webhook
+        #    events + /sync_merch_mentions). Uses the patron's actual linked
+        #    Discord account, not a name guess.
+        did = _lookup_patreon_discord_id(name)
+        if did:
+            try:
+                member = guild.get_member(int(did))
+                if member:
+                    return member
+            except Exception:
+                pass
+        # 2) Fallback: fuzzy match against Discord usernames/nicknames.
         n = name.strip().lower()
         tokens = [t for t in n.split() if len(t) >= 2]
         for member in guild.members:
@@ -3460,6 +3598,7 @@ class FeedbackBot(discord.Client):
         self.tree.add_command(test_reports_slash)
         self.tree.add_command(test_pushover_slash)
         self.tree.add_command(test_merch_slash)
+        self.tree.add_command(sync_merch_mentions_slash)
         self.tree.add_command(kb_scan_slash)
         self.tree.add_command(trial_stats_slash)
         self.tree.add_command(shorten_slash)
@@ -3484,6 +3623,7 @@ class FeedbackBot(discord.Client):
             self.tree.add_command(test_reports_slash)
             self.tree.add_command(test_pushover_slash)
             self.tree.add_command(test_merch_slash)
+            self.tree.add_command(sync_merch_mentions_slash)
             self.tree.add_command(kb_scan_slash)
             self.tree.add_command(trial_stats_slash)
             self.tree.add_command(shorten_slash)
@@ -5372,6 +5512,11 @@ async def patreon_webhook_handler(request):
                 discord_id = social["discord"].get("user_id")
         if inc.get("type") == "tier":
             tier_title = inc.get("attributes", {}).get("title")
+
+    # Remember this patron's Patreon-name → Discord-ID link so merch alerts (which
+    # only carry the name) can @mention them reliably later.
+    if discord_id and full_name and full_name != "Someone":
+        _remember_patreon_discord(full_name, discord_id)
 
     # Update tier in tracked event and persist to file
     _entry["tier"] = tier_title
