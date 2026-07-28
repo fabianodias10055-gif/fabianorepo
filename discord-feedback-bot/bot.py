@@ -112,6 +112,9 @@ MERCH_EMAIL_SUBJECT_FILTER = tuple(
 )
 # Channel that merch alerts are posted to (defaults to the public patreon-members channel).
 MERCH_ALERT_CHANNEL_ID = int(os.getenv("MERCH_ALERT_CHANNEL_ID", "1158395982485147689"))
+# "How to earn merch" link appended to each alert. Must be a real short link
+# (create it with /shorten) or it will 404. Overridable so you can change it live.
+MERCH_INFO_URL = os.getenv("MERCH_INFO_URL", "locodev.dev/docs/patreonmerch")
 _MERCH_SEEN_PATH = os.getenv("MERCH_SEEN_PATH", "/app/data/merch_email_seen.json")
 CREATOR_ALIASES = tuple(
     alias.strip().lower()
@@ -3348,6 +3351,8 @@ class FeedbackBot(discord.Client):
                 who = member.mention if member else f"**{r['name']}**"
                 lines.append(f"🎁 {who} — {r['item']}")
             lines.append("_Orders are printing now — shipping in the next 1–2 weeks._")
+            if MERCH_INFO_URL:
+                lines.append(f"\nWanna know how to earn your merch? 👉 {MERCH_INFO_URL}")
             text = "\n".join(lines)[:1900]
         else:
             # Unknown/changed format — don't silently drop it; post the gist.
