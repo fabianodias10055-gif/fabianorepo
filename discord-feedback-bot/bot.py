@@ -2978,6 +2978,43 @@ def _parse_merch_count(body: str, subject: str) -> int | None:
     return int(mo.group(1)) if mo else None
 
 
+@app_commands.command(name="test_merch", description="(Owner) Post the most recent Patreon merch email now — tests the watcher.")
+async def test_merch_slash(interaction: discord.Interaction) -> None:
+    if not (OWNER_DISCORD_ID and interaction.user.id == OWNER_DISCORD_ID):
+        await interaction.response.send_message("You don't have permission.", ephemeral=True)
+        return
+    if not (MERCH_EMAIL_HOST and MERCH_EMAIL_USER and MERCH_EMAIL_PASSWORD):
+        await interaction.response.send_message(
+            "Merch watcher isn't configured — set MERCH_EMAIL_HOST / MERCH_EMAIL_USER / MERCH_EMAIL_PASSWORD in Railway.",
+            ephemeral=True,
+        )
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    try:
+        loop = asyncio.get_event_loop()
+        msgs = await loop.run_in_executor(None, _fetch_merch_emails)
+    except Exception as exc:
+        await interaction.followup.send(f"❌ IMAP connection/login failed: `{exc}`", ephemeral=True)
+        return
+    if not msgs:
+        await interaction.followup.send(
+            "✅ Connected to the mailbox, but found **no merch-matching emails** in the last 3 days.\n"
+            "If you expected one, check `MERCH_EMAIL_FROM_FILTER` / `MERCH_EMAIL_SUBJECT_FILTER`.",
+            ephemeral=True,
+        )
+        return
+    latest = msgs[-1]  # most recent matching email
+    try:
+        await interaction.client._post_merch_alert(latest)
+    except Exception as exc:
+        await interaction.followup.send(f"Fetched the email but posting failed: `{exc}`", ephemeral=True)
+        return
+    await interaction.followup.send(
+        f"✅ Posted the most recent merch email to <#{MERCH_ALERT_CHANNEL_ID}>:\n**{latest.get('subject','')}**",
+        ephemeral=True,
+    )
+
+
 class FeedbackBot(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.default()
@@ -3416,6 +3453,7 @@ class FeedbackBot(discord.Client):
         self.tree.add_command(meta_conversion_slash)
         self.tree.add_command(test_reports_slash)
         self.tree.add_command(test_pushover_slash)
+        self.tree.add_command(test_merch_slash)
         self.tree.add_command(kb_scan_slash)
         self.tree.add_command(trial_stats_slash)
         self.tree.add_command(shorten_slash)
