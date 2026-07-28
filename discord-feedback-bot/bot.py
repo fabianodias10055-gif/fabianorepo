@@ -92,6 +92,27 @@ PUSHOVER_API_TOKEN = os.getenv("PUSHOVER_API_TOKEN", "")
 KB_CHANNEL_IDS = {1158395982485147692, 1459914723330883727, 1460338435163164827}
 MAX_MESSAGES_PER_CHANNEL = int(os.getenv("MAX_MESSAGES_PER_CHANNEL", "250"))
 PROJECTS_FORUM_CHANNEL_ID = os.getenv("PROJECTS_FORUM_CHANNEL_ID")
+# ── New-merch email watcher ───────────────────────────────────────────────────
+# Patreon has no webhook for merch, so we poll a mailbox for the "new merch" email
+# and repost it to the merch alert channel. Feature is OFF unless HOST/USER/PASSWORD
+# are all set. Use a dedicated inbox + an app-specific password, never a main login.
+MERCH_EMAIL_HOST = os.getenv("MERCH_EMAIL_HOST", "")              # e.g. imap.gmail.com
+MERCH_EMAIL_PORT = int(os.getenv("MERCH_EMAIL_PORT", "993"))
+MERCH_EMAIL_USER = os.getenv("MERCH_EMAIL_USER", "")
+MERCH_EMAIL_PASSWORD = os.getenv("MERCH_EMAIL_PASSWORD", "")
+MERCH_EMAIL_MAILBOX = os.getenv("MERCH_EMAIL_MAILBOX", "INBOX")
+MERCH_EMAIL_POLL_SECS = int(os.getenv("MERCH_EMAIL_POLL_SECS", "300"))
+# Comma-separated substrings; an email counts as a merch drop only if its From
+# matches one of the FROM filters AND its Subject matches one of the SUBJECT filters.
+MERCH_EMAIL_FROM_FILTER = tuple(
+    s.strip().lower() for s in os.getenv("MERCH_EMAIL_FROM_FILTER", "patreon.com").split(",") if s.strip()
+)
+MERCH_EMAIL_SUBJECT_FILTER = tuple(
+    s.strip().lower() for s in os.getenv("MERCH_EMAIL_SUBJECT_FILTER", "merch").split(",") if s.strip()
+)
+# Channel that merch alerts are posted to (defaults to the public patreon-members channel).
+MERCH_ALERT_CHANNEL_ID = int(os.getenv("MERCH_ALERT_CHANNEL_ID", "1158395982485147689"))
+_MERCH_SEEN_PATH = os.getenv("MERCH_SEEN_PATH", "/app/data/merch_email_seen.json")
 CREATOR_ALIASES = tuple(
     alias.strip().lower()
     for alias in os.getenv("CREATOR_ALIASES", "locodev,locodevbot,loco").split(",")
@@ -2768,6 +2789,126 @@ async def top_links_slash(interaction: discord.Interaction, days: int = 7, limit
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
+# ── New-merch email watcher helpers ───────────────────────────────────────────
+
+def _load_merch_seen() -> set[str]:
+    try:
+        with open(_MERCH_SEEN_PATH, "r", encoding="utf-8") as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+
+def _save_merch_seen(seen: set[str]) -> None:
+    try:
+        _atomic_write_json(_MERCH_SEEN_PATH, list(seen))
+    except Exception as exc:
+        logger.warning("Could not save merch-seen file: %s", exc)
+
+
+def _email_matches_merch(frm: str, subj: str) -> bool:
+    """True only if the email is from an expected sender AND its subject looks
+    like a merch drop — keeps the watcher from reposting unrelated mail."""
+    frm_l, subj_l = (frm or "").lower(), (subj or "").lower()
+    from_ok = (not MERCH_EMAIL_FROM_FILTER) or any(f in frm_l for f in MERCH_EMAIL_FROM_FILTER)
+    subj_ok = (not MERCH_EMAIL_SUBJECT_FILTER) or any(k in subj_l for k in MERCH_EMAIL_SUBJECT_FILTER)
+    return from_ok and subj_ok
+
+
+def _extract_email_text(msg) -> str:
+    """Return a cleaned plain-text body from an email.message.Message."""
+    body = ""
+    try:
+        if msg.is_multipart():
+            # Prefer text/plain; fall back to stripping the HTML part.
+            plain = html = ""
+            for part in msg.walk():
+                ctype = part.get_content_type()
+                disp = str(part.get("Content-Disposition", ""))
+                if "attachment" in disp:
+                    continue
+                try:
+                    payload = part.get_payload(decode=True)
+                    if payload is None:
+                        continue
+                    charset = part.get_content_charset() or "utf-8"
+                    text = payload.decode(charset, errors="replace")
+                except Exception:
+                    continue
+                if ctype == "text/plain" and not plain:
+                    plain = text
+                elif ctype == "text/html" and not html:
+                    html = text
+            body = plain or html
+        else:
+            payload = msg.get_payload(decode=True)
+            if payload is not None:
+                charset = msg.get_content_charset() or "utf-8"
+                body = payload.decode(charset, errors="replace")
+    except Exception:
+        body = ""
+    # If it's HTML, strip tags to text.
+    if body and ("<html" in body.lower() or "<body" in body.lower() or "<div" in body.lower()):
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(body, "html.parser")
+            for tag in soup(["script", "style"]):
+                tag.decompose()
+            body = soup.get_text(separator="\n", strip=True)
+        except Exception:
+            body = re.sub(r"<[^>]+>", " ", body)
+    lines = [l.strip() for l in (body or "").splitlines() if l.strip()]
+    return "\n".join(lines)
+
+
+def _fetch_merch_emails() -> list[dict]:
+    """Blocking IMAP fetch (run in an executor). Returns recent emails that match
+    the merch filters as dicts: {id, from, subject, date, body}."""
+    import imaplib
+    import email as _email
+    from email.header import decode_header, make_header
+
+    results: list[dict] = []
+    M = None
+    try:
+        M = imaplib.IMAP4_SSL(MERCH_EMAIL_HOST, MERCH_EMAIL_PORT)
+        M.login(MERCH_EMAIL_USER, MERCH_EMAIL_PASSWORD)
+        M.select(MERCH_EMAIL_MAILBOX, readonly=True)
+        # Bound the scan to the last few days and the most recent messages.
+        since = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%d-%b-%Y")
+        typ, data = M.search(None, f'(SINCE {since})')
+        if typ != "OK" or not data or not data[0]:
+            return results
+        ids = data[0].split()
+        for num in ids[-50:]:
+            typ, msg_data = M.fetch(num, "(RFC822)")
+            if typ != "OK" or not msg_data or not msg_data[0]:
+                continue
+            msg = _email.message_from_bytes(msg_data[0][1])
+            try:
+                frm = str(make_header(decode_header(msg.get("From", ""))))
+                subj = str(make_header(decode_header(msg.get("Subject", ""))))
+            except Exception:
+                frm, subj = msg.get("From", ""), msg.get("Subject", "")
+            if not _email_matches_merch(frm, subj):
+                continue
+            mid = msg.get("Message-ID", "").strip() or f"{frm}|{subj}|{msg.get('Date', '')}"
+            results.append({
+                "id": mid,
+                "from": frm,
+                "subject": subj,
+                "date": msg.get("Date", ""),
+                "body": _extract_email_text(msg),
+            })
+    finally:
+        if M is not None:
+            try:
+                M.logout()
+            except Exception:
+                pass
+    return results
+
+
 class FeedbackBot(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.default()
@@ -2791,6 +2932,7 @@ class FeedbackBot(discord.Client):
         self._daily_task: asyncio.Task | None = None
         self._weekly_task: asyncio.Task | None = None
         self._youtube_task: asyncio.Task | None = None
+        self._merch_task: asyncio.Task | None = None
         self._ue_seen_video_ids: set[str] = set()
         self._conversation_history: dict[int, list[dict]] = {}
         self._processed_messages: set[int] = set()
@@ -3010,6 +3152,106 @@ class FeedbackBot(discord.Client):
                 logger.warning("YouTube watcher error: %s", exc)
             await asyncio.sleep(1800)  # check every 30 minutes
 
+    async def _watch_merch_email(self) -> None:
+        """Poll a mailbox for Patreon 'new merch' emails and repost them to the
+        merch alert channel. Disabled unless MERCH_EMAIL_HOST/USER/PASSWORD are set.
+
+        Mirrors the YouTube watcher: on the very first run (no persisted state) it
+        seeds the existing inbox silently so a fresh deploy doesn't dump old mail,
+        then announces only genuinely new matching emails.
+        """
+        if not (MERCH_EMAIL_HOST and MERCH_EMAIL_USER and MERCH_EMAIL_PASSWORD):
+            logger.info("Merch email watcher disabled (MERCH_EMAIL_* not configured)")
+            return
+        await self.wait_until_ready()
+        seen = _load_merch_seen()
+        first_run = not seen
+        logger.info("Merch email watcher started (%d seen ids, first_run=%s)", len(seen), first_run)
+
+        while not self.is_closed():
+            try:
+                loop = asyncio.get_event_loop()
+                msgs = await loop.run_in_executor(None, _fetch_merch_emails)
+                new_msgs = [m for m in msgs if m.get("id") and m["id"] not in seen]
+                for m in new_msgs:
+                    seen.add(m["id"])
+                # Bound the persisted set.
+                if len(seen) > 2000:
+                    seen = set(list(seen)[-2000:])
+
+                if first_run:
+                    # Seed silently — don't announce mail that predates the watcher.
+                    _save_merch_seen(seen)
+                    first_run = False
+                    logger.info("Merch watcher: seeded %d existing emails on first run", len(new_msgs))
+                elif new_msgs:
+                    for m in new_msgs:
+                        try:
+                            await self._post_merch_alert(m)
+                        except Exception as _pe:
+                            logger.warning("Failed to post merch alert: %s", _pe)
+                    _save_merch_seen(seen)
+            except Exception as exc:
+                logger.warning("Merch email watcher error: %s", exc)
+            await asyncio.sleep(MERCH_EMAIL_POLL_SECS)
+
+    def _resolve_merch_member(self, m: dict):
+        """Best-effort: find the Discord member this merch email refers to, so we
+        can @mention them. Returns (mention_str, member) or ('', None).
+
+        Looks for a 'Hi <name>,' / 'Hello <name>' greeting in the body (Patreon
+        emails are personalized) and matches it against guild display/user names.
+        """
+        try:
+            guild = self.get_guild(int(GUILD_ID)) if GUILD_ID else None
+        except Exception:
+            guild = None
+        if not guild:
+            return "", None
+        text = f"{m.get('subject','')}\n{m.get('body','')}"
+        # Candidate names from a personalized greeting.
+        candidates = []
+        for pat in (r"\bHi\s+([A-Za-z0-9 ._-]{2,32})[,!\n]",
+                    r"\bHello\s+([A-Za-z0-9 ._-]{2,32})[,!\n]",
+                    r"\bHey\s+([A-Za-z0-9 ._-]{2,32})[,!\n]"):
+            mo = re.search(pat, text)
+            if mo:
+                candidates.append(mo.group(1).strip())
+        if not candidates:
+            return "", None
+        cand_l = [c.lower() for c in candidates if c]
+        for member in guild.members:
+            names = {getattr(member, "display_name", "").lower(), member.name.lower()}
+            gname = getattr(member, "global_name", None)
+            if gname:
+                names.add(gname.lower())
+            if names & set(cand_l) or any(c and c in names for c in cand_l):
+                return member.mention, member
+        return "", None
+
+    async def _post_merch_alert(self, m: dict) -> None:
+        """Format and post a single merch email to the merch alert channel."""
+        try:
+            channel = self.get_channel(MERCH_ALERT_CHANNEL_ID) or await self.fetch_channel(MERCH_ALERT_CHANNEL_ID)
+        except Exception as _ce:
+            logger.warning("Merch alert channel %s unavailable: %s", MERCH_ALERT_CHANNEL_ID, _ce)
+            return
+        subject = (m.get("subject") or "New merch").strip()
+        snippet = re.sub(r"\n{3,}", "\n\n", (m.get("body") or "").strip())[:600]
+        mention, member = self._resolve_merch_member(m)
+
+        lines = ["🛍️ **New merch just dropped!**" + (f" {mention}" if mention else "")]
+        lines.append(f"**{subject}**")
+        if snippet:
+            lines.append(snippet)
+        text = "\n".join(lines)[:1900]
+        # Only the one resolved member may be pinged — the body is untrusted, so
+        # everything else (including @everyone) is suppressed.
+        allowed = discord.AllowedMentions(everyone=False, roles=False,
+                                          users=[member] if member else False)
+        await channel.send(text, allowed_mentions=allowed)
+        logger.info("Posted merch alert: %s (mention=%s)", subject[:60], bool(member))
+
     async def _weekly_summary(self) -> None:
         """Every Monday at 9 AM Sao Paulo, post a weekly Patreon summary."""
         from zoneinfo import ZoneInfo
@@ -3150,6 +3392,8 @@ class FeedbackBot(discord.Client):
             self._weekly_task = asyncio.create_task(self._weekly_summary())
         if self._youtube_task is None or self._youtube_task.done():
             self._youtube_task = asyncio.create_task(self._watch_unreal_engine_youtube())
+        if self._merch_task is None or self._merch_task.done():
+            self._merch_task = asyncio.create_task(self._watch_merch_email())
         assert self.user is not None
         logger.info("Logged in as %s (%s)", self.user, self.user.id)
 
