@@ -3477,6 +3477,7 @@ class FeedbackBot(discord.Client):
             self.tree.add_command(meta_conversion_slash)
             self.tree.add_command(test_reports_slash)
             self.tree.add_command(test_pushover_slash)
+            self.tree.add_command(test_merch_slash)
             self.tree.add_command(kb_scan_slash)
             self.tree.add_command(trial_stats_slash)
             self.tree.add_command(shorten_slash)
