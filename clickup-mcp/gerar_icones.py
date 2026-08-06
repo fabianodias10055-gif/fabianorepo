@@ -16,10 +16,16 @@ Geometria conferida contra os PNGs antigos: mesmo tamanho e mesmo centro.
 import io
 import os
 import re
+from pathlib import Path
 
 from PIL import Image, ImageDraw
 from reportlab.graphics import renderPM
 from svglib.svglib import svg2rlg
+
+# Ancorado no arquivo, nao no cwd: rodar de qualquer pasta funciona igual.
+BASE_DIR = Path(__file__).resolve().parent
+PACOTE_ICONS = BASE_DIR / "package" / "icons"
+SAIDA = BASE_DIR / "icons_out"
 
 # hex oficiais do proprio pacote simple-icons (_data/simple-icons.json)
 BRAND = {
@@ -64,12 +70,12 @@ def compor(d: str, hexc: str, destino: str) -> None:
     img.quantize(colors=32, method=Image.FASTOCTREE).save(destino, optimize=True)
 
 
-os.makedirs('icons_out', exist_ok=True)
+os.makedirs(SAIDA, exist_ok=True)
 
 for slug, hexc in BRAND.items():
-    src = open(f'package/icons/{slug}.svg', encoding='utf-8').read()
+    src = (PACOTE_ICONS / f'{slug}.svg').read_text(encoding='utf-8')
     d = re.search(r'<path[^>]*?d="([^"]+)"', src).group(1)
-    compor(d, hexc, f'icons_out/{slug}.png')
+    compor(d, hexc, str(SAIDA / f'{slug}.png'))
 
 # EMAIL nao e marca -> envelope desenhado a mao
 ENV = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
@@ -83,7 +89,7 @@ env = Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
 ImageDraw.Draw(env).rounded_rectangle(
     [0, 0, SIZE - 1, SIZE - 1], radius=RADIUS, fill='#2D7FF9')
 env.paste((255, 255, 255, 255), (0, 0), env_mask)
-env.quantize(colors=32, method=Image.FASTOCTREE).save('icons_out/email.png', optimize=True)
+env.quantize(colors=32, method=Image.FASTOCTREE).save(SAIDA / 'email.png', optimize=True)
 
-for f in sorted(os.listdir('icons_out')):
-    print(f'{f:15s} {os.path.getsize(f"icons_out/{f}"):6d} bytes')
+for f in sorted(os.listdir(SAIDA)):
+    print(f'{f:15s} {os.path.getsize(SAIDA / f):6d} bytes')

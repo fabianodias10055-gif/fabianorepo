@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clickup-mcp"
+version = "0.2.0"
+description = "Servidor MCP e utilitarios para o ClickUp via API publica (100 req/min em vez do teto diario do conector oficial)"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.2,<2.0",
+    "requests>=2.31,<3.0",
+    "python-dotenv>=1.0,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "responses>=0.25,<1.0",
+]
+icones = [
+    "svglib>=1.5,<2.0",
+    "reportlab>=4.0,<5.0",
+    "pycairo>=1.26,<2.0",
+    "rlPyCairo>=0.3,<1.0",
+    "Pillow>=11.0,<12.0",
+]
+keyring = [
+    "keyring>=25,<26",
+]
+
+[project.scripts]
+clickup-mcp = "server:main"
+clickup-anexar-icones = "anexar_icones:main"
+
+[tool.setuptools]
+py-modules = ["server", "clickup_api", "anexar_icones", "gerar_icones", "sincronizar_vault"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
