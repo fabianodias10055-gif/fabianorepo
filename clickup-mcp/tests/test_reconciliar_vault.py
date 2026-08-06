@@ -74,14 +74,20 @@ def test_empurrar_sem_caixa_devolve_vazio(tmp_path):
 
 
 @responses.activate
-def test_puxar_gera_e_remove_orfaos(tmp_path, monkeypatch):
-    orfao = tmp_path / "Espelho - Pasta Antiga.md"
-    orfao.write_text("velho", encoding="utf-8")
+def test_puxar_espelha_estrutura_de_pastas(tmp_path, monkeypatch):
+    # Residuos que a limpeza deve remover: formato antigo achatado e nota de
+    # lista que nao existe mais. As notas fixas do topo ficam.
+    (tmp_path / "Espelho - Pasta Antiga.md").write_text("velho", encoding="utf-8")
+    (tmp_path / "Freelancing").mkdir()
+    (tmp_path / "Freelancing" / "Lista Removida.md").write_text("velho", encoding="utf-8")
+    fixa = tmp_path / "01 - Caixa de Entrada.md"
+    fixa.write_text("caixa", encoding="utf-8")
+
     monkeypatch.setattr(
         rv.ai, "listas_do_workspace",
         lambda ws: [
-            ("L1", "Freelancing / Projeto Jonathan"),
-            ("L9", "Pasta Vazia / Lista Nova"),
+            ("L1", "Freelancing / Projeto Jonathan (Arq Viz UE5)"),
+            ("L9", "Patreon Projects / List"),
             ("L5", "Get Started"),
         ],
     )
@@ -89,19 +95,28 @@ def test_puxar_gera_e_remove_orfaos(tmp_path, monkeypatch):
         rv.ai, "tarefas_do_workspace",
         lambda ws, desde_ms=None: [
             {"id": "1", "name": "[FABIANO] [JONATHAN] T1", "url": "https://app/1",
-             "folder": {"name": "Freelancing"}, "list": {"name": "Projeto Jonathan"},
+             "folder": {"name": "Freelancing"},
+             "list": {"id": "L1", "name": "Projeto Jonathan (Arq Viz UE5)"},
              "status": {"status": "concluído"}},
             {"id": "2", "name": "Solta", "url": "https://app/2",
-             "folder": {"name": "hidden"}, "list": {"name": "Get Started"},
+             "folder": {"name": "hidden"},
+             "list": {"id": "L5", "name": "Get Started"},
              "status": {"status": "pendente"}},
         ],
     )
     notas = rv.puxar("99", tmp_path)
+
+    import os
     assert sorted(notas) == [
-        "Espelho - Freelancing.md",
-        "Espelho - Listas Soltas.md",
-        "Espelho - Pasta Vazia.md",  # pasta sem tarefa ganha espelho vazio
+        os.path.join("Freelancing", "Projeto Jonathan (Arq Viz UE5).md"),
+        os.path.join("Listas Soltas", "Get Started.md"),
+        os.path.join("Patreon Projects", "List.md"),  # lista vazia tambem
     ]
-    assert not orfao.exists()
-    texto = (tmp_path / "Espelho - Freelancing.md").read_text(encoding="utf-8")
+    assert not (tmp_path / "Espelho - Pasta Antiga.md").exists()
+    assert not (tmp_path / "Freelancing" / "Lista Removida.md").exists()
+    assert fixa.exists()
+
+    texto = (tmp_path / "Freelancing" / "Projeto Jonathan (Arq Viz UE5).md").read_text(encoding="utf-8")
     assert "| [T1](https://app/1) | FABIANO | JONATHAN | concluído |" in texto
+    vazia = (tmp_path / "Patreon Projects" / "List.md").read_text(encoding="utf-8")
+    assert "Lista vazia no ClickUp" in vazia

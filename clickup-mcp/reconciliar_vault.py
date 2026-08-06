@@ -145,10 +145,12 @@ def empurrar(workspace_id: str, vault_dir: Path = VAULT_DIR) -> list[dict]:
 
 
 def _sanitizar(nome: str) -> str:
+    """So troca o que o Windows proibe em nome de arquivo; o resto fica
+    identico ao ClickUp, porque o espelho deve dar match exato."""
     return re.sub(r'[\\/:*?"<>|]', "-", nome).strip()
 
 
-def _nota_da_pasta(pasta: str, tarefas: list[dict]) -> str:
+def _nota_da_lista(pasta: str, lista: str, tarefas: list[dict]) -> str:
     agora = datetime.now().strftime("%Y-%m-%d %H:%M")
     por_status: dict[str, int] = {}
     for t in tarefas:
@@ -162,65 +164,88 @@ def _nota_da_pasta(pasta: str, tarefas: list[dict]) -> str:
         "fonte: clickup-mcp/reconciliar_vault.py",
         "---",
         "",
-        f"# Espelho - {pasta}",
+        f"# {pasta} / {lista}",
         "",
         "Nota gerada. **Nao editar a mao** - mudancas somem na proxima",
         "sincronizacao. Tarefa nova entra pela [[01 - Caixa de Entrada]].",
         "",
-        f"**{len(tarefas)} tarefas.** "
-        + " · ".join(f"{k}: {v}" for k, v in sorted(por_status.items())),
-        "",
     ]
-    tarefas = sorted(tarefas, key=lambda t: (ai.rotulo_da_lista(t), t.get("name", "")))
-    lista_atual = None
-    for t in tarefas:
-        rotulo = ai.rotulo_da_lista(t)
-        if rotulo != lista_atual:
-            if lista_atual is not None:
-                linhas.append("")
-            linhas += [f"## {rotulo}", "",
-                       "| Tarefa | Dono | Categoria | Status | Prioridade |",
-                       "|---|---|---|---|---|"]
-            lista_atual = rotulo
-        dono, cat = _dono_e_categoria(t.get("name", ""))
-        status = (t.get("status") or {}).get("status") or "?"
-        prioridade = (t.get("priority") or {}).get("priority") or "-"
-        linhas.append(
-            f"| [{_titulo_limpo(t.get('name', ''))}]({t.get('url', '')}) "
-            f"| {dono} | {cat} | {status} | {prioridade} |"
-        )
+    if tarefas:
+        linhas += [
+            f"**{len(tarefas)} tarefas.** "
+            + " · ".join(f"{k}: {v}" for k, v in sorted(por_status.items())),
+            "",
+            "| Tarefa | Dono | Categoria | Status | Prioridade |",
+            "|---|---|---|---|---|",
+        ]
+        for t in sorted(tarefas, key=lambda t: t.get("name", "")):
+            dono, cat = _dono_e_categoria(t.get("name", ""))
+            status = (t.get("status") or {}).get("status") or "?"
+            prioridade = (t.get("priority") or {}).get("priority") or "-"
+            linhas.append(
+                f"| [{_titulo_limpo(t.get('name', ''))}]({t.get('url', '')}) "
+                f"| {dono} | {cat} | {status} | {prioridade} |"
+            )
+    else:
+        linhas.append("*Lista vazia no ClickUp.*")
     return "\n".join(linhas) + "\n"
 
 
 def puxar(workspace_id: str, vault_dir: Path = VAULT_DIR) -> list[str]:
-    """Regenera as notas espelho, uma por pasta, e remove espelhos orfaos."""
+    """Regenera o espelho: uma SUBPASTA por pasta do ClickUp (nome identico)
+    e, dentro dela, uma nota por lista (nome identico). Espelhos de listas ou
+    pastas que sumiram do ClickUp sao removidos.
+
+    As subpastas sao 100% gerenciadas: qualquer .md dentro delas que nao
+    corresponda a uma lista atual do ClickUp e apagado na sincronizacao.
+    """
     vault_dir.mkdir(parents=True, exist_ok=True)
-    tarefas = ai.tarefas_do_workspace(workspace_id)
 
-    # Semeia com todas as pastas da hierarquia: pasta sem tarefa ainda ganha
-    # espelho (vazio), senao a area some do vault ate a primeira tarefa.
-    por_pasta: dict[str, list[dict]] = {}
-    for _lid, rotulo in ai.listas_do_workspace(workspace_id):
-        pasta = rotulo.split(" / ", 1)[0] if " / " in rotulo else "Listas Soltas"
-        por_pasta.setdefault(pasta, [])
-    for t in tarefas:
-        pasta = (t.get("folder") or {}).get("name") or ""
-        if not pasta or pasta.lower() == "hidden":
-            pasta = "Listas Soltas"
-        por_pasta.setdefault(pasta, []).append(t)
+    # (pasta, lista) por list_id, direto da hierarquia: lista vazia tambem
+    # ganha nota, senao a area some do vault ate a primeira tarefa.
+    destino_por_lista: dict[str, tuple[str, str]] = {}
+    for lid, rotulo in ai.listas_do_workspace(workspace_id):
+        if " / " in rotulo:
+            pasta, lista = rotulo.split(" / ", 1)
+        else:
+            pasta, lista = "Listas Soltas", rotulo
+        destino_por_lista[lid] = (pasta, lista)
 
-    atuais = set()
+    tarefas_por_lista: dict[str, list[dict]] = {lid: [] for lid in destino_por_lista}
+    for t in ai.tarefas_do_workspace(workspace_id):
+        lid = (t.get("list") or {}).get("id")
+        if lid not in destino_por_lista:
+            pasta = (t.get("folder") or {}).get("name") or ""
+            if not pasta or pasta.lower() == "hidden":
+                pasta = "Listas Soltas"
+            destino_por_lista[lid] = (pasta, (t.get("list") or {}).get("name") or "?")
+            tarefas_por_lista[lid] = []
+        tarefas_por_lista[lid].append(t)
+
+    atuais: set[Path] = set()
     geradas = []
-    for pasta, ts in sorted(por_pasta.items()):
-        arquivo = vault_dir / f"Espelho - {_sanitizar(pasta)}.md"
-        arquivo.write_text(_nota_da_pasta(pasta, ts), encoding="utf-8")
-        atuais.add(arquivo.name)
-        geradas.append(arquivo.name)
+    for lid, (pasta, lista) in sorted(destino_por_lista.items(), key=lambda kv: kv[1]):
+        rel = Path(_sanitizar(pasta)) / f"{_sanitizar(lista)}.md"
+        arquivo = vault_dir / rel
+        arquivo.parent.mkdir(parents=True, exist_ok=True)
+        arquivo.write_text(
+            _nota_da_lista(pasta, lista, tarefas_por_lista.get(lid, [])),
+            encoding="utf-8",
+        )
+        atuais.add(rel)
+        geradas.append(str(rel))
 
-    # Espelho de pasta que deixou de existir no ClickUp sai do vault tambem.
-    for velho in vault_dir.glob("Espelho - *.md"):
-        if velho.name not in atuais:
-            velho.unlink()
+    # Limpeza: nota de lista que sumiu, formato antigo achatado, pasta vazia.
+    for arquivo in vault_dir.rglob("*.md"):
+        rel = arquivo.relative_to(vault_dir)
+        no_topo = arquivo.parent == vault_dir
+        if no_topo and not arquivo.name.startswith("Espelho - "):
+            continue  # notas fixas do vault (Como funciona, Caixa de Entrada)
+        if rel not in atuais:
+            arquivo.unlink()
+    for pasta_fs in sorted(vault_dir.iterdir(), reverse=True):
+        if pasta_fs.is_dir() and not any(pasta_fs.iterdir()):
+            pasta_fs.rmdir()
     return geradas
 
 
