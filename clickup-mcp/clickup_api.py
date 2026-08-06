@@ -8,11 +8,13 @@ Toda chamada passa pelo mesmo rate limiter de processo, entao nao importa quanta
 ferramentas o servidor MCP exponha: o conjunto nunca ultrapassa o teto por minuto.
 """
 
+import json
 import logging
 import os
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import requests
@@ -32,6 +34,17 @@ MAX_REQUESTS_PER_MINUTE = int(os.getenv("CLICKUP_MAX_RPM", "80"))
 # Um 429 mesmo assim significa que alguem gastou a cota do token por fora.
 # Backoff em vez de desistir, porque a janela do ClickUp reseta em segundos.
 MAX_RETRIES = 4
+
+# Conexao persistente: reaproveita o TCP/TLS entre chamadas (keep-alive) em vez
+# de pagar um handshake novo por requisicao.
+_session = requests.Session()
+
+# Cache opcional de leituras estaveis (hierarquia, membros, workspaces).
+# TTL curto e qualquer escrita esvazia tudo - simples e suficiente para um
+# processo local de usuario unico.
+CACHE_TTL = float(os.getenv("CLICKUP_CACHE_TTL", "300"))
+_cache: dict[str, tuple[float, object]] = {}
+_cache_lock = threading.Lock()
 
 log = logging.getLogger("clickup")
 
@@ -72,11 +85,28 @@ _limiter = _RateLimiter(MAX_REQUESTS_PER_MINUTE)
 def _token() -> str:
     token = os.getenv("CLICKUP_API_TOKEN", "").strip()
     if not token:
+        # Opcional: cofre do sistema (Windows Credential Manager, macOS
+        # Keychain) via keyring. Para guardar la:
+        #   python -m keyring set clickup-mcp api_token
+        try:
+            import keyring
+
+            token = (keyring.get_password("clickup-mcp", "api_token") or "").strip()
+        except ImportError:
+            pass
+    if not token:
         raise ClickUpError(
             "CLICKUP_API_TOKEN nao definido. Copie .env.example para .env e "
-            "cole seu token pessoal (ClickUp > Settings > Apps > API Token)."
+            "cole seu token pessoal (ClickUp > Settings > Apps > API Token), "
+            "ou guarde no cofre do sistema com: "
+            "python -m keyring set clickup-mcp api_token"
         )
     return token
+
+
+def limpar_cache() -> None:
+    with _cache_lock:
+        _cache.clear()
 
 
 def request(method: str, path: str, **kwargs):
@@ -93,7 +123,7 @@ def request(method: str, path: str, **kwargs):
     for tentativa in range(MAX_RETRIES):
         _limiter.acquire()
         try:
-            resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
+            resp = _session.request(method, url, headers=headers, timeout=30, **kwargs)
         except requests.RequestException as exc:
             ultimo_erro = exc
             espera = 2 ** tentativa
@@ -123,9 +153,26 @@ def request(method: str, path: str, **kwargs):
             ultimo_erro = ClickUpError(f"{resp.status_code}: {resp.text[:200]}")
             continue
 
+        # 401/403 sao categorias proprias: token ruim nao e a mesma coisa que
+        # token bom sem permissao, e nenhum dos dois melhora com retry.
+        if resp.status_code == 401:
+            raise ClickUpError(
+                f"401 (token invalido, revogado ou ausente): {resp.text[:300]}"
+            )
+        if resp.status_code == 403:
+            raise ClickUpError(
+                f"403 (token valido, mas sem permissao neste recurso): "
+                f"{resp.text[:300]}"
+            )
+
         if resp.status_code >= 400:
             # 4xx que nao seja 429 e erro do nosso lado: repetir nao ajuda.
             raise ClickUpError(f"{resp.status_code}: {resp.text[:500]}")
+
+        # Qualquer escrita bem-sucedida pode ter mudado o que os GETs cacheados
+        # viram: esvazia tudo em vez de tentar invalidacao fina.
+        if method.upper() != "GET":
+            limpar_cache()
 
         if not resp.content:
             return {}
@@ -151,6 +198,51 @@ def put(path: str, **kwargs):
 
 def delete(path: str, **kwargs):
     return request("DELETE", path, **kwargs)
+
+
+def get_cacheado(path: str, params: dict | None = None, ttl: float | None = None):
+    """GET com cache por TTL. So para leituras que mudam raramente
+    (hierarquia, membros); tarefas mudam o tempo todo e nao devem passar aqui.
+    """
+    chave = path + "|" + json.dumps(params or {}, sort_keys=True)
+    agora = time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(chave)
+        if hit and agora - hit[0] < (CACHE_TTL if ttl is None else ttl):
+            return hit[1]
+    dado = get(path, params=params)
+    with _cache_lock:
+        _cache[chave] = (time.monotonic(), dado)
+    return dado
+
+
+def get_paginado(path: str, params: dict | None = None, chave: str = "tasks") -> list:
+    """Percorre todas as paginas de um endpoint paginado por `page`."""
+    itens: list = []
+    pagina = 0
+    while True:
+        p = dict(params or {})
+        p["page"] = pagina
+        resp = get(path, params=p)
+        lote = resp.get(chave, [])
+        itens.extend(lote)
+        if resp.get("last_page") or not lote:
+            break
+        pagina += 1
+    return itens
+
+
+def em_paralelo(fn, itens, max_workers: int = 8) -> list:
+    """Aplica `fn` a cada item em threads, preservando a ordem.
+
+    O rate limiter e compartilhado e thread-safe, entao o teto por minuto
+    continua valendo para o conjunto; o ganho e sobrepor a latencia de rede.
+    Excecoes propagam para o chamador.
+    """
+    if not itens:
+        return []
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        return list(ex.map(fn, itens))
 
 
 def upload_attachment(task_id: str, caminho: Path, nome: str | None = None) -> dict:
