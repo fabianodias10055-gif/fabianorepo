@@ -9,6 +9,7 @@ discord-feedback-bot/data/
 clickup-mcp/alteracoes.jsonl
 clickup-mcp/simple-icons-*.tgz
 clickup-mcp/package/
+clickup-mcp/icons_out/
 # Secrets / local state that must never be committed
 *.db
 *.sqlite

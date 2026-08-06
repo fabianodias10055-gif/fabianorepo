@@ -31,13 +31,16 @@ ICONE_POR_CATEGORIA = {
     "DISCORD": "discord.png",
     "GUMROAD": "gumroad.png",
     "EMAIL": "email.png",
+    "RESEND": "resend.png",
+    "N8N": "n8n.png",
 }
 
 # GERAL e BRANDING nao sao marcas de terceiros: levam o banner do proprio Wingman.
 BANNER_WINGMAN = "https://ai.locodev.dev/og-launch.png"
 CATEGORIAS_COM_BANNER = {"GERAL", "BRANDING"}
 
-TAG_RE = re.compile(r"\[([A-ZÀ-Ú]+)\]")
+# 0-9 por causa de tags como [N8N]
+TAG_RE = re.compile(r"\[([A-ZÀ-Ú0-9]+)\]")
 
 
 def categoria_de(titulo: str) -> str | None:
