@@ -5,6 +5,9 @@
 *.pyc
 __pycache__/
 discord-feedback-bot/data/
+clickup-mcp/alteracoes.jsonl
+clickup-mcp/simple-icons-*.tgz
+clickup-mcp/package/
 # Secrets / local state that must never be committed
 *.db
 *.sqlite

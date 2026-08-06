@@ -1,0 +1,6 @@
+# Só é necessário para regenerar os ícones com gerar_icones.py.
+# Separado do requirements.txt principal porque o cairosvg depende da lib
+# nativa do Cairo, que dá trabalho de instalar no Windows — e o servidor MCP
+# funciona perfeitamente sem ele (os PNGs já vêm prontos em assets/icones/).
+cairosvg>=2.7,<3.0
+Pillow>=11.0,<12.0
