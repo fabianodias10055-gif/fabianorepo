@@ -4,6 +4,7 @@
 !.env.example
 *.pyc
 __pycache__/
+.venv/
 discord-feedback-bot/data/
 clickup-mcp/alteracoes.jsonl
 clickup-mcp/simple-icons-*.tgz
