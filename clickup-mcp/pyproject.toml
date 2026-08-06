@@ -34,7 +34,7 @@ clickup-mcp = "server:main"
 clickup-anexar-icones = "anexar_icones:main"
 
 [tool.setuptools]
-py-modules = ["server", "clickup_api", "anexar_icones", "gerar_icones", "sincronizar_vault"]
+py-modules = ["server", "clickup_api", "anexar_icones", "gerar_icones", "sincronizar_vault", "reconciliar_vault"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

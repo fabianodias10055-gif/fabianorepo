@@ -1223,6 +1223,34 @@ def sincronizar_vault(
 
 
 @mcp.tool()
+def reconciliar_vault(
+    direcao: str = "ambos", workspace_id: str = "90171401081"
+) -> str:
+    """Reconcilia o vault "ClickUp Sync" com o ClickUp, nas duas direcoes.
+
+    "empurrar": itens novos da Caixa de Entrada do vault viram tarefas.
+    "puxar": regenera as notas espelho por pasta. "ambos": os dois, nessa ordem.
+    """
+    if direcao not in ("ambos", "empurrar", "puxar"):
+        return json.dumps({"erro": "direcao deve ser ambos, empurrar ou puxar"}, ensure_ascii=False)
+
+    import reconciliar_vault as _rv
+
+    saida: dict = {}
+    if direcao in ("ambos", "empurrar"):
+        if SIMULAR:
+            return _simulado("reconciliar_vault", direcao=direcao)
+        resultados = _rv.empurrar(workspace_id)
+        saida["enviadas"] = [r for r in resultados if "task_id" in r]
+        saida["erros"] = [r for r in resultados if "erro" in r]
+        if saida["enviadas"]:
+            _auditar("reconciliar_vault", enviadas=len(saida["enviadas"]))
+    if direcao in ("ambos", "puxar"):
+        saida["espelhos"] = _rv.puxar(workspace_id)
+    return json.dumps(saida, ensure_ascii=False)
+
+
+@mcp.tool()
 def ler_audit_log(dias: int = 7, acao: str = "") -> str:
     """O que este servidor alterou nos ultimos `dias`, mais recente primeiro.
 
