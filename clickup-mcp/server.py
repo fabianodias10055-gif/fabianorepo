@@ -12,6 +12,7 @@ Interruptores por variavel de ambiente (ver .env.example):
     CLICKUP_MAX_DOWNLOAD_MB   teto do download em anexar_url (padrao 50)
 """
 
+import csv
 import json
 import logging
 import os
@@ -31,6 +32,7 @@ import clickup_api as api
 
 BASE_DIR = Path(__file__).resolve().parent
 AUDIT_LOG = BASE_DIR / "alteracoes.jsonl"
+EXPORT_DIR = BASE_DIR / "exports"
 
 # Apagar tarefa e irreversivel e a API nao tem lixeira. Fica atras de um
 # interruptor explicito para que um pedido ambiguo do usuario nunca vire
@@ -123,6 +125,39 @@ def _rotulo_lista(t: dict) -> str:
     if pasta and pasta.lower() != "hidden":
         return f"{pasta} / {lista}"
     return lista
+
+
+def _montar_corpo(dados: dict) -> tuple[dict, str | None]:
+    """Monta o corpo de criacao de tarefa a partir de campos opcionais.
+
+    Devolve (corpo, erro). Compartilhado por criar_tarefa,
+    criar_tarefas_em_lote e duplicar_tarefa para os campos nao divergirem.
+    """
+    corpo: dict = {}
+    if dados.get("nome"):
+        corpo["name"] = dados["nome"]
+    if dados.get("descricao"):
+        corpo["markdown_description"] = dados["descricao"]
+    if dados.get("status"):
+        corpo["status"] = dados["status"]
+    prioridade = dados.get("prioridade") or ""
+    if prioridade:
+        if prioridade not in _NIVEIS_PRIORIDADE:
+            return {}, f"prioridade invalida: {prioridade}"
+        corpo["priority"] = _NIVEIS_PRIORIDADE[prioridade]
+    try:
+        for campo in ("due_date", "start_date"):
+            if dados.get(campo):
+                corpo[campo] = _para_ms(dados[campo])
+    except ValueError as exc:
+        return {}, str(exc)
+    if dados.get("parent"):
+        corpo["parent"] = dados["parent"]
+    if dados.get("tags"):
+        corpo["tags"] = dados["tags"]
+    if dados.get("responsaveis"):
+        corpo["assignees"] = dados["responsaveis"]
+    return corpo, None
 
 
 # --------------------------------------------------------------------------
@@ -362,28 +397,13 @@ def criar_tarefa(
     `prioridade`: urgent, high, normal ou low. Datas em AAAA-MM-DD (ou com
     hora: "AAAA-MM-DD HH:MM"). `tags` sao as tags nativas do ClickUp.
     """
-    corpo: dict = {"name": nome}
-    if descricao:
-        corpo["markdown_description"] = descricao
-    if status:
-        corpo["status"] = status
-    if prioridade:
-        if prioridade not in _NIVEIS_PRIORIDADE:
-            return json.dumps({"erro": f"prioridade invalida: {prioridade}"})
-        corpo["priority"] = _NIVEIS_PRIORIDADE[prioridade]
-    try:
-        if due_date:
-            corpo["due_date"] = _para_ms(due_date)
-        if start_date:
-            corpo["start_date"] = _para_ms(start_date)
-    except ValueError as exc:
-        return json.dumps({"erro": str(exc)}, ensure_ascii=False)
-    if parent:
-        corpo["parent"] = parent
-    if tags:
-        corpo["tags"] = tags
-    if responsaveis:
-        corpo["assignees"] = responsaveis
+    corpo, erro = _montar_corpo({
+        "nome": nome, "descricao": descricao, "prioridade": prioridade,
+        "status": status, "due_date": due_date, "start_date": start_date,
+        "parent": parent, "tags": tags, "responsaveis": responsaveis,
+    })
+    if erro:
+        return json.dumps({"erro": erro}, ensure_ascii=False)
 
     if SIMULAR:
         return _simulado("criar_tarefa", list_id=list_id, corpo=corpo)
@@ -799,6 +819,495 @@ def apagar_tarefa(task_id: str) -> str:
         snapshot=_snapshot(antes),
     )
     return json.dumps({"apagada": task_id, "nome": antes.get("name")}, ensure_ascii=False)
+
+
+# --------------------------------------------------------------------------
+# Estrutura do workspace
+# --------------------------------------------------------------------------
+
+@mcp.tool()
+def criar_lista(nome: str, folder_id: str = "", space_id: str = "") -> str:
+    """Cria uma lista dentro de uma pasta (folder_id) ou solta num space (space_id).
+
+    Passe exatamente um dos dois.
+    """
+    if bool(folder_id) == bool(space_id):
+        return json.dumps({"erro": "passe folder_id OU space_id, exatamente um"}, ensure_ascii=False)
+
+    if SIMULAR:
+        return _simulado("criar_lista", nome=nome, folder_id=folder_id, space_id=space_id)
+
+    caminho = f"/folder/{folder_id}/list" if folder_id else f"/space/{space_id}/list"
+    r = api.post(caminho, json={"name": nome})
+    _auditar("criar_lista", list_id=r.get("id"), nome=nome)
+    return json.dumps({"list_id": r.get("id"), "nome": r.get("name")}, ensure_ascii=False)
+
+
+@mcp.tool()
+def criar_pasta(space_id: str, nome: str) -> str:
+    """Cria uma pasta (folder) num space."""
+    if SIMULAR:
+        return _simulado("criar_pasta", space_id=space_id, nome=nome)
+
+    r = api.post(f"/space/{space_id}/folder", json={"name": nome})
+    _auditar("criar_pasta", folder_id=r.get("id"), nome=nome)
+    return json.dumps({"folder_id": r.get("id"), "nome": r.get("name")}, ensure_ascii=False)
+
+
+@mcp.tool()
+def editar_lista(list_id: str, nome: str) -> str:
+    """Renomeia uma lista."""
+    if SIMULAR:
+        return _simulado("editar_lista", list_id=list_id, nome=nome)
+
+    r = api.put(f"/list/{list_id}", json={"name": nome})
+    _auditar("editar_lista", list_id=list_id, nome=nome)
+    return json.dumps({"list_id": r.get("id"), "nome": r.get("name")}, ensure_ascii=False)
+
+
+@mcp.tool()
+def listar_statuses(list_id: str) -> str:
+    """Nomes validos de status (colunas) de uma lista.
+
+    Consulte antes de editar_tarefa(status=...): o nome precisa ser exato.
+    """
+    info = api.get_cacheado(f"/list/{list_id}", ttl=60)
+    return json.dumps(
+        [
+            {"status": s.get("status"), "tipo": s.get("type")}
+            for s in info.get("statuses", [])
+        ],
+        ensure_ascii=False,
+    )
+
+
+# --------------------------------------------------------------------------
+# Pipeline de tarefas
+# --------------------------------------------------------------------------
+
+@mcp.tool()
+def listar_checklists(task_id: str) -> str:
+    """Checklists da tarefa com os IDs necessarios para marcar_item_checklist."""
+    t = api.get(f"/task/{task_id}")
+    return json.dumps(
+        [
+            {
+                "checklist_id": cl.get("id"),
+                "titulo": cl.get("name"),
+                "itens": [
+                    {
+                        "item_id": i.get("id"),
+                        "nome": i.get("name"),
+                        "feito": bool(i.get("resolved")),
+                    }
+                    for i in cl.get("items") or []
+                ],
+            }
+            for cl in t.get("checklists") or []
+        ],
+        ensure_ascii=False,
+    )
+
+
+@mcp.tool()
+def marcar_item_checklist(checklist_id: str, item_id: str, feito: bool = True) -> str:
+    """Marca (ou desmarca) um item de checklist. IDs vem de listar_checklists."""
+    if SIMULAR:
+        return _simulado(
+            "marcar_item_checklist", checklist_id=checklist_id,
+            item_id=item_id, feito=feito,
+        )
+
+    api.put(
+        f"/checklist/{checklist_id}/checklist_item/{item_id}",
+        json={"resolved": feito},
+    )
+    _auditar("marcar_item_checklist", checklist_id=checklist_id, item_id=item_id, feito=feito)
+    return json.dumps({"ok": True, "feito": feito}, ensure_ascii=False)
+
+
+@mcp.tool()
+def duplicar_tarefa(task_id: str, novo_nome: str = "", list_id: str = "") -> str:
+    """Clona uma tarefa: nome, descricao, prioridade, tags e checklists.
+
+    De proposito NAO copia datas, status nem responsaveis - um clone de modelo
+    comeca do zero. Sem `list_id`, a copia nasce na mesma lista.
+    """
+    if SIMULAR:
+        return _simulado("duplicar_tarefa", task_id=task_id, novo_nome=novo_nome)
+
+    orig = api.get(f"/task/{task_id}")
+    destino = list_id or (orig.get("list") or {}).get("id")
+    if not destino:
+        return json.dumps({"erro": "tarefa original sem lista conhecida"}, ensure_ascii=False)
+
+    dados = {
+        "nome": novo_nome or f"{orig.get('name')} (copia)",
+        "descricao": orig.get("description") or "",
+        "tags": [tg.get("name") for tg in orig.get("tags") or []],
+    }
+    prioridade = (orig.get("priority") or {}).get("priority") or ""
+    if prioridade in _NIVEIS_PRIORIDADE:
+        dados["prioridade"] = prioridade
+    corpo, erro = _montar_corpo(dados)
+    if erro:
+        return json.dumps({"erro": erro}, ensure_ascii=False)
+
+    t = api.post(f"/list/{destino}/task", json=corpo)
+    for cl in orig.get("checklists") or []:
+        r = api.post(f"/task/{t['id']}/checklist", json={"name": cl.get("name")})
+        cid = (r.get("checklist") or {}).get("id")
+        for item in cl.get("items") or []:
+            api.post(f"/checklist/{cid}/checklist_item", json={"name": item.get("name")})
+
+    _auditar("duplicar_tarefa", original=task_id, nova=t.get("id"))
+    return json.dumps(_resumir_tarefa(t), ensure_ascii=False)
+
+
+@mcp.tool()
+def criar_tarefas_em_lote(list_id: str, tarefas: list[dict]) -> str:
+    """Cria varias tarefas de uma vez na mesma lista.
+
+    Cada item aceita: nome (obrigatorio), descricao, prioridade, status,
+    due_date, start_date, parent, tags, responsaveis. Itens invalidos sao
+    reportados por posicao sem derrubar o lote.
+    """
+    if SIMULAR:
+        return _simulado("criar_tarefas_em_lote", list_id=list_id, quantidade=len(tarefas))
+
+    criadas, erros = [], []
+    for i, dados in enumerate(tarefas):
+        corpo, erro = _montar_corpo(dados)
+        if erro or not corpo.get("name"):
+            erros.append({"posicao": i, "erro": erro or "campo nome obrigatorio"})
+            continue
+        try:
+            t = api.post(f"/list/{list_id}/task", json=corpo)
+            criadas.append(_resumir_tarefa(t))
+        except Exception as exc:  # noqa: BLE001 - reportado por item
+            erros.append({"posicao": i, "nome": dados.get("nome"), "erro": str(exc)})
+
+    _auditar("criar_tarefas_em_lote", list_id=list_id, criadas=len(criadas), erros=len(erros))
+    return json.dumps({"criadas": criadas, "erros": erros}, ensure_ascii=False)
+
+
+@mcp.tool()
+def concluir_tarefa(task_id: str) -> str:
+    """Move a tarefa para o status de conclusao da lista dela.
+
+    Descobre sozinho o nome da coluna final (tipo closed/done), entao funciona
+    em qualquer board sem saber como a coluna se chama.
+    """
+    if SIMULAR:
+        return _simulado("concluir_tarefa", task_id=task_id)
+
+    t = api.get(f"/task/{task_id}")
+    lid = (t.get("list") or {}).get("id")
+    if not lid:
+        return json.dumps({"erro": "tarefa sem lista conhecida"}, ensure_ascii=False)
+    statuses = api.get(f"/list/{lid}").get("statuses", [])
+    final = next(
+        (s.get("status") for s in statuses if s.get("type") == "closed"), None
+    ) or next(
+        (s.get("status") for s in statuses if s.get("type") == "done"), None
+    )
+    if not final:
+        return json.dumps({
+            "erro": "lista sem status de conclusao",
+            "statuses": [s.get("status") for s in statuses],
+        }, ensure_ascii=False)
+
+    atualizado = api.put(f"/task/{task_id}", json={"status": final})
+    _auditar("concluir_tarefa", task_id=task_id, status=final)
+    return json.dumps(_resumir_tarefa(atualizado), ensure_ascii=False)
+
+
+@mcp.tool()
+def mudar_status_em_lote(task_ids: list[str], status: str) -> str:
+    """Muda o status de varias tarefas de uma vez. Falhas sao reportadas por tarefa."""
+    if SIMULAR:
+        return _simulado("mudar_status_em_lote", tarefas=task_ids, status=status)
+
+    def mudar(tid: str) -> dict:
+        try:
+            api.put(f"/task/{tid}", json={"status": status})
+            return {"id": tid, "ok": True}
+        except Exception as exc:  # noqa: BLE001 - reportado por item
+            return {"id": tid, "erro": str(exc)}
+
+    resultados = api.em_paralelo(mudar, task_ids, max_workers=4)
+    _auditar("mudar_status_em_lote", status=status, tarefas=len(task_ids))
+    return json.dumps(resultados, ensure_ascii=False)
+
+
+# --------------------------------------------------------------------------
+# Comentarios e pessoas
+# --------------------------------------------------------------------------
+
+@mcp.tool()
+def responder_comentario(comment_id: str, texto: str) -> str:
+    """Responde um comentario existente, criando uma thread."""
+    if SIMULAR:
+        return _simulado("responder_comentario", comment_id=comment_id)
+
+    r = api.post(f"/comment/{comment_id}/reply", json={"comment_text": texto})
+    _auditar("responder_comentario", comment_id=comment_id)
+    return json.dumps({"ok": True, "reply_id": r.get("id")}, ensure_ascii=False)
+
+
+@mcp.tool()
+def comentar_lista(list_id: str, texto: str) -> str:
+    """Comenta na lista inteira (aviso geral), sem escolher tarefa."""
+    if SIMULAR:
+        return _simulado("comentar_lista", list_id=list_id)
+
+    r = api.post(f"/list/{list_id}/comment", json={"comment_text": texto})
+    _auditar("comentar_lista", list_id=list_id)
+    return json.dumps({"ok": True, "comment_id": r.get("id")}, ensure_ascii=False)
+
+
+@mcp.tool()
+def seguir_tarefa(task_id: str, user_id: int = 0, seguir: bool = True) -> str:
+    """Adiciona (ou remove) um observador da tarefa, sem torna-lo responsavel.
+
+    Sem `user_id`, usa o dono do token. Alguns planos ignoram watchers via API;
+    confira o retorno.
+    """
+    if not user_id:
+        user_id = (api.get("/user").get("user") or {}).get("id")
+
+    if SIMULAR:
+        return _simulado("seguir_tarefa", task_id=task_id, user_id=user_id, seguir=seguir)
+
+    operacao = "add" if seguir else "rem"
+    t = api.put(f"/task/{task_id}", json={"watchers": {operacao: [user_id]}})
+    _auditar("seguir_tarefa", task_id=task_id, user_id=user_id, seguir=seguir)
+    return json.dumps(_resumir_tarefa(t), ensure_ascii=False)
+
+
+@mcp.tool()
+def convidar_membro(workspace_id: str, email: str) -> str:
+    """Convida alguem para o workspace como convidado (guest), por email.
+
+    Atencao: em alguns planos (inclusive o Free) o ClickUp so aceita convite
+    pela interface; nesse caso a API devolve o erro e ele e repassado aqui.
+    """
+    if SIMULAR:
+        return _simulado("convidar_membro", workspace_id=workspace_id, email=email)
+
+    r = api.post(f"/team/{workspace_id}/guest", json={"email": email})
+    _auditar("convidar_membro", workspace_id=workspace_id, email=email)
+    return json.dumps({"ok": True, "resposta": bool(r)}, ensure_ascii=False)
+
+
+# --------------------------------------------------------------------------
+# Tempo e metas
+# --------------------------------------------------------------------------
+
+@mcp.tool()
+def registrar_tempo(
+    workspace_id: str, task_id: str, minutos: int, descricao: str = ""
+) -> str:
+    """Registra tempo trabalhado numa tarefa (entrada terminando agora)."""
+    if minutos <= 0:
+        return json.dumps({"erro": "minutos precisa ser maior que zero"}, ensure_ascii=False)
+
+    if SIMULAR:
+        return _simulado("registrar_tempo", task_id=task_id, minutos=minutos)
+
+    duracao = minutos * 60_000
+    inicio = int(time.time() * 1000) - duracao
+    r = api.post(
+        f"/team/{workspace_id}/time_entries",
+        json={"tid": task_id, "start": inicio, "duration": duracao, "description": descricao},
+    )
+    _auditar("registrar_tempo", task_id=task_id, minutos=minutos)
+    return json.dumps(
+        {"ok": True, "entry_id": (r.get("data") or {}).get("id")}, ensure_ascii=False
+    )
+
+
+@mcp.tool()
+def ler_tempo(workspace_id: str, task_id: str = "", dias: int = 30) -> str:
+    """Entradas de tempo dos ultimos `dias`, opcionalmente de uma tarefa so."""
+    params: dict = {"start_date": int((time.time() - dias * 86_400) * 1000)}
+    if task_id:
+        params["task_id"] = task_id
+    entradas = api.get(f"/team/{workspace_id}/time_entries", params=params).get("data", [])
+    resumo = [
+        {
+            "tarefa": (e.get("task") or {}).get("name"),
+            "minutos": round(int(e.get("duration") or 0) / 60_000),
+            "inicio": e.get("start"),
+            "descricao": e.get("description"),
+        }
+        for e in entradas
+    ]
+    return json.dumps(
+        {"total_minutos": sum(r["minutos"] for r in resumo), "entradas": resumo},
+        ensure_ascii=False,
+    )
+
+
+@mcp.tool()
+def criar_meta(
+    workspace_id: str,
+    nome: str,
+    descricao: str = "",
+    due_date: str = "",
+    alvo: int = 0,
+    unidade: str = "",
+) -> str:
+    """Cria uma meta (Goal). Com `alvo` > 0, cria um key result numerico junto.
+
+    Exemplo: nome="20 tutoriais publicados", alvo=20, unidade="tutoriais".
+    """
+    corpo: dict = {"name": nome, "description": descricao}
+    try:
+        if due_date:
+            corpo["due_date"] = _para_ms(due_date)
+    except ValueError as exc:
+        return json.dumps({"erro": str(exc)}, ensure_ascii=False)
+
+    if SIMULAR:
+        return _simulado("criar_meta", nome=nome, alvo=alvo)
+
+    r = api.post(f"/team/{workspace_id}/goal", json=corpo)
+    goal_id = (r.get("goal") or {}).get("id")
+    key_result_id = None
+    if alvo > 0 and goal_id:
+        k = api.post(
+            f"/goal/{goal_id}/key_result",
+            json={
+                "name": nome,
+                "type": "number",
+                "steps_start": 0,
+                "steps_end": alvo,
+                "unit": unidade or "itens",
+                "owners": [],
+                "task_ids": [],
+                "list_ids": [],
+            },
+        )
+        key_result_id = (k.get("key_result") or {}).get("id")
+    _auditar("criar_meta", goal_id=goal_id, nome=nome, alvo=alvo)
+    return json.dumps(
+        {"goal_id": goal_id, "key_result_id": key_result_id}, ensure_ascii=False
+    )
+
+
+# --------------------------------------------------------------------------
+# Cola local: vault, auditoria, exportacao
+# --------------------------------------------------------------------------
+
+@mcp.tool()
+def sincronizar_vault(
+    workspace_id: str = "90171401081", pasta: str = "Wingman Marketing"
+) -> str:
+    """Regenera a nota espelho do board no vault Obsidian.
+
+    So le o ClickUp; a escrita e num arquivo local (ver sincronizar_vault.py).
+    """
+    import sincronizar_vault as _sv
+
+    destino = Path(os.getenv("WINGMAN_VAULT_NOTA", "") or _sv.NOTA_PADRAO)
+    if not destino.parent.is_dir():
+        return json.dumps(
+            {"erro": f"pasta do vault nao existe: {destino.parent}"}, ensure_ascii=False
+        )
+    conteudo = _sv.gerar_nota(workspace_id, pasta)
+    destino.write_text(conteudo, encoding="utf-8")
+    return json.dumps(
+        {"nota": str(destino), "tamanho": len(conteudo)}, ensure_ascii=False
+    )
+
+
+@mcp.tool()
+def ler_audit_log(dias: int = 7, acao: str = "") -> str:
+    """O que este servidor alterou nos ultimos `dias`, mais recente primeiro.
+
+    `acao` filtra por tipo (ex: "criar_tarefa"). Snapshots sao omitidos do
+    retorno; use restaurar_tarefa para aproveita-los.
+    """
+    try:
+        linhas = AUDIT_LOG.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return json.dumps([], ensure_ascii=False)
+
+    limite = datetime.now(timezone.utc).timestamp() - dias * 86_400
+    saida = []
+    for linha in reversed(linhas):
+        try:
+            registro = json.loads(linha)
+            quando = datetime.fromisoformat(registro.get("quando", "")).timestamp()
+        except ValueError:
+            continue
+        if quando < limite:
+            break  # o arquivo e ordenado; dali para tras e tudo mais antigo
+        if acao and registro.get("acao") != acao:
+            continue
+        if "snapshot" in registro:
+            registro = {**registro, "snapshot": "(guardado)"}
+        saida.append(registro)
+        if len(saida) >= 100:
+            break
+    return json.dumps(saida, ensure_ascii=False)
+
+
+@mcp.tool()
+def exportar_board(
+    workspace_id: str, pasta_contem: str = "", formato: str = "json"
+) -> str:
+    """Exporta as tarefas do workspace para um arquivo local em exports/.
+
+    `pasta_contem` filtra pelo rotulo "Pasta / Lista" (ex: "Wingman Marketing").
+    `formato`: json ou csv (csv abre direto no Excel).
+    """
+    if formato not in ("json", "csv"):
+        return json.dumps({"erro": "formato deve ser json ou csv"}, ensure_ascii=False)
+
+    tarefas = api.get_paginado(
+        f"/team/{workspace_id}/task",
+        params={"include_closed": "true", "subtasks": "true"},
+    )
+    if pasta_contem:
+        tarefas = [t for t in tarefas if pasta_contem in _rotulo_lista(t)]
+
+    linhas = [
+        {
+            "id": t.get("id"),
+            "nome": t.get("name"),
+            "lista": _rotulo_lista(t),
+            "status": (t.get("status") or {}).get("status"),
+            "prioridade": (t.get("priority") or {}).get("priority"),
+            "responsaveis": "; ".join(
+                a.get("username") or "" for a in t.get("assignees") or []
+            ),
+            "due_date": t.get("due_date"),
+            "url": t.get("url"),
+        }
+        for t in tarefas
+    ]
+
+    EXPORT_DIR.mkdir(exist_ok=True)
+    carimbo = datetime.now().strftime("%Y%m%d-%H%M%S")
+    destino = EXPORT_DIR / f"board-{carimbo}.{formato}"
+    if formato == "json":
+        destino.write_text(
+            json.dumps(linhas, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    else:
+        # utf-8-sig para o Excel reconhecer acentos sem perguntar.
+        with destino.open("w", newline="", encoding="utf-8-sig") as fh:
+            colunas = ["id", "nome", "lista", "status", "prioridade",
+                       "responsaveis", "due_date", "url"]
+            escritor = csv.DictWriter(fh, fieldnames=colunas)
+            escritor.writeheader()
+            escritor.writerows(linhas)
+
+    return json.dumps(
+        {"arquivo": str(destino), "tarefas": len(linhas)}, ensure_ascii=False
+    )
 
 
 def main() -> None:

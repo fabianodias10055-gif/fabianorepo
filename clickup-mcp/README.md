@@ -10,19 +10,23 @@ Este servidor usa seu token pessoal contra a API pública, onde o teto é **100 
 
 ## O Que Faz
 
-12 ferramentas expostas à IA:
+47 ferramentas expostas à IA, em grupos:
 
-| Leitura | Escrita |
-|---|---|
-| `listar_workspaces` | `criar_tarefa` |
-| `listar_hierarquia` | `editar_tarefa` |
-| `buscar_tarefas` | `atribuir_responsaveis` |
-| `obter_tarefa` | `comentar_tarefa` |
-| `listar_membros` | `anexar_arquivo` |
-| | `anexar_url` |
-| | `apagar_tarefa` (desligada por padrão) |
+**Leitura** — `listar_workspaces`, `listar_hierarquia`, `buscar_tarefas`, `buscar_por_nome`, `obter_tarefa`, `listar_membros`, `ler_comentarios`, `listar_campos`, `listar_statuses`, `listar_checklists`, `relatorio_board`, `listar_webhooks`, `ler_tempo`, `ler_audit_log`
 
-Toda escrita é registrada em `alteracoes.jsonl`, para você conseguir revisar depois o que a IA mexeu.
+**Tarefas** — `criar_tarefa` (com datas, subtarefa via `parent`, tags e responsáveis), `criar_tarefas_em_lote`, `editar_tarefa`, `duplicar_tarefa`, `concluir_tarefa`, `mudar_status_em_lote`, `atribuir_responsaveis`, `seguir_tarefa`, `adicionar_tag`, `remover_tag`, `criar_checklist`, `marcar_item_checklist`, `definir_campo`, `criar_dependencia`, `restaurar_tarefa`, `apagar_tarefa` (desligada por padrão)
+
+**Comentários e anexos** — `comentar_tarefa`, `responder_comentario`, `comentar_lista`, `anexar_arquivo`, `anexar_url`
+
+**Estrutura** — `criar_pasta`, `criar_lista`, `editar_lista`, `convidar_membro`
+
+**Tempo e metas** — `registrar_tempo`, `criar_meta`
+
+**Integrações** — `criar_webhook`, `apagar_webhook` (gancho para n8n), `enviar_email_resend`, `notificar_discord` (exigem as variáveis no `.env`)
+
+**Local** — `sincronizar_vault` (espelho do board no Obsidian), `exportar_board` (JSON/CSV em `exports/`)
+
+Toda escrita é registrada em `alteracoes.jsonl`, com snapshot antes de editar ou apagar; `restaurar_tarefa` recria a partir do snapshot. `CLICKUP_DRY_RUN=true` no `.env` faz toda escrita apenas simular.
 
 ## Requisitos
 
@@ -64,7 +68,7 @@ No Claude Desktop, edite `claude_desktop_config.json`:
 }
 ```
 
-Reinicie o cliente. As 12 ferramentas aparecem disponíveis.
+Reinicie o cliente. As 47 ferramentas aparecem disponíveis.
 
 ## Anexar Ícones em Lote
 
@@ -75,7 +79,7 @@ python anexar_icones.py --workspace SEU_WORKSPACE_ID --dry-run   # mostra o plan
 python anexar_icones.py --workspace SEU_WORKSPACE_ID             # executa
 ```
 
-Categorias reconhecidas: `YOUTUBE`, `PATREON`, `LINKEDIN`, `GITHUB`, `DISCORD`, `GUMROAD`, `EMAIL` levam o ícone da marca; `GERAL` e `BRANDING` levam o banner do Wingman. Tarefas sem categoria conhecida são puladas e listadas no final.
+Categorias reconhecidas: `YOUTUBE`, `PATREON`, `LINKEDIN`, `GITHUB`, `DISCORD`, `GUMROAD`, `EMAIL`, `RESEND`, `N8N` levam o ícone da marca; `GERAL`, `BRANDING` e `TUTORIAL` levam o banner do Wingman. Tarefas sem categoria conhecida são puladas e listadas no final. `--incremental` só varre o que mudou desde a última execução completa.
 
 Rodar de novo é seguro: tarefas que já têm o anexo são puladas.
 
