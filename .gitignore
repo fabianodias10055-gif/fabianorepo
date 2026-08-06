@@ -7,6 +7,7 @@ __pycache__/
 .venv/
 discord-feedback-bot/data/
 clickup-mcp/alteracoes.jsonl
+clickup-mcp/.ultima_varredura.json
 clickup-mcp/simple-icons-*.tgz
 clickup-mcp/package/
 clickup-mcp/icons_out/
