@@ -66,6 +66,16 @@ def listas_do_workspace(workspace_id: str) -> list[tuple[str, str]]:
     return listas
 
 
+def anexos_da_tarefa(task_id: str) -> list[dict]:
+    """Anexos de uma tarefa.
+
+    Chamada a parte porque `GET /list/{id}/task` nao devolve o campo
+    `attachments` - so o endpoint da tarefa individual devolve. Sem isto a
+    guarda de duplicata abaixo nunca dispara e reexecutar duplica os anexos.
+    """
+    return api.get(f"/task/{task_id}").get("attachments") or []
+
+
 def tarefas_da_lista(list_id: str) -> list[dict]:
     tarefas, pagina = [], 0
     while True:
@@ -112,7 +122,7 @@ def main() -> int:
             nome_anexo = arquivo or "wingman-banner.png"
 
             # Ja anexado numa execucao anterior? Nao duplica.
-            if any(a.get("title") == nome_anexo for a in t.get("attachments") or []):
+            if any(a.get("title") == nome_anexo for a in anexos_da_tarefa(t["id"])):
                 pulados += 1
                 continue
 
