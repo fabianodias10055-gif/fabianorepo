@@ -35,9 +35,10 @@ ICONE_POR_CATEGORIA = {
     "N8N": "n8n.png",
 }
 
-# GERAL e BRANDING nao sao marcas de terceiros: levam o banner do proprio Wingman.
+# GERAL, BRANDING e TUTORIAL nao sao marcas de terceiros: levam o banner do
+# proprio Wingman.
 BANNER_WINGMAN = "https://ai.locodev.dev/og-launch.png"
-CATEGORIAS_COM_BANNER = {"GERAL", "BRANDING"}
+CATEGORIAS_COM_BANNER = {"GERAL", "BRANDING", "TUTORIAL"}
 
 # 0-9 por causa de tags como [N8N]
 TAG_RE = re.compile(r"\[([A-ZÀ-Ú0-9]+)\]")
