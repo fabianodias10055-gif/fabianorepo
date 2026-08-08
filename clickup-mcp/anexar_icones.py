@@ -44,6 +44,7 @@ ICONE_POR_CATEGORIA = {
     "EMAIL": "email.png",
     "RESEND": "resend.png",
     "N8N": "n8n.png",
+    "CLICKUP": "clickup.png",
 }
 
 # GERAL, BRANDING e TUTORIAL nao sao marcas de terceiros: levam o banner do

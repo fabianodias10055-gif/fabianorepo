@@ -37,6 +37,7 @@ BRAND = {
     'gumroad':  'FF90E8',
     'resend':   '000000',
     'n8n':      'EA4B71',
+    'clickup':  '7B68EE',
 }
 
 SIZE = 256
