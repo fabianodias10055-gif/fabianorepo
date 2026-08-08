@@ -82,6 +82,11 @@ UNANSWERED_PUSHOVER = os.getenv("UNANSWERED_PUSHOVER", "").lower() in ("1", "tru
 SPAM_IMAGE_COUNT = int(os.getenv("SPAM_IMAGE_COUNT", "3"))      # image-only msgs within window
 SPAM_IMAGE_CHANNELS = int(os.getenv("SPAM_IMAGE_CHANNELS", "2")) # across this many channels
 SPAM_IMAGE_WINDOW = int(os.getenv("SPAM_IMAGE_WINDOW", "15"))    # seconds
+# Single-channel image dump: total image ATTACHMENTS from a user in ONE channel
+# within the window that triggers a kick. Catches a single message with many
+# images (or rapid image posts) — the classic scam pattern the cross-channel
+# rules miss. Lower it (e.g. 3-4) to be more aggressive.
+SPAM_IMAGE_BURST = int(os.getenv("SPAM_IMAGE_BURST", "5"))
 # General cross-channel flood
 SPAM_MSG_COUNT = int(os.getenv("SPAM_MSG_COUNT", "6"))           # any msgs within window
 SPAM_MSG_CHANNELS = int(os.getenv("SPAM_MSG_CHANNELS", "3"))     # across this many channels
@@ -3971,9 +3976,15 @@ class FeedbackBot(discord.Client):
         uid = member.id
         now = datetime.now(timezone.utc)
         is_image_only = bool(message.attachments) and not message.content.strip()
+        _img_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+        img_attachments = sum(
+            1 for a in message.attachments
+            if (a.content_type and a.content_type.startswith("image/"))
+            or os.path.splitext(a.filename)[1].lower() in _img_exts
+        )
 
         deque = self._spam_tracker.setdefault(uid, collections.deque())
-        deque.append((now, message.channel.id, message, is_image_only))
+        deque.append((now, message.channel.id, message, is_image_only, img_attachments))
 
         # Drop entries older than the longest window we care about
         max_window = max(SPAM_IMAGE_WINDOW, SPAM_MSG_WINDOW)
@@ -4009,9 +4020,21 @@ class FeedbackBot(discord.Client):
         msg_recent = [e for e in recent if (now - e[0]).total_seconds() <= SPAM_MSG_WINDOW]
         msg_channels = len({e[1] for e in msg_recent})
 
+        # Single-channel image burst: sum image ATTACHMENTS from image-only messages
+        # within the window, per channel. Catches one message with many images (or a
+        # rapid image dump) in a single channel — the case the cross-channel rules
+        # above miss. Requiring image-only spares legit multi-screenshot posts that
+        # include a text description.
+        _img_by_channel: dict[int, int] = {}
+        for e in recent:
+            if e[3] and (now - e[0]).total_seconds() <= SPAM_IMAGE_WINDOW:
+                _img_by_channel[e[1]] = _img_by_channel.get(e[1], 0) + e[4]
+        max_channel_imgs = max(_img_by_channel.values(), default=0)
+
         is_spam = (
             (len(img_recent) >= SPAM_IMAGE_COUNT and img_channels >= SPAM_IMAGE_CHANNELS) or
-            (len(msg_recent) >= SPAM_MSG_COUNT and msg_channels >= SPAM_MSG_CHANNELS)
+            (len(msg_recent) >= SPAM_MSG_COUNT and msg_channels >= SPAM_MSG_CHANNELS) or
+            max_channel_imgs >= SPAM_IMAGE_BURST
         )
         if not is_spam:
             return False
@@ -4025,7 +4048,7 @@ class FeedbackBot(discord.Client):
         # 1. Delete every tracked message
         deleted = 0
         by_channel: dict[int, list] = {}
-        for _ts, cid, msg, _ in entries:
+        for _ts, cid, msg, _, _ in entries:
             by_channel.setdefault(cid, []).append(msg)
 
         for cid, msgs in by_channel.items():
@@ -4042,7 +4065,7 @@ class FeedbackBot(discord.Client):
         # 2. Kick
         kicked = False
         try:
-            await member.kick(reason="Auto-spam: cross-channel image/message flood")
+            await member.kick(reason="Auto-spam: image/message flood")
             kicked = True
         except Exception as ke:
             logger.warning("Spam kick failed for %s: %s", member, ke)
@@ -4071,7 +4094,7 @@ class FeedbackBot(discord.Client):
         if public_ch and kicked:
             try:
                 await public_ch.send(
-                    f"⚠️ **{member}** was automatically kicked for spamming images across multiple channels. "
+                    f"⚠️ **{member}** was automatically kicked for spamming images. "
                     f"Their messages have been removed."
                 )
             except Exception:
