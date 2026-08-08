@@ -272,4 +272,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if sys.stdout is None or sys.stderr is None:
+        # Rodando via pythonw (agendador do Windows): nao ha console, entao a
+        # saida vai para um log ao lado do script.
+        _log = open(Path(__file__).resolve().parent / "reconciliar.log",
+                    "a", encoding="utf-8")
+        sys.stdout = sys.stderr = _log
+        print(f"\n--- execucao {datetime.now():%Y-%m-%d %H:%M:%S}")
     sys.exit(main())
