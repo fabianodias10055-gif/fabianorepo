@@ -16,26 +16,33 @@ def audit_em_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "AUTO_SYNC", False)
 
 
+class _ThreadFalsa:
+    criadas: list = []
+
+    def __init__(self, target=None, daemon=None):
+        _ThreadFalsa.criadas.append(target)
+
+    def start(self):
+        pass
+
+
 def test_auditar_dispara_sync_com_debounce(monkeypatch):
-    chamadas = []
-    monkeypatch.setattr(server.subprocess, "Popen",
-                        lambda *a, **k: chamadas.append(a))
+    _ThreadFalsa.criadas = []
+    monkeypatch.setattr(server.threading, "Thread", _ThreadFalsa)
     monkeypatch.setattr(server, "AUTO_SYNC", True)
     monkeypatch.setattr(server, "_ultimo_sync", 0.0)
     server._auditar("criar_tarefa", task_id="x")
-    server._auditar("editar_tarefa", task_id="y")  # dentro do debounce: nao spawna
-    assert len(chamadas) == 1
-    assert "--so-puxar" in chamadas[0][0]
+    server._auditar("editar_tarefa", task_id="y")  # dentro do debounce: nada
+    assert _ThreadFalsa.criadas == [server._sync_vault_em_thread]
 
 
 def test_reconciliar_nao_dispara_sync_de_si_mesmo(monkeypatch):
-    chamadas = []
-    monkeypatch.setattr(server.subprocess, "Popen",
-                        lambda *a, **k: chamadas.append(a))
+    _ThreadFalsa.criadas = []
+    monkeypatch.setattr(server.threading, "Thread", _ThreadFalsa)
     monkeypatch.setattr(server, "AUTO_SYNC", True)
     monkeypatch.setattr(server, "_ultimo_sync", 0.0)
     server._auditar("reconciliar_vault", enviadas=1)
-    assert chamadas == []
+    assert _ThreadFalsa.criadas == []
 
 
 def test_para_ms_formatos():

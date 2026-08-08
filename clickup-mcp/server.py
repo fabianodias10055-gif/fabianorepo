@@ -17,9 +17,8 @@ import json
 import logging
 import os
 import re
-import subprocess
-import sys
 import tempfile
+import threading
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -57,15 +56,30 @@ log = logging.getLogger("clickup-mcp")
 mcp = FastMCP("clickup")
 
 
-# Sync automatico do vault apos escritas. Debounce evita empilhar processos
-# numa rajada de tools; o atraso no filho agrupa a rajada num refresh so.
+# Sync automatico do vault apos escritas. Roda numa THREAD do proprio
+# processo, nao num subprocesso: o host MCP prende o servidor num job object
+# do Windows que bloqueia criar processos filhos (verificado: Popen nunca
+# produziu o filho). O debounce evita empilhar threads numa rajada de tools e
+# o atraso inicial agrupa a rajada num refresh so.
 AUTO_SYNC = os.getenv("CLICKUP_AUTO_SYNC", "true").lower() not in {"0", "false", "nao"}
 _SYNC_DEBOUNCE_S = 60
+_SYNC_ATRASO_S = 15
 _ultimo_sync = 0.0
 
 
+def _sync_vault_em_thread() -> None:
+    try:
+        time.sleep(_SYNC_ATRASO_S)
+        import reconciliar_vault as _rv
+
+        notas = _rv.puxar("90171401081")
+        log.info("sync automatico do vault: %d espelhos atualizados", len(notas))
+    except Exception as exc:  # noqa: BLE001 - thread de fundo so reporta
+        log.warning("sync automatico do vault falhou: %s", exc)
+
+
 def _agendar_sync_vault() -> None:
-    """Dispara, em segundo plano, um refresh dos espelhos do vault.
+    """Agenda, em thread de fundo, um refresh dos espelhos do vault.
 
     Chamado apos toda mutacao auditada: mudanca feita pelo chat aparece no
     Obsidian em ~15s, sem depender da tarefa agendada de hora em hora.
@@ -75,16 +89,7 @@ def _agendar_sync_vault() -> None:
     if not AUTO_SYNC or agora - _ultimo_sync < _SYNC_DEBOUNCE_S:
         return
     _ultimo_sync = agora
-    try:
-        with (BASE_DIR / "reconciliar.log").open("a", encoding="utf-8") as log_fh:
-            subprocess.Popen(
-                [sys.executable, str(BASE_DIR / "reconciliar_vault.py"),
-                 "--so-puxar", "--atraso", "15"],
-                cwd=BASE_DIR, stdout=log_fh, stderr=log_fh,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-    except OSError as exc:
-        log.warning("nao consegui agendar o sync do vault: %s", exc)
+    threading.Thread(target=_sync_vault_em_thread, daemon=True).start()
 
 
 def _auditar(acao: str, **detalhes) -> None:
