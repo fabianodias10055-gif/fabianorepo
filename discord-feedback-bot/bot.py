@@ -91,6 +91,26 @@ SPAM_IMAGE_BURST = int(os.getenv("SPAM_IMAGE_BURST", "5"))
 SPAM_MSG_COUNT = int(os.getenv("SPAM_MSG_COUNT", "6"))           # any msgs within window
 SPAM_MSG_CHANNELS = int(os.getenv("SPAM_MSG_CHANNELS", "3"))     # across this many channels
 SPAM_MSG_WINDOW = int(os.getenv("SPAM_MSG_WINDOW", "10"))        # seconds
+# Scam / phishing keyword heuristic (crypto giveaways, free-nitro, promo scams).
+# Complements the image-burst rule (which catches text-less image dumps) by
+# catching the TEXT-based scams. Conservative: requires SCAM_MIN_HITS distinct
+# phrases AND a new/low-tenure account, then times out (default) or kicks.
+SCAM_MIN_HITS = int(os.getenv("SCAM_MIN_HITS", "2"))              # distinct scam phrases to trigger
+SCAM_NEW_ACCOUNT_DAYS = int(os.getenv("SCAM_NEW_ACCOUNT_DAYS", "30"))  # only auto-action accounts younger than this
+SCAM_TIMEOUT_MINUTES = int(os.getenv("SCAM_TIMEOUT_MINUTES", "60"))
+SCAM_ACTION = os.getenv("SCAM_ACTION", "kick").lower()           # "kick" (default) or "timeout"
+# Curated scam phrases — deliberately specific to keep false positives low.
+_SCAM_PHRASES = (
+    "free nitro", "discord nitro", "nitro gift", "steam gift", "gift card",
+    "claim your", "claim now", "click here to claim", "you have won", "you've won",
+    "giveaway", "airdrop", "air drop", "promo code", "bonus code", "deposit bonus",
+    "rakeback", "cash out", "cashout", "withdrawal success", "double your",
+    "guaranteed profit", "investment opportunity", "trading signals", "crypto giveaway",
+    "connect your wallet", "connect wallet", "seed phrase", "wallet address",
+    "usdt", "t.me/", "join my telegram", "message me on telegram",
+    "make $", "earn $", "earn money fast", "get rich", "hot singles",
+    "18+", "onlyfans", "sugar daddy", "$500", "$1000", "$2000", "$2700", "$5000",
+)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 PUSHOVER_USER_KEY = os.getenv("PUSHOVER_USER_KEY", "")
 PUSHOVER_API_TOKEN = os.getenv("PUSHOVER_API_TOKEN", "")
@@ -3962,6 +3982,83 @@ class FeedbackBot(discord.Client):
         logger.info("Invite link removed from %s in #%s — timed_out=%s", member, message.channel, timed_out)
         return True
 
+    async def _check_scam(self, message: discord.Message) -> bool:
+        """Detect text-based scam/phishing (crypto giveaways, free-nitro, promo
+        scams) from new accounts and delete + timeout (or kick) + alert staff.
+        Returns True if actioned. Conservative: needs multiple scam phrases AND a
+        new/low-tenure account so established members aren't caught by a keyword."""
+        if not message.guild:
+            return False
+        member = message.author
+        if not isinstance(member, discord.Member):
+            return False
+        # Never action staff / owner.
+        if member.guild_permissions.administrator or member.id == message.guild.owner_id:
+            return False
+        if any(r.name == "LocoDev" for r in getattr(member, "roles", [])):
+            return False
+        # Already actioned this session — just delete anything else they post.
+        if member.id in self._spam_actioned:
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return True
+
+        parts = [message.content or ""]
+        for emb in message.embeds:
+            parts += [emb.title or "", emb.description or "", str(emb.url or "")]
+        text = " ".join(parts).lower()
+        if not text.strip():
+            return False
+        hits = [p for p in _SCAM_PHRASES if p in text]
+        if len(hits) < SCAM_MIN_HITS:
+            return False
+
+        now = datetime.now(timezone.utc)
+        account_age = (now - member.created_at).days if member.created_at else 9999
+        joined_age = (now - member.joined_at).days if member.joined_at else 9999
+        # Established member (old account AND here a while) → a keyword match alone
+        # isn't enough; leave it for a human. New/fresh accounts get auto-actioned.
+        if account_age > SCAM_NEW_ACCOUNT_DAYS and joined_age > 7:
+            return False
+
+        self._spam_actioned.add(member.id)
+        deleted = False
+        try:
+            await message.delete()
+            deleted = True
+        except Exception as _de:
+            logger.warning("Scam delete failed: %s", _de)
+
+        action_taken = "no action (check bot permissions)"
+        try:
+            if SCAM_ACTION == "kick":
+                await member.kick(reason="Auto-mod: scam/phishing content")
+                action_taken = "kicked"
+            else:
+                await member.timeout(now + timedelta(minutes=SCAM_TIMEOUT_MINUTES),
+                                     reason="Auto-mod: scam/phishing content")
+                action_taken = f"timed out {SCAM_TIMEOUT_MINUTES}m"
+        except Exception as _ae:
+            logger.warning("Scam action failed for %s: %s", member, _ae)
+
+        log_ch = await self._mirror_dest()
+        if log_ch:
+            try:
+                await log_ch.send(
+                    "🚩 **SCAM AUTO-ACTION**\n"
+                    f"**User:** {member.mention} (**{member}** — ID: `{member.id}`)\n"
+                    f"**Account age:** {account_age}d · **joined:** {joined_age}d ago\n"
+                    f"**Matched phrases:** {', '.join(hits[:8])}\n"
+                    f"**Message deleted:** {'✅' if deleted else '❌'} · **Action:** {action_taken}\n"
+                    f"**Channel:** <#{message.channel.id}>"
+                )
+            except Exception:
+                pass
+        logger.info("Scam action: user=%s action=%s hits=%d", member, action_taken, len(hits))
+        return True
+
     async def _check_spam(self, message: discord.Message) -> bool:
         """Track message; return True and take action if spam is detected."""
         if not message.guild:
@@ -4257,6 +4354,10 @@ class FeedbackBot(discord.Client):
 
         # Invite-link filter — runs before flood check so a single drop is caught
         if await self._check_invite_link(message):
+            return
+
+        # Text-based scam/phishing filter (crypto giveaways, free-nitro, etc.)
+        if await self._check_scam(message):
             return
 
         # Spam detection runs on every non-bot message
