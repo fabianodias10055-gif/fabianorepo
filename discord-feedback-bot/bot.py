@@ -3168,6 +3168,76 @@ async def test_merch_slash(interaction: discord.Interaction) -> None:
     )
 
 
+@app_commands.command(name="purge_user", description="(Staff) Delete all of a user's messages across channels within N hours.")
+@app_commands.describe(
+    user_id="Target user's ID (works even if they left / were kicked / banned)",
+    hours="How far back to delete, in hours (default 24, max 336 = 14 days)",
+)
+async def purge_user_slash(interaction: discord.Interaction, user_id: str,
+                           hours: int = 24) -> None:
+    _SCAN_LIMIT = 2000  # max messages scanned per channel
+    # Staff-gated: server owner or LocoDev role.
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    is_owner = bool(OWNER_DISCORD_ID) and interaction.user.id == OWNER_DISCORD_ID
+    if not (is_owner or "LocoDev" in roles):
+        await interaction.response.send_message("You don't have permission.", ephemeral=True)
+        return
+    if not interaction.guild:
+        await interaction.response.send_message("Run this in the server.", ephemeral=True)
+        return
+    # Accept a raw ID or a mention like <@123>.
+    try:
+        target_id = int("".join(c for c in user_id if c.isdigit()))
+    except Exception:
+        await interaction.response.send_message("Invalid user ID.", ephemeral=True)
+        return
+    if target_id == interaction.guild.me.id:
+        await interaction.response.send_message("I won't purge my own messages.", ephemeral=True)
+        return
+    # Discord only lets bots bulk-delete messages younger than 14 days.
+    hours = max(1, min(hours, 336))
+    await interaction.response.defer(thinking=True, ephemeral=True)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    def _is_target(m: discord.Message) -> bool:
+        return m.author.id == target_id
+
+    total = 0
+    channels_hit = 0
+    skipped = 0
+    me = interaction.guild.me
+    targets = list(interaction.guild.text_channels) + list(interaction.guild.threads)
+    for ch in targets:
+        try:
+            perms = ch.permissions_for(me)
+            if not (perms.read_message_history and perms.manage_messages):
+                skipped += 1
+                continue
+            deleted = await ch.purge(
+                limit=_SCAN_LIMIT, check=_is_target, after=cutoff,
+                reason=f"purge_user by {interaction.user} (ID {interaction.user.id})",
+            )
+            if deleted:
+                total += len(deleted)
+                channels_hit += 1
+        except discord.Forbidden:
+            skipped += 1
+        except Exception as _pe:
+            skipped += 1
+            logger.warning("purge_user error in channel %s: %s", getattr(ch, "id", "?"), _pe)
+
+    result = (f"🧹 Deleted **{total}** message(s) from user ID `{target_id}` "
+              f"across **{channels_hit}** channel(s) (scanned the last {hours}h).")
+    if skipped:
+        result += f"\n⚠️ Skipped {skipped} channel(s) I couldn't read/manage."
+    if total == 0:
+        result += "\n_(Nothing found — the messages may be older than the scan window or already gone.)_"
+    await interaction.followup.send(result, ephemeral=True)
+    logger.info("purge_user: target=%s deleted=%d channels=%d by=%s",
+                target_id, total, channels_hit, interaction.user)
+
+
 class FeedbackBot(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.default()
@@ -3625,6 +3695,7 @@ class FeedbackBot(discord.Client):
         self.tree.add_command(test_pushover_slash)
         self.tree.add_command(test_merch_slash)
         self.tree.add_command(sync_merch_mentions_slash)
+        self.tree.add_command(purge_user_slash)
         self.tree.add_command(kb_scan_slash)
         self.tree.add_command(trial_stats_slash)
         self.tree.add_command(shorten_slash)
@@ -3650,6 +3721,7 @@ class FeedbackBot(discord.Client):
             self.tree.add_command(test_pushover_slash)
             self.tree.add_command(test_merch_slash)
             self.tree.add_command(sync_merch_mentions_slash)
+            self.tree.add_command(purge_user_slash)
             self.tree.add_command(kb_scan_slash)
             self.tree.add_command(trial_stats_slash)
             self.tree.add_command(shorten_slash)
