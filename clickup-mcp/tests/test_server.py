@@ -12,6 +12,30 @@ B = api.API_BASE
 @pytest.fixture(autouse=True)
 def audit_em_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "AUDIT_LOG", tmp_path / "alteracoes.jsonl")
+    # Sem isto, cada _auditar dos testes dispararia um processo real de sync.
+    monkeypatch.setattr(server, "AUTO_SYNC", False)
+
+
+def test_auditar_dispara_sync_com_debounce(monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(server.subprocess, "Popen",
+                        lambda *a, **k: chamadas.append(a))
+    monkeypatch.setattr(server, "AUTO_SYNC", True)
+    monkeypatch.setattr(server, "_ultimo_sync", 0.0)
+    server._auditar("criar_tarefa", task_id="x")
+    server._auditar("editar_tarefa", task_id="y")  # dentro do debounce: nao spawna
+    assert len(chamadas) == 1
+    assert "--so-puxar" in chamadas[0][0]
+
+
+def test_reconciliar_nao_dispara_sync_de_si_mesmo(monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(server.subprocess, "Popen",
+                        lambda *a, **k: chamadas.append(a))
+    monkeypatch.setattr(server, "AUTO_SYNC", True)
+    monkeypatch.setattr(server, "_ultimo_sync", 0.0)
+    server._auditar("reconciliar_vault", enviadas=1)
+    assert chamadas == []
 
 
 def test_para_ms_formatos():

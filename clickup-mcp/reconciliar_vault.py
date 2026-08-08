@@ -25,6 +25,7 @@ import argparse
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -254,7 +255,15 @@ def main() -> int:
     ap.add_argument("--workspace", default="90171401081")
     ap.add_argument("--so-puxar", action="store_true")
     ap.add_argument("--so-empurrar", action="store_true")
+    ap.add_argument(
+        "--atraso", type=int, default=0,
+        help="segundos de espera antes de comecar (agrupa rajadas de escrita)",
+    )
     args = ap.parse_args()
+
+    if args.atraso:
+        time.sleep(args.atraso)
+        print(f"--- sync automatico {datetime.now():%Y-%m-%d %H:%M:%S}")
 
     if not args.so_puxar:
         enviados = empurrar(args.workspace)

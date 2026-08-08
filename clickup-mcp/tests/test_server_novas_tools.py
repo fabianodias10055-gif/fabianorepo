@@ -12,6 +12,7 @@ B = api.API_BASE
 @pytest.fixture(autouse=True)
 def audit_em_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "AUDIT_LOG", tmp_path / "alteracoes.jsonl")
+    monkeypatch.setattr(server, "AUTO_SYNC", False)
 
 
 @responses.activate
