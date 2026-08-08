@@ -45,6 +45,9 @@ ICONE_POR_CATEGORIA = {
     "RESEND": "resend.png",
     "N8N": "n8n.png",
     "CLICKUP": "clickup.png",
+    # capcut.png vem do icone PWA oficial (512px reduzido), nao do
+    # simple-icons: o pacote nao tem a marca CapCut.
+    "CAPCUT": "capcut.png",
 }
 
 # GERAL, BRANDING e TUTORIAL nao sao marcas de terceiros: levam o banner do
