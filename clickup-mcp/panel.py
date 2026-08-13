@@ -82,8 +82,10 @@ CATALOG = [
     ("telekinesis", "Telekinesis", "interaction"),
 ]
 
-# Observed demand. Manual today because no question is recorded anywhere; once
-# capture exists this comes from the database.
+# Fallback demand for a system nobody has asked about in the logged questions
+# yet. Real demand (open, no-source questions in Inbox/) always wins once a
+# system has at least one logged question, even a count of zero; this table
+# only guesses for a system that has never come up.
 DEMAND = {
     "ledge-system": 14,
     "obstacle-avoidance": 11,
@@ -298,7 +300,28 @@ def build_people(questions: list[dict]) -> list[dict]:
 
 
 def scan() -> dict:
+    # Real demand first: with logged questions, a system's demand is how many
+    # people actually asked and got nothing, not the hand-typed DEMAND table.
+    # That table only fills the gap for a system nobody has asked about yet
+    # (or before the collector has ever run), so the two numbers never argue
+    # with the Gaps section, which is built from the same count.
+    questions = parse_questions()
+    open_demand: dict[str, int] = {}
+    seen_systems: set[str] = set()
+    for q in questions:
+        if q["system"] == "-":
+            continue
+        seen_systems.add(q["system"])
+        if q["status"] == "no-source":
+            open_demand[q["system"]] = open_demand.get(q["system"], 0) + 1
+
     systems = [measure_system(slug, name) for slug, name, _c in CATALOG]
+    for s in systems:
+        # A system with any logged question uses the real open count, even
+        # when that count is 0 (already answered): the hand-typed DEMAND
+        # table is only a placeholder for a system nobody has asked about.
+        if s["slug"] in seen_systems:
+            s["demand"] = open_demand.get(s["slug"], 0)
     demand_max = max((s["demand"] for s in systems), default=0)
     for s in systems:
         s["pct"], s["urgency"] = urgency(s, demand_max)
@@ -333,7 +356,6 @@ def scan() -> dict:
                 "overview": has.get("overview", False),
             })
 
-    questions = parse_questions()
     gaps = build_gaps(questions)
     people = build_people(questions)
 
@@ -558,7 +580,8 @@ def render_html(d: dict, live: bool) -> str:
         sub = '<span class="pill p-mute">subscriber</span>' if q["subscriber"] == "yes" else ""
         sysname = esc(q["system_name"]) if q["system"] != "-" else "catalog wide"
         q_rows.append(
-            f'<div class="q q-{cls}" data-ch="{esc(q["channel"])}">'
+            f'<div class="q q-{cls}" data-ch="{esc(q["channel"])}" '
+            f'data-st="{esc(q["status"])}" data-sys="{esc(q["system"])}">'
             f'<div class="q-top">'
             f'<span class="who"><i class="cd" style="background:{colour}"></i>{esc(q["who"])}</span>'
             f'<span class="pill p-{cls}">{esc(q["status"])}</span>{sub}</div>'
@@ -569,10 +592,25 @@ def render_html(d: dict, live: bool) -> str:
     questions_html = "".join(q_rows) or '<p class="dim">No questions logged yet. Paste one into Inbox/00 - Questions.md</p>'
 
     chans = sorted({q["channel"] for q in d["questions"]})
-    filter_html = '<button class="fchip" data-ch="all" aria-pressed="true">All</button>' + "".join(
-        f'<button class="fchip" data-ch="{esc(c)}" aria-pressed="false">'
+    chan_filter_html = '<button class="fchip" data-f="ch" data-v="all" aria-pressed="true">All channels</button>' + "".join(
+        f'<button class="fchip" data-f="ch" data-v="{esc(c)}" aria-pressed="false">'
         f'<i class="cd" style="background:{CHANNELS.get(c, "var(--ink3)")}"></i>{esc(c)}</button>'
         for c in chans
+    )
+
+    statuses = sorted({q["status"] for q in d["questions"]})
+    status_filter_html = '<button class="fchip" data-f="st" data-v="all" aria-pressed="true">All statuses</button>' + "".join(
+        f'<button class="fchip" data-f="st" data-v="{esc(s)}" aria-pressed="false">{esc(s)}</button>'
+        for s in statuses
+    )
+
+    systems_present = sorted(
+        {(q["system"], q["system_name"] if q["system"] != "-" else "catalog wide")
+         for q in d["questions"]},
+        key=lambda t: t[1],
+    )
+    system_options = '<option value="all">All systems</option>' + "".join(
+        f'<option value="{esc(slug)}">{esc(label)}</option>' for slug, label in systems_present
     )
 
     # --- gaps (expandable) --------------------------------------------------
@@ -596,23 +634,26 @@ def render_html(d: dict, live: bool) -> str:
         )
     gaps_html = "".join(gap_rows) or '<p class="dim">No unanswerable questions logged. Mark a question <code>status: no-source</code> to see it here.</p>'
 
-    # --- people -------------------------------------------------------------
+    # --- people (compact table, collapsed past the first 8) -----------------
     people_rows = []
-    for p in d["people"]:
+    for i, p in enumerate(d["people"]):
         colour = CHANNELS.get(p["channel"], "var(--ink3)")
         if p["subscriber"] == "yes":
             tag = '<span class="pill p-ok">subscriber</span>'
         elif p["subscriber"] == "no":
             tag = '<span class="pill p-mute">not a subscriber</span>'
         else:
-            tag = '<span class="pill p-mute">unknown</span>'
+            tag = ""  # "unknown" on nearly every row is noise, not signal
         lead = '<span class="pill p-partial">hot lead</span>' if p["lead"] else ""
         people_rows.append(
-            f'<div class="person"><div class="pname">'
-            f'<i class="cd" style="background:{colour}"></i>{esc(p["who"])}{tag}{lead}</div>'
-            f'<div class="pmeta">{p["asked"]} asked · {p["open"]} open · last {p["last"]}</div></div>'
+            f'<tr class="prow"{" hidden" if i >= 8 else ""}>'
+            f'<td class="nm"><i class="cd" style="background:{colour}"></i>'
+            f'{esc(p["who"])}{tag}{lead}</td>'
+            f'<td class="num">{p["asked"]}</td><td class="num">{p["open"]}</td>'
+            f'<td class="num">{p["last"]}</td></tr>'
         )
-    people_html = "".join(people_rows) or '<p class="dim">Nobody logged yet.</p>'
+    people_html = "".join(people_rows) or '<tr><td colspan="4" class="dim">Nobody logged yet.</td></tr>'
+    people_hidden_count = max(0, len(d["people"]) - 8)
 
     def video_cells(v: dict) -> str:
         keys = ("overview", "description", "transcript", "comments")
@@ -718,13 +759,26 @@ tr.u-done td.need .pct {{ color:var(--ok); }}
 .cols {{ display:grid; grid-template-columns:1.25fr 1fr; gap:16px; align-items:start; }}
 @media (max-width:880px) {{ .cols {{ grid-template-columns:1fr; }} }}
 .cd {{ display:inline-block; width:7px; height:7px; border-radius:2px; }}
-.fchips {{ display:flex; flex-wrap:wrap; gap:7px; margin-bottom:12px; }}
+.qhead {{ display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:2px; }}
+.qhead h2 {{ margin:0; }}
+.qcount {{ font-family:var(--mono); font-size:11.5px; color:var(--ink3); white-space:nowrap; }}
+.fchips {{ display:flex; flex-wrap:wrap; gap:7px; margin-bottom:8px; }}
 .fchip {{ font-family:var(--ui); font-size:12.5px; background:transparent;
   border:1px solid var(--line); color:var(--ink2); border-radius:999px;
   padding:5px 12px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }}
 .fchip:hover {{ border-color:var(--ink3); color:var(--ink); }}
 .fchip[aria-pressed="true"] {{ border-color:var(--accent); background:var(--surface2);
   color:var(--ink); font-weight:560; }}
+.fselect {{ font-family:var(--ui); font-size:12.5px; color:var(--ink); background:var(--surface);
+  border:1px solid var(--line); border-radius:8px; padding:6px 10px; margin-bottom:12px;
+  max-width:100%; }}
+.fselect:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }}
+.fmore {{ display:block; width:100%; margin-top:4px; font-family:var(--ui); font-size:12.5px;
+  font-weight:560; color:var(--ink2); background:var(--surface2); border:1px solid var(--line);
+  border-radius:8px; padding:9px; cursor:pointer; }}
+.fmore:hover {{ border-color:var(--accent); color:var(--ink); }}
+.fmore[hidden] {{ display:none; }}
+.q[hidden] {{ display:none; }}
 .feed {{ display:flex; flex-direction:column; gap:9px; }}
 .q {{ border:1px solid var(--line); border-left:3px solid var(--line);
   border-radius:8px; padding:11px 13px; display:flex; flex-direction:column; gap:6px; }}
@@ -756,12 +810,7 @@ tr.u-done td.need .pct {{ color:var(--ok); }}
 .gq-item {{ font-size:12.5px; color:var(--ink2); display:flex; flex-direction:column; gap:2px; }}
 .gq-who {{ font-family:var(--mono); font-size:10.5px; color:var(--ink3); }}
 .gq-act {{ margin-top:4px; font-family:var(--mono); font-size:10.5px; color:var(--accent); }}
-.people {{ display:flex; flex-direction:column; gap:8px; }}
-.person {{ border:1px solid var(--line); border-radius:8px; padding:10px 12px; }}
-.pname {{ font-weight:620; font-size:13.5px; display:flex; align-items:center;
-  gap:7px; flex-wrap:wrap; }}
-.pmeta {{ font-family:var(--mono); font-size:10.5px; color:var(--ink3);
-  font-variant-numeric:tabular-nums; margin-top:3px; }}
+.prow[hidden] {{ display:none; }}
 .dim {{ color:var(--ink3); font-size:13px; }}
 ol.queue {{ margin:0; padding-left:20px; display:flex; flex-direction:column; gap:7px; }}
 ol.queue li {{ font-size:13.5px; }}
@@ -801,11 +850,18 @@ footer {{ color:var(--ink3); font-size:12px; border-top:1px solid var(--line);
 
 <div class="cols">
   <section class="card">
-    <h2>Incoming questions</h2>
-    <div class="fchips" id="chans">{filter_html}</div>
+    <div class="qhead">
+      <h2>Incoming questions</h2>
+      <span class="qcount" id="qcount"></span>
+    </div>
+    <div class="fchips" id="chanFilter">{chan_filter_html}</div>
+    <div class="fchips" id="statusFilter">{status_filter_html}</div>
+    <select class="fselect" id="sysFilter">{system_options}</select>
     <div class="feed" id="feed">{questions_html}</div>
-    <p class="note">Written by hand in <code>Inbox/00 - Questions.md</code>.
-    Paste a question when it arrives and this updates within seconds.</p>
+    <button class="fmore" id="showMore" type="button" hidden>Show more</button>
+    <p class="note">YouTube questions come from <code>collect_youtube.py</code>;
+    Discord ones are typed by hand into <code>Inbox/00 - Questions.md</code>.
+    Editing either file updates this within seconds.</p>
   </section>
 
   <section class="card">
@@ -819,16 +875,27 @@ footer {{ color:var(--ink3); font-size:12px; border-top:1px solid var(--line);
 
 <div class="cols">
   <section class="card">
-    <h2>Who is asking</h2>
-    <div class="people">{people_html}</div>
+    <div class="qhead">
+      <h2>Who is asking</h2>
+      <span class="qcount">{len(d['people'])} people</span>
+    </div>
+    <div class="scroll">
+    <table>
+      <thead><tr><th>Who</th><th>Asked</th><th>Open</th><th>Last</th></tr></thead>
+      <tbody id="peopleBody">{people_html}</tbody>
+    </table>
+    </div>
+    <button class="fmore" id="peopleMore" type="button"{' hidden' if people_hidden_count <= 0 else ''}>Show {people_hidden_count} more</button>
+    <p class="note">Ranked by how many of their questions are still open. A non-subscriber
+    who is stuck is a <span class="pill p-partial">hot lead</span>, not a support ticket.</p>
   </section>
 
   <section class="card">
     <h2>Priority queue</h2>
     <ol class="queue">{queue_html}</ol>
     <p class="note">Need combines how much is missing (overview and setup weigh most,
-    since they answer on their own) with how many people asked. Demand counts 60%,
-    the gap 40%.</p>
+    since they answer on their own) with real open demand where it exists, the old
+    guess only where nobody has asked yet. Demand counts 60%, the gap 40%.</p>
   </section>
 </div>
 
@@ -873,17 +940,80 @@ footer {{ color:var(--ink3); font-size:12px; border-top:1px solid var(--line);
 
 </div>
 <script>
-// Channel filter on the incoming feed.
-var chips = document.querySelectorAll('#chans .fchip');
-chips.forEach(function (b) {{
-  b.addEventListener('click', function () {{
-    chips.forEach(function (o) {{ o.setAttribute('aria-pressed', String(o === b)); }});
-    var want = b.dataset.ch;
-    document.querySelectorAll('#feed .q').forEach(function (q) {{
-      q.style.display = (want === 'all' || q.dataset.ch === want) ? '' : 'none';
+// Incoming questions: three filters (channel, status, system) combined with
+// AND, plus a collapse that only grows the visible slice of whatever
+// currently matches. All three live in one small state object so a filter
+// change and a "show more" click go through the same render path.
+(function () {{
+  var PAGE = 8;
+  var state = {{ ch: 'all', st: 'all', sys: 'all', limit: PAGE }};
+  var rows = Array.prototype.slice.call(document.querySelectorAll('#feed .q'));
+  var countEl = document.getElementById('qcount');
+  var moreBtn = document.getElementById('showMore');
+
+  function matches(row) {{
+    return (state.ch === 'all' || row.dataset.ch === state.ch)
+      && (state.st === 'all' || row.dataset.st === state.st)
+      && (state.sys === 'all' || row.dataset.sys === state.sys);
+  }}
+
+  function render() {{
+    var matched = rows.filter(matches);
+    matched.forEach(function (row, i) {{ row.hidden = i >= state.limit; }});
+    rows.filter(function (r) {{ return !matches(r); }}).forEach(function (r) {{ r.hidden = true; }});
+
+    var shown = Math.min(state.limit, matched.length);
+    countEl.textContent = matched.length
+      ? 'showing ' + shown + ' of ' + matched.length
+      : 'no matches';
+    moreBtn.hidden = shown >= matched.length;
+    if (!moreBtn.hidden) {{
+      moreBtn.textContent = 'Show more (' + (matched.length - shown) + ' left)';
+    }}
+  }}
+
+  function wireGroup(id, key) {{
+    document.querySelectorAll('#' + id + ' .fchip').forEach(function (b) {{
+      b.addEventListener('click', function () {{
+        document.querySelectorAll('#' + id + ' .fchip').forEach(function (o) {{
+          o.setAttribute('aria-pressed', String(o === b));
+        }});
+        state[key] = b.dataset.v;
+        state.limit = PAGE;
+        render();
+      }});
     }});
+  }}
+  if (!rows.length) {{
+    return; // nothing logged yet: leave the empty-state message alone
+  }}
+  wireGroup('chanFilter', 'ch');
+  wireGroup('statusFilter', 'st');
+
+  document.getElementById('sysFilter').addEventListener('change', function (e) {{
+    state.sys = e.target.value;
+    state.limit = PAGE;
+    render();
   }});
-}});
+
+  moreBtn.addEventListener('click', function () {{
+    state.limit += 20;
+    render();
+  }});
+
+  render();
+}})();
+
+// "Who is asking" table: reveal the rest in one click, no re-filtering needed.
+var peopleMore = document.getElementById('peopleMore');
+if (peopleMore) {{
+  peopleMore.addEventListener('click', function () {{
+    document.querySelectorAll('#peopleBody .prow[hidden]').forEach(function (r) {{
+      r.hidden = false;
+    }});
+    peopleMore.hidden = true;
+  }});
+}}
 
 // Gap rows expand to show the questions behind the number.
 document.querySelectorAll('.gap').forEach(function (g) {{
