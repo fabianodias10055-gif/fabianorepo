@@ -584,7 +584,13 @@ _admin = {"token": "", "token_at": 0.0, "cache": None, "cache_at": 0.0}
 def _admin_call(path: str, token: str = "", payload: dict | None = None):
     """One JSON request to the admin API: (http_status, parsed_or_None).
     Status 0 means the request never got an HTTP answer (network)."""
-    headers = {"Content-Type": "application/json"}
+    # Cloudflare fronting locodev.dev returns 403 for the default
+    # 'Python-urllib' User-Agent before the request ever reaches the app;
+    # any browser-like UA passes. Verified 2026-08-13.
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) LocoDevPanel/1.0",
+    }
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = urlrequest.Request(
