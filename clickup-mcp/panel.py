@@ -202,48 +202,56 @@ def parse_questions() -> list[dict]:
     Deliberately forgiving: a missing field becomes 'unknown' rather than an
     error, because the whole point is that pasting a question costs seconds.
     """
-    note = VAULT / "Inbox" / "00 - Questions.md"
-    if not note.is_file():
+    inbox = VAULT / "Inbox"
+    if not inbox.is_dir():
         return []
-    text = note.read_text(encoding="utf-8", errors="replace")
-
-    # Strip frontmatter first, otherwise its closing --- is mistaken for the
-    # separator below and the whole instructions block gets parsed as data.
-    text = re.sub(r"^---.*?\n---\n", "", text, count=1, flags=re.S)
-    # Fenced code blocks hold the format example: never read them as questions.
-    text = re.sub(r"```.*?```", "", text, flags=re.S)
-
-    parts = text.split("\n---\n", 1)
-    body = parts[1] if len(parts) > 1 else text
 
     out = []
-    matches = list(QUESTION_HEAD.finditer(body))
-    for i, m in enumerate(matches):
-        start = m.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
-        block = body[start:end]
+    # Every note in Inbox/ counts: the one you write by hand and the ones the
+    # collectors append to.
+    for note in sorted(inbox.glob("*.md")):
+        text = note.read_text(encoding="utf-8", errors="replace")
 
-        fields = {}
-        for line in block.splitlines():
-            fm = re.match(r"^(channel|system|status|subscriber):\s*(.*)$", line.strip())
-            if fm:
-                fields[fm.group(1)] = fm.group(2).strip().lower()
-        prose = "\n".join(
-            l for l in block.splitlines()
-            if l.strip() and not re.match(r"^(channel|system|status|subscriber):", l.strip())
-        ).strip()
+        # Strip frontmatter first, otherwise its closing --- is mistaken for the
+        # separator below and the whole instructions block gets parsed as data.
+        text = re.sub(r"^---.*?\n---\n", "", text, count=1, flags=re.S)
+        # Fenced code blocks hold the format example: never read them as questions.
+        text = re.sub(r"```.*?```", "", text, flags=re.S)
 
-        system = fields.get("system", "-")
-        out.append({
-            "date": m.group(1),
-            "who": m.group(2),
-            "channel": fields.get("channel", "unknown"),
-            "system": system,
-            "system_name": NAME_BY_SLUG.get(system, system),
-            "status": fields.get("status", "unknown"),
-            "subscriber": fields.get("subscriber", "unknown"),
-            "text": " ".join(prose.split()),
-        })
+        parts = text.split("\n---\n", 1)
+        body = parts[1] if len(parts) > 1 else text
+
+        matches = list(QUESTION_HEAD.finditer(body))
+        for i, m in enumerate(matches):
+            start = m.end()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+            block = body[start:end]
+
+            fields = {}
+            for line in block.splitlines():
+                fm = re.match(
+                    r"^(channel|system|status|subscriber|source):\s*(.*)$", line.strip())
+                if fm:
+                    fields[fm.group(1)] = fm.group(2).strip().lower()
+            prose = "\n".join(
+                l for l in block.splitlines()
+                if l.strip()
+                and not re.match(r"^(channel|system|status|subscriber|source):", l.strip())
+            ).strip()
+
+            system = fields.get("system", "-")
+            out.append({
+                "date": m.group(1),
+                "who": m.group(2),
+                "channel": fields.get("channel", "unknown"),
+                "system": system,
+                "system_name": NAME_BY_SLUG.get(system, system),
+                "status": fields.get("status", "unknown"),
+                "subscriber": fields.get("subscriber", "unknown"),
+                "source": fields.get("source", ""),
+                "text": " ".join(prose.split()),
+            })
+
     out.sort(key=lambda q: q["date"], reverse=True)
     return out
 
