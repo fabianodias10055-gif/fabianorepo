@@ -702,8 +702,27 @@ def watch_loop() -> None:
                   f"({data['written']}/{data['total_facets']} notes written)")
 
 
+def server_alive(port: int) -> bool:
+    """True when a watcher is already serving on this port."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.4)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 def main() -> int:
     global VAULT
+
+    # Running under pythonw (shortcut or scheduled task) means there is no
+    # console: sys.stdout is None and any print would raise. Send output to a
+    # log file next to the script instead.
+    if sys.stdout is None or sys.stderr is None:
+        # buffering=1 is line buffered: without it the log stays empty until the
+        # process exits, which is exactly when you need to read it.
+        log = open(Path(__file__).resolve().parent / "panel.log", "a",
+                   encoding="utf-8", buffering=1)
+        sys.stdout = sys.stderr = log
+        print(f"\n--- started {datetime.now():%Y-%m-%d %H:%M:%S}")
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--vault", default=str(VAULT))
@@ -717,6 +736,16 @@ def main() -> int:
     if not VAULT.is_dir():
         print(f"ERROR: vault not found at {VAULT}")
         return 1
+
+    url = f"http://127.0.0.1:{args.port}/"
+
+    # Someone is already watching (the scheduled task, or another shortcut
+    # click). Do not fight over the port: just show the panel and get out.
+    if args.watch and server_alive(args.port):
+        print(f"watcher already running, opening {url}")
+        if not args.no_open:
+            webbrowser.open(url)
+        return 0
 
     data = build(live=args.watch)
     out = VAULT / "Panel"
@@ -732,7 +761,6 @@ def main() -> int:
 
     socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("127.0.0.1", args.port), Handler) as httpd:
-        url = f"http://127.0.0.1:{args.port}/"
         print(f"\nwatching {VAULT}")
         print(f"panel live at {url}   (Ctrl+C to stop)")
         if not args.no_open:
