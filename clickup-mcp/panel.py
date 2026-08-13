@@ -16,8 +16,10 @@ refreshes itself within a couple of seconds.
 """
 
 import argparse
+import hashlib
 import http.server
 import json
+import os
 import re
 import socketserver
 import sys
@@ -26,12 +28,26 @@ import time
 import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib import error as urlerror
+from urllib import parse as urlparse
+from urllib import request as urlrequest
 
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
+
+BASE_DIR = Path(__file__).resolve().parent
+if load_dotenv:
+    load_dotenv(BASE_DIR / ".env")
 
 VAULT = Path(r"F:\LocoDev Vault")
 LEGACY_VAULT = Path(r"C:\Users\LocoDevPC\Documents\Vaults")
 PORT = 8765
 POLL_SECONDS = 2.0
+YT_API = "https://www.googleapis.com/youtube/v3"
+YT_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 # Facet key -> (display label, file name patterns, weight in the urgency score).
 # Overview and Setup weigh most: they are the ones that answer on their own.
@@ -121,12 +137,37 @@ INSTRUMENTATION = [
 # Scanning
 # --------------------------------------------------------------------------
 
-def strip_template(text: str) -> str:
-    """Remove frontmatter, guide comments and headings, leaving author prose."""
+def strip_scaffold(text: str) -> str:
+    """Remove frontmatter and guide comments only. Headings, bold labels and
+    list content survive: this is the version the answer-suggestion search
+    reads, where '## Symptom: the character grabs the rope but does not
+    swing' is exactly the text a question should match against."""
     body = re.sub(r"^---.*?---", "", text, count=1, flags=re.S)
     body = re.sub(r"<!--.*?-->", "", body, flags=re.S)
-    body = re.sub(r"^\s*[#|>*\-\d.]+.*$", "", body, flags=re.M)
     return body.strip()
+
+
+# A line that is pure template scaffolding: a bare bold label ('**Cause:**'
+# with nothing after it), or only list/checkbox/number punctuation. Content
+# written after a label ('**Cause:** the constraint is locked') never matches.
+_BARE_SCAFFOLD = re.compile(r"(?:\*\*[^*]+:\*\*)|(?:[-*\d.\s\[\]():]+)")
+
+
+def strip_template(text: str) -> str:
+    """What the AUTHOR wrote, for coverage measuring: scaffold removed, plus
+    headings, tables, quotes and bare template labels dropped. An untouched
+    template must come out (near) empty; the old single-regex version also
+    swallowed real prose in bold or bullets, undercounting written notes.
+    """
+    lines = []
+    for line in strip_scaffold(text).splitlines():
+        s = line.strip()
+        if not s or s.startswith(("#", "|", ">", "![](")):
+            continue
+        if _BARE_SCAFFOLD.fullmatch(s):
+            continue
+        lines.append(s)
+    return "\n".join(lines)
 
 
 def measure_system(slug: str, name: str) -> dict:
@@ -198,64 +239,282 @@ STATUS_CLASS = {
 NAME_BY_SLUG = {slug: name for slug, name, _c in CATALOG}
 
 
+ANSWERED_LOG_NAME = "02 - Answered.md"
+
+QUESTION_FIELDS = ("channel", "system", "status", "subscriber", "source",
+                   "video_id", "video_url", "video")
+_FIELD_LINE = re.compile(r"^(" + "|".join(QUESTION_FIELDS) + r"):\s*(.*)$")
+
+
+def _derive_id(date: str, who: str, source: str, text: str) -> str:
+    if source:
+        return source
+    return "local:" + hashlib.sha1(f"{date}|{who}|{text}".encode()).hexdigest()[:12]
+
+
+def _mask(raw: str, pattern: str, flags=re.S) -> str:
+    """Blank out a region length-for-length (spaces, newlines kept), so byte
+    offsets found in the masked copy still point at the right place in the
+    real file. Used to hide frontmatter, fenced examples and instructions
+    from the block scanner without disturbing where real blocks start.
+    """
+    def blank(m):
+        return re.sub(r"[^\n]", " ", m.group(0))
+    return re.sub(pattern, blank, raw, count=0, flags=flags)
+
+
+def _iter_inbox_blocks():
+    """Yield (note_path, raw_text, start, end, date, who, fields, text, qid)
+    for every question block in every Inbox/*.md file.
+
+    parse_questions() and update_question_status() both call this, so the id
+    a question is displayed with and the id used to find it again for a
+    status update can never drift apart - they are the same computation.
+    """
+    inbox = VAULT / "Inbox"
+    if not inbox.is_dir():
+        return
+    for note in sorted(inbox.glob("*.md")):
+        if note.name == ANSWERED_LOG_NAME:
+            continue  # a log of replies, not a source of questions
+        raw = note.read_text(encoding="utf-8", errors="replace")
+        masked = _mask(raw, r"^---.*?\n---\n")
+        masked = _mask(masked, r"```.*?```")
+        # Blank the instructions header too (everything up to and including
+        # the first remaining '\n---\n'), same rule parse_questions used to
+        # apply with str.split: only real content after that line counts.
+        sep = re.search(r"\n---\n", masked)
+        if sep:
+            head = masked[:sep.end()]
+            masked = re.sub(r"[^\n]", " ", head) + masked[sep.end():]
+
+        matches = list(QUESTION_HEAD.finditer(masked))
+        for i, m in enumerate(matches):
+            start = m.end()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(masked)
+            block = raw[start:end]  # real content: nothing here was masked
+
+            fields = {}
+            for line in block.splitlines():
+                fm = _FIELD_LINE.match(line.strip())
+                if fm:
+                    v = fm.group(2).strip()
+                    fields[fm.group(1)] = v if fm.group(1) == "video" else v.lower()
+            prose = "\n".join(
+                l for l in block.splitlines()
+                if l.strip() and not _FIELD_LINE.match(l.strip())
+            ).strip()
+            text = " ".join(prose.split())
+            date, who = m.group(1), m.group(2)
+            qid = _derive_id(date, who, fields.get("source", ""), text)
+            yield note, raw, start, end, date, who, fields, text, qid
+
+
 def parse_questions() -> list[dict]:
-    """Read the hand written question inbox.
+    """Read every question logged in Inbox/*.md: hand written and collected.
 
     Deliberately forgiving: a missing field becomes 'unknown' rather than an
     error, because the whole point is that pasting a question costs seconds.
     """
-    inbox = VAULT / "Inbox"
-    if not inbox.is_dir():
-        return []
-
     out = []
-    # Every note in Inbox/ counts: the one you write by hand and the ones the
-    # collectors append to.
-    for note in sorted(inbox.glob("*.md")):
-        text = note.read_text(encoding="utf-8", errors="replace")
-
-        # Strip frontmatter first, otherwise its closing --- is mistaken for the
-        # separator below and the whole instructions block gets parsed as data.
-        text = re.sub(r"^---.*?\n---\n", "", text, count=1, flags=re.S)
-        # Fenced code blocks hold the format example: never read them as questions.
-        text = re.sub(r"```.*?```", "", text, flags=re.S)
-
-        parts = text.split("\n---\n", 1)
-        body = parts[1] if len(parts) > 1 else text
-
-        matches = list(QUESTION_HEAD.finditer(body))
-        for i, m in enumerate(matches):
-            start = m.end()
-            end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
-            block = body[start:end]
-
-            fields = {}
-            for line in block.splitlines():
-                fm = re.match(
-                    r"^(channel|system|status|subscriber|source):\s*(.*)$", line.strip())
-                if fm:
-                    fields[fm.group(1)] = fm.group(2).strip().lower()
-            prose = "\n".join(
-                l for l in block.splitlines()
-                if l.strip()
-                and not re.match(r"^(channel|system|status|subscriber|source):", l.strip())
-            ).strip()
-
-            system = fields.get("system", "-")
-            out.append({
-                "date": m.group(1),
-                "who": m.group(2),
-                "channel": fields.get("channel", "unknown"),
-                "system": system,
-                "system_name": NAME_BY_SLUG.get(system, system),
-                "status": fields.get("status", "unknown"),
-                "subscriber": fields.get("subscriber", "unknown"),
-                "source": fields.get("source", ""),
-                "text": " ".join(prose.split()),
-            })
-
+    for _note, _raw, _start, _end, date, who, fields, text, qid in _iter_inbox_blocks():
+        system = fields.get("system", "-")
+        out.append({
+            "id": qid,
+            "date": date,
+            "who": who,
+            "channel": fields.get("channel", "unknown"),
+            "system": system,
+            "system_name": NAME_BY_SLUG.get(system, system),
+            "status": fields.get("status", "unknown"),
+            "subscriber": fields.get("subscriber", "unknown"),
+            "source": fields.get("source", ""),
+            "video_id": fields.get("video_id", ""),
+            "video": fields.get("video", ""),
+            "video_url": fields.get("video_url", ""),
+            "text": text,
+        })
     out.sort(key=lambda q: q["date"], reverse=True)
     return out
+
+
+def find_question_by_id(qid: str) -> dict | None:
+    for q in parse_questions():
+        if q["id"] == qid:
+            return q
+    return None
+
+
+def update_question_status(qid: str, new_status: str) -> bool:
+    """Flip the `status:` line of one question block in place. Every other
+    line in the block, and every other block in the file, is left exactly
+    as it was.
+    """
+    for note, raw, start, end, _date, _who, _fields, _text, block_id in _iter_inbox_blocks():
+        if block_id != qid:
+            continue
+        block = raw[start:end]
+        new_block = re.sub(r"^status:\s*.*$", f"status: {new_status}", block,
+                           count=1, flags=re.M)
+        if new_block == block:
+            return False  # no status: line found to replace
+        note.write_text(raw[:start] + new_block + raw[end:], encoding="utf-8")
+        return True
+    return False
+
+
+def append_answered_log(question: dict, answer: str, posted_to_youtube: bool) -> None:
+    """Durable record of every reply sent from the panel.
+
+    Deliberately a separate, always-appended file rather than writing into a
+    system's `03 - Common issues` note: that note is yours to curate by hand
+    (the collector already suggests pasting into it), and auto-appending
+    every reply there would bury your own writing under machine output.
+    """
+    path = VAULT / "Inbox" / ANSWERED_LOG_NAME
+    if not path.is_file():
+        header = (
+            "---\ntags: [locodev, inbox, answered, generated]\n---\n\n"
+            "# Answered from the panel\n\n"
+            "Every reply sent with the Reply button, appended here as a permanent "
+            "record. Copy a good one into the matching system's "
+            "`03 - Common issues` note when you get a moment; that is what makes "
+            "the panel able to answer the next person by itself.\n\n---\n"
+        )
+        path.write_text(header, encoding="utf-8")
+
+    where = ""
+    if question.get("video"):
+        where = f"\nvideo: {question['video']}"
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    block = (
+        f"\n### {stamp} reply to {question['who']}\n"
+        f"channel: {question['channel']}\n"
+        f"system: {question['system']}{where}\n"
+        f"posted_to_platform: {'yes' if posted_to_youtube else 'no'}\n\n"
+        f"**Q:** {question['text']}\n\n"
+        f"**A:** {answer}\n"
+    )
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(block)
+
+
+# --------------------------------------------------------------------------
+# Suggested answers: search your own notes, never fabricate one
+# --------------------------------------------------------------------------
+
+_STOPWORDS = {
+    "the", "a", "an", "is", "are", "was", "were", "be", "to", "of", "and",
+    "in", "on", "for", "it", "this", "that", "with", "you", "your", "i",
+    "can", "does", "do", "did", "will", "would", "how", "what", "why",
+    "when", "where", "any", "there", "have", "has", "my", "me", "if",
+}
+
+
+def _keywords(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z]{3,}", text.lower()) if w not in _STOPWORDS}
+
+
+def suggest_answer(question: dict) -> dict:
+    """Score every SECTION of the relevant notes against the question's
+    keywords and return the best match, verbatim, with its source.
+
+    Not AI-generated: this is a search over content you already wrote, the
+    same idea as the kb_search tool designed for the Wingman plugin, just
+    running locally against markdown instead of embeddings in Supabase. If
+    nothing scores, the honest answer is that this gap has no source yet.
+
+    Sections, not paragraphs, because the notes are written as
+    Symptom / Cause / Fix triplets under one heading: splitting those apart
+    would return a cause with no fix. The heading itself carries keywords
+    ('## Symptom: the character grabs the rope but does not swing') so it
+    is part of what gets scored.
+    """
+    q_words = _keywords(question["text"])
+    if not q_words:
+        return {"text": "", "source": ""}
+
+    candidates: list[Path] = []
+    system = question.get("system", "-")
+    if system and system != "-":
+        sysdir = VAULT / "Systems" / system
+        if sysdir.is_dir():
+            candidates.extend(sorted(sysdir.glob("*.md")))
+    if not candidates:
+        # Catalog-wide or unknown system: search everything rather than
+        # nothing, small corpus (a few dozen files), brute force is fine.
+        candidates.extend((VAULT / "Systems").glob("*/*.md"))
+
+    best_score, best_text, best_source = 0, "", ""
+    for path in candidates:
+        text = strip_scaffold(path.read_text(encoding="utf-8", errors="replace"))
+        for section in re.split(r"(?m)^(?=#{1,6}\s)", text):
+            section = section.strip()
+            # A section with no real author content is template residue; it
+            # must never be offered as an answer no matter what it scores.
+            if len(strip_template(section)) < 40:
+                continue
+            score = len(q_words & _keywords(section))
+            if score > best_score:
+                best_score, best_text, best_source = (
+                    score, section, path.relative_to(VAULT))
+
+    if best_score < 2:  # a single shared word is coincidence, not an answer
+        return {"text": "", "source": ""}
+    return {"text": best_text, "source": str(best_source).replace("\\", "/")}
+
+
+# --------------------------------------------------------------------------
+# Posting a reply for real: needs a one-time OAuth setup, not just the read
+# only API key. See youtube_oauth_setup.py.
+# --------------------------------------------------------------------------
+
+def _youtube_access_token() -> str | None:
+    """Exchange the stored refresh token for a short-lived access token.
+
+    Returns None when OAuth has never been set up; the caller treats that as
+    "cannot post", not as an error, and says so plainly instead of pretending.
+    """
+    refresh = os.getenv("YOUTUBE_REFRESH_TOKEN", "").strip()
+    client_id = os.getenv("YOUTUBE_OAUTH_CLIENT_ID", "").strip()
+    client_secret = os.getenv("YOUTUBE_OAUTH_CLIENT_SECRET", "").strip()
+    if not (refresh and client_id and client_secret):
+        return None
+
+    body = urlparse.urlencode({
+        "client_id": client_id, "client_secret": client_secret,
+        "refresh_token": refresh, "grant_type": "refresh_token",
+    }).encode()
+    req = urlrequest.Request(YT_OAUTH_TOKEN_URL, data=body, method="POST")
+    try:
+        with urlrequest.urlopen(req, timeout=15) as resp:
+            return json.load(resp)["access_token"]
+    except (urlerror.URLError, KeyError, ValueError):
+        return None
+
+
+def post_youtube_reply(comment_id: str, text: str) -> tuple[bool, str]:
+    token = _youtube_access_token()
+    if not token:
+        return False, (
+            "YouTube reply-posting is not set up. The vault was still updated. "
+            "Run youtube_oauth_setup.py once to enable posting for real."
+        )
+    body = json.dumps({"snippet": {"parentId": comment_id, "textOriginal": text}}).encode()
+    req = urlrequest.Request(
+        f"{YT_API}/comments?part=snippet",
+        data=body, method="POST",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=20) as resp:
+            json.load(resp)
+        return True, "Posted to YouTube."
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:300]
+        return False, f"YouTube refused the reply ({exc.code}): {detail}"
+    except urlerror.URLError as exc:
+        return False, f"Could not reach YouTube: {exc.reason}"
 
 
 def build_gaps(questions: list[dict]) -> list[dict]:
@@ -506,6 +765,19 @@ def render_markdown(d: dict) -> str:
         "",
         "---",
         "",
+        "## Replying from the panel",
+        "",
+        "Every question in the live dashboard expands into Suggest + a reply box",
+        "+ Reply. Suggest searches your own notes for the best matching paragraph",
+        "(no AI, no fabrication: it either found something you wrote or it says so).",
+        "Reply always updates the vault (marks the question `answered`, appends a",
+        "permanent record to `Inbox/02 - Answered.md`). Posting the reply back to",
+        "YouTube for real needs a one-time OAuth setup (`youtube_oauth_setup.py`);",
+        "without it the vault still updates and the panel says plainly that it did",
+        "not post anywhere, rather than pretending it did.",
+        "",
+        "---",
+        "",
         "## Still manual, and what would automate it",
         "",
         "Discord questions above are typed into `Inbox/00 - Questions.md` by hand.",
@@ -519,11 +791,12 @@ def render_markdown(d: dict) -> str:
         "- **Per-video system tagging**: fill in `system:` on each video's",
         "  `00 - Overview` note, or every YouTube question lands in the catalog",
         "  wide bucket instead of the system it is actually about.",
-        "- **Bot confidence log**: what it answered, what it declined and with",
-        "  what score. Needs the answer path to write a row per question.",
+        "- **Bot confidence log**: same Suggest search, wired into the Discord",
+        "  bot so it can answer above a confidence threshold on its own.",
         "",
-        "The demand column in the coverage table is also **estimated by hand**.",
-        "Once the confidence log exists, it comes from there instead.",
+        "The demand column in the coverage table is also **estimated by hand**",
+        "for a system nobody has asked about yet; once a real question is logged",
+        "for it, the real count takes over.",
         "",
     ]
     return "\n".join(lines) + "\n"
@@ -579,15 +852,36 @@ def render_html(d: dict, live: bool) -> str:
         colour = CHANNELS.get(q["channel"], "var(--ink3)")
         sub = '<span class="pill p-mute">subscriber</span>' if q["subscriber"] == "yes" else ""
         sysname = esc(q["system_name"]) if q["system"] != "-" else "catalog wide"
+
+        source_html = ""
+        if q["video"]:
+            link = (f'<a href="{esc(q["video_url"])}" target="_blank" rel="noopener">'
+                    f'{esc(q["video"])} ↗</a>' if q["video_url"] else esc(q["video"]))
+            source_html = f'<div class="q-src">from: {link}</div>'
+
+        answered = q["status"] == "answered"
         q_rows.append(
-            f'<div class="q q-{cls}" data-ch="{esc(q["channel"])}" '
-            f'data-st="{esc(q["status"])}" data-sys="{esc(q["system"])}">'
+            f'<div class="q q-{cls}" data-id="{esc(q["id"])}" data-ch="{esc(q["channel"])}" '
+            f'data-st="{esc(q["status"])}" data-sys="{esc(q["system"])}" tabindex="0" '
+            f'role="button" aria-expanded="false">'
             f'<div class="q-top">'
             f'<span class="who"><i class="cd" style="background:{colour}"></i>{esc(q["who"])}</span>'
             f'<span class="pill p-{cls}">{esc(q["status"])}</span>{sub}</div>'
             f'<p class="q-text">"{esc(q["text"])}"</p>'
+            f'{source_html}'
             f'<div class="q-foot"><span>{sysname}</span>'
-            f'<span>{esc(q["channel"])}</span><span>{q["date"]}</span></div></div>'
+            f'<span>{esc(q["channel"])}</span><span>{q["date"]}</span></div>'
+            f'<div class="q-panel" hidden>'
+            f'<div class="q-panel-row">'
+            f'<button class="qbtn qsuggest" type="button"{" disabled" if answered else ""}>Suggest answer</button>'
+            f'<span class="qmsg"></span></div>'
+            f'<textarea class="qbox" rows="3" placeholder="Type or generate a reply…"'
+            f'{" disabled" if answered else ""}></textarea>'
+            f'<div class="q-panel-row">'
+            f'<button class="qbtn qreply" type="button"{" disabled" if answered else ""}>Reply</button>'
+            f'<span class="qhint">'
+            f'{"Already marked answered." if answered else "Updates the vault always; posts to YouTube only if reply-posting is set up."}'
+            f'</span></div></div></div>'
         )
     questions_html = "".join(q_rows) or '<p class="dim">No questions logged yet. Paste one into Inbox/00 - Questions.md</p>'
 
@@ -781,14 +1075,39 @@ tr.u-done td.need .pct {{ color:var(--ok); }}
 .q[hidden] {{ display:none; }}
 .feed {{ display:flex; flex-direction:column; gap:9px; }}
 .q {{ border:1px solid var(--line); border-left:3px solid var(--line);
-  border-radius:8px; padding:11px 13px; display:flex; flex-direction:column; gap:6px; }}
+  border-radius:8px; padding:11px 13px; display:flex; flex-direction:column; gap:6px;
+  cursor:pointer; }}
+.q:hover {{ border-color:var(--ink3); }}
+.q:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }}
 .q-ok {{ border-left-color:var(--ok); }} .q-info {{ border-left-color:var(--info); }}
 .q-crit {{ border-left-color:var(--crit); }} .q-mute {{ border-left-color:var(--ink3); }}
 .q-top {{ display:flex; flex-wrap:wrap; align-items:center; gap:7px; }}
 .who {{ font-weight:620; font-size:13.5px; display:inline-flex; align-items:center; gap:6px; }}
 .q-text {{ margin:0; font-size:13.5px; color:var(--ink2); }}
+.q-src {{ font-size:12px; color:var(--ink3); }}
+.q-src a {{ color:var(--accent); text-decoration:none; }}
+.q-src a:hover {{ text-decoration:underline; }}
 .q-foot {{ display:flex; flex-wrap:wrap; gap:10px; font-family:var(--mono);
   font-size:10.5px; color:var(--ink3); }}
+.q-panel {{ margin-top:6px; padding-top:10px; border-top:1px dashed var(--line);
+  display:flex; flex-direction:column; gap:8px; cursor:default; }}
+.q-panel[hidden] {{ display:none; }}
+.q-panel-row {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }}
+.qbtn {{ font-family:var(--ui); font-size:12.5px; font-weight:560; color:var(--ink);
+  background:var(--surface2); border:1px solid var(--line); border-radius:7px;
+  padding:6px 13px; cursor:pointer; }}
+.qbtn:hover:not(:disabled) {{ border-color:var(--accent); }}
+.qbtn:disabled {{ opacity:.5; cursor:default; }}
+.qbtn.qreply {{ background:var(--accent-soft); border-color:var(--accent); color:var(--ink); }}
+.qbox {{ width:100%; font-family:var(--ui); font-size:13px; color:var(--ink);
+  background:var(--surface2); border:1px solid var(--line); border-radius:8px;
+  padding:9px 11px; resize:vertical; }}
+.qbox:focus-visible {{ outline:2px solid var(--accent); outline-offset:1px; }}
+.qbox:disabled {{ opacity:.6; }}
+.qmsg {{ font-size:12px; color:var(--ink2); }}
+.qmsg.qerr {{ color:var(--crit); }}
+.qmsg.qok {{ color:var(--ok); }}
+.qhint {{ font-size:11.5px; color:var(--ink3); }}
 .p-info {{ color:var(--info); background:var(--info-bg); }}
 .p-crit {{ color:var(--crit); background:var(--crit-bg); }}
 .p-mute {{ color:var(--ink3); background:var(--surface2); }}
@@ -859,9 +1178,9 @@ footer {{ color:var(--ink3); font-size:12px; border-top:1px solid var(--line);
     <select class="fselect" id="sysFilter">{system_options}</select>
     <div class="feed" id="feed">{questions_html}</div>
     <button class="fmore" id="showMore" type="button" hidden>Show more</button>
-    <p class="note">YouTube questions come from <code>collect_youtube.py</code>;
-    Discord ones are typed by hand into <code>Inbox/00 - Questions.md</code>.
-    Editing either file updates this within seconds.</p>
+    <p class="note">Click a question to expand it: Suggest searches your own
+    notes for a draft, Reply updates the vault for real and posts to YouTube
+    once <code>youtube_oauth_setup.py</code> has been run once.</p>
   </section>
 
   <section class="card">
@@ -1004,6 +1323,86 @@ footer {{ color:var(--ink3); font-size:12px; border-top:1px solid var(--line);
   render();
 }})();
 
+// Question rows expand to a panel: Suggest reads your own notes for a
+// starting draft, Reply writes it to the vault for real (and to YouTube too,
+// once reply-posting is set up). A successful reply changes the vault, which
+// bumps the build epoch, which the status poll below picks up and reloads --
+// so this code does not need to hand-patch the row afterward.
+document.querySelectorAll('.q').forEach(function (row) {{
+  var panel = row.querySelector('.q-panel');
+  var box = row.querySelector('.qbox');
+  var msg = row.querySelector('.qmsg');
+  var suggestBtn = row.querySelector('.qsuggest');
+  var replyBtn = row.querySelector('.qreply');
+
+  function setMsg(text, kind) {{
+    msg.textContent = text || '';
+    msg.className = 'qmsg' + (kind ? ' ' + kind : '');
+  }}
+
+  row.addEventListener('click', function (e) {{
+    if (panel.contains(e.target)) return; // clicks inside the panel do not toggle it
+    var open = !panel.hidden;
+    panel.hidden = open;
+    row.setAttribute('aria-expanded', String(!open));
+  }});
+  row.addEventListener('keydown', function (e) {{
+    if ((e.key === 'Enter' || e.key === ' ') && e.target === row) {{
+      e.preventDefault();
+      row.click();
+    }}
+  }});
+
+  if (suggestBtn) {{
+    suggestBtn.addEventListener('click', function () {{
+      suggestBtn.disabled = true;
+      setMsg('searching your notes…');
+      fetch('/suggest', {{
+        method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ id: row.dataset.id }}),
+      }})
+        .then(function (r) {{ return r.json(); }})
+        .then(function (r) {{
+          suggestBtn.disabled = false;
+          if (!r.ok) {{ setMsg(r.error || 'failed', 'qerr'); return; }}
+          if (!r.text) {{ setMsg('Nothing in your notes matches this yet.', 'qerr'); return; }}
+          box.value = r.text;
+          setMsg('from ' + r.source, 'qok');
+        }})
+        .catch(function () {{ suggestBtn.disabled = false; setMsg('request failed', 'qerr'); }});
+    }});
+  }}
+
+  if (replyBtn) {{
+    replyBtn.addEventListener('click', function () {{
+      var text = box.value.trim();
+      if (!text) {{ setMsg('write or generate a reply first', 'qerr'); return; }}
+      replyBtn.disabled = true;
+      box.disabled = true;
+      setMsg('sending…');
+      fetch('/reply', {{
+        method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ id: row.dataset.id, text: text }}),
+      }})
+        .then(function (r) {{ return r.json(); }})
+        .then(function (r) {{
+          if (!r.ok) {{
+            replyBtn.disabled = false; box.disabled = false;
+            setMsg(r.error || 'failed', 'qerr');
+            return;
+          }}
+          setMsg('Vault updated. ' + r.platform_message,
+                r.posted_to_platform ? 'qok' : 'qerr');
+          // The vault changed; the live status poll reloads the page shortly.
+        }})
+        .catch(function () {{
+          replyBtn.disabled = false; box.disabled = false;
+          setMsg('request failed', 'qerr');
+        }});
+    }});
+  }}
+}});
+
 // "Who is asking" table: reveal the rest in one click, no re-filtering needed.
 var peopleMore = document.getElementById('peopleMore');
 if (peopleMore) {{
@@ -1139,16 +1538,64 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         return super().do_GET()
 
+    def _json_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return {}
+
+    def _send_json(self, obj: dict, status: int = 200) -> None:
+        body = json.dumps(obj).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):  # noqa: N802
         if self.path == "/rebuild":
             build(live=True)
-            body = b'{"ok":true}'
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
+            return self._send_json({"ok": True})
+
+        if self.path == "/suggest":
+            payload = self._json_body()
+            question = find_question_by_id(str(payload.get("id", "")))
+            if not question:
+                return self._send_json({"ok": False, "error": "question not found"}, 404)
+            hit = suggest_answer(question)
+            return self._send_json({
+                "ok": True, "text": hit["text"], "source": hit["source"],
+            })
+
+        if self.path == "/reply":
+            payload = self._json_body()
+            qid = str(payload.get("id", ""))
+            answer = str(payload.get("text", "")).strip()
+            if not answer:
+                return self._send_json({"ok": False, "error": "empty reply"}, 400)
+
+            question = find_question_by_id(qid)
+            if not question:
+                return self._send_json({"ok": False, "error": "question not found"}, 404)
+
+            # Vault side always happens: this is the rigid part of the rule.
+            # Posting to the platform is best-effort on top of it, never a
+            # precondition for the vault to reflect that you replied.
+            posted, platform_msg = False, "Not a YouTube question: nothing to post."
+            if question["channel"] == "youtube" and question["source"].startswith("yt:"):
+                comment_id = question["source"][len("yt:"):]
+                posted, platform_msg = post_youtube_reply(comment_id, answer)
+
+            update_question_status(qid, "answered")
+            append_answered_log(question, answer, posted)
+            build(live=True)  # vault changed: the dashboard must reflect it now
+
+            return self._send_json({
+                "ok": True, "posted_to_platform": posted, "platform_message": platform_msg,
+            })
+
         self.send_error(404)
 
     def log_message(self, *a):  # silence per-request logging

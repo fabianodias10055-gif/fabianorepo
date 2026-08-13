@@ -22,3 +22,4 @@ clickup-mcp/icons_out/
 *.key
 *service-account*.json
 *credentials*.json
+clickup-mcp/client_secret.json

@@ -368,13 +368,19 @@ def write_inbox(rows: list[dict], dry: bool) -> int:
 
     blocks = []
     for r in fresh:
+        # A deep link straight to the comment (lc=) so opening it lands on the
+        # exact thread instead of the top of the video.
+        watch_url = f"https://www.youtube.com/watch?v={r['video_id']}&lc={r['id']}"
         blocks.append(
             f"\n### {r['date']} {r['author']}\n"
             f"channel: youtube\n"
             f"system: {r['system'] or '-'}\n"
             f"status: no-source\n"
             f"subscriber: unknown\n"
-            f"source: yt:{r['id']}\n\n"
+            f"source: yt:{r['id']}\n"
+            f"video_id: {r['video_id']}\n"
+            f"video: {r['video_folder']}\n"
+            f"video_url: {watch_url}\n\n"
             f"{r['text'][:400]}\n"
         )
 
@@ -464,7 +470,10 @@ def main() -> int:
         for c in comments:
             if needs_your_answer(c, channel_name):
                 total_unanswered += 1
-                inbox_rows.append({**c, "system": system})
+                inbox_rows.append({
+                    **c, "system": system,
+                    "video_id": v["id"], "video_folder": folder.name,
+                })
 
     added = write_inbox(inbox_rows, args.dry_run)
 
