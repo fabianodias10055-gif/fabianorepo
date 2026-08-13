@@ -22,6 +22,9 @@ from pathlib import Path
 
 VAULTS = Path(r"C:\Users\LocoDevPC\Documents\Vaults")
 DESTINO_PADRAO = Path(r"F:\LocoDev Vault\Painel")
+# Onde o montar_vault.py criou a estrutura nova. Tem prioridade sobre o vault
+# antigo: se a pasta do sistema existe la, e ela que vale.
+VAULT_NOVO = Path(r"F:\LocoDev Vault\Sistemas")
 
 # As 5 facetas que um sistema documentado precisa ter. A chave e o nome curto
 # que aparece no painel; os padroes casam com o nome do arquivo no vault.
@@ -103,7 +106,11 @@ INSTRUMENTACAO = [
 
 
 def achar_pasta_sistema(slug: str, nome: str) -> Path | None:
-    """Procura a pasta do sistema no vault, tolerando variacoes de nome."""
+    """Procura a pasta do sistema, priorizando a estrutura nova."""
+    nova = VAULT_NOVO / slug
+    if nova.is_dir():
+        return nova
+
     alvos = {slug.replace("-", " "), nome.lower()}
     for raiz in VAULTS.iterdir():
         if not raiz.is_dir() or raiz.name.startswith("."):
@@ -140,13 +147,27 @@ def medir_facetas(pasta: Path | None, nota: Path | None) -> tuple[list[bool], in
     elif nota is not None:
         arquivos = [nota]
 
-    tamanho = sum(p.stat().st_size for p in arquivos)
-    nomes = [p.stem.lower() for p in arquivos]
-
+    tamanho = 0
     presentes = []
-    for _rotulo, padroes in FACETAS:
-        achou = any(any(pat in n for pat in padroes) for n in nomes)
-        presentes.append(achou)
+    por_faceta: dict[str, bool] = {}
+
+    for p in arquivos:
+        texto = p.read_text(encoding="utf-8", errors="replace")
+        # Template vazio nao conta como escrito: o que vale e o conteudo do
+        # autor, entao descontamos frontmatter, titulos e comentarios-guia.
+        corpo = re.sub(r"^---.*?---", "", texto, count=1, flags=re.S)
+        corpo = re.sub(r"<!--.*?-->", "", corpo, flags=re.S)
+        corpo = re.sub(r"^\s*[#|>*\-\d.]+.*$", "", corpo, flags=re.M)
+        util = len(corpo.strip())
+        tamanho += util
+
+        nome_l = p.stem.lower()
+        for rotulo, padroes in FACETAS:
+            if any(pat in nome_l for pat in padroes):
+                por_faceta[rotulo] = por_faceta.get(rotulo, False) or util >= 80
+                break
+
+    presentes = [por_faceta.get(rotulo, False) for rotulo, _ in FACETAS]
 
     # Nota solta unica conta como ficha, mas so isso: nao e documentacao.
     if pasta is None and nota is not None:
@@ -158,6 +179,45 @@ def medir_facetas(pasta: Path | None, nota: Path | None) -> tuple[list[bool], in
 def barra(n: int, total: int, largura: int = 5) -> str:
     cheios = round((n / total) * largura) if total else 0
     return "█" * cheios + "░" * (largura - cheios)
+
+
+# Peso de cada faceta na urgencia. Ficha e erros comuns valem mais porque sao
+# as que respondem sozinhas a pergunta de quem chega; blueprints e o detalhe
+# que so interessa a quem ja comprou.
+PESO_FACETA = {"ficha": 3, "logica": 1, "setup": 3, "erros": 2, "blueprints": 1}
+PESO_TOTAL = sum(PESO_FACETA.values())
+
+
+def necessidade(m: dict, demanda_max: int) -> tuple[int, str]:
+    """Percentual de necessidade e o rotulo de urgencia.
+
+    Combina duas coisas: quanto falta escrever (ponderado pelo peso de cada
+    faceta) e quanta gente ja perguntou. Sistema completo da 0%, mesmo com
+    demanda alta; sistema vazio e muito perguntado chega perto de 100%.
+    """
+    falta = sum(
+        PESO_FACETA[rotulo]
+        for (rotulo, _), presente in zip(FACETAS, m["facetas"])
+        if not presente
+    )
+    lacuna = falta / PESO_TOTAL  # 0 = completo, 1 = nada escrito
+    procura = (m["demanda"] / demanda_max) if demanda_max else 0
+
+    # A demanda pesa mais que a lacuna: documentar o que ninguem pergunta
+    # e menos urgente que documentar o que todo mundo pergunta.
+    pct = round((lacuna * 0.4 + procura * 0.6) * 100)
+
+    if pct >= 70:
+        rotulo = "CRITICO"
+    elif pct >= 40:
+        rotulo = "urgente"
+    elif pct >= 15:
+        rotulo = "normal"
+    elif pct > 0:
+        rotulo = "baixa"
+    else:
+        rotulo = "ok"
+    return pct, rotulo
 
 
 def gerar() -> str:
@@ -209,18 +269,37 @@ def gerar() -> str:
         "",
         "Ordenada por demanda observada. Facetas: ficha, logica, setup, erros, blueprints.",
         "",
-        "| Sistema | Cobertura | Facetas | Demanda | Onde esta |",
-        "|---|---|---|---|---|",
+        "| Necessidade | Sistema | Cobertura | Facetas | Demanda | Onde esta |",
+        "|---|---|---|---|---|---|",
     ]
 
-    medidos.sort(key=lambda m: (-m["demanda"], -m["n"], m["nome"]))
+    demanda_max = max((m["demanda"] for m in medidos), default=0)
+    for m in medidos:
+        m["pct"], m["urgencia"] = necessidade(m, demanda_max)
+
+    medidos.sort(key=lambda m: (-m["pct"], -m["demanda"], m["nome"]))
     for m in medidos:
         marcas = "".join("+" if f else "." for f in m["facetas"])
         dem = f"{m['demanda']}x" if m["demanda"] else "-"
         onde = m["onde"] or "*nao encontrado*"
+        nec = f"**{m['pct']}% {m['urgencia']}**" if m["urgencia"] == "CRITICO" else f"{m['pct']}% {m['urgencia']}"
         linhas.append(
-            f"| {m['nome']} | {barra(m['n'], len(FACETAS))} {m['n']}/5 | `{marcas}` | {dem} | {onde} |"
+            f"| {nec} | {m['nome']} | {barra(m['n'], len(FACETAS))} {m['n']}/5 "
+            f"| `{marcas}` | {dem} | {onde} |"
         )
+
+    criticos = [m for m in medidos if m["urgencia"] == "CRITICO"]
+    urgentes = [m for m in medidos if m["urgencia"] == "urgente"]
+    linhas += [
+        "",
+        f"**{len(criticos)} criticos** · **{len(urgentes)} urgentes** · "
+        f"{len(medidos) - len(criticos) - len(urgentes)} podem esperar",
+        "",
+        "> A necessidade combina duas coisas: quanto falta escrever (com peso maior",
+        "> para ficha e setup, que sao as que respondem sozinhas) e quanta gente ja",
+        "> perguntou. Demanda pesa 60%, lacuna 40%: documentar o que ninguem pergunta",
+        "> e menos urgente que documentar o que todo mundo pergunta.",
+    ]
 
     # ---- lacunas ----
     prioridade = [m for m in medidos if m["demanda"] > 0 and m["n"] < len(FACETAS)]
@@ -235,11 +314,12 @@ def gerar() -> str:
         "",
     ]
     if prioridade:
+        prioridade.sort(key=lambda m: -m["pct"])
         for i, m in enumerate(prioridade, 1):
             faltando = [FACETAS[j][0] for j, f in enumerate(m["facetas"]) if not f]
             linhas.append(
-                f"{i}. **{m['nome']}** ({m['demanda']} perguntas) "
-                f"falta: {', '.join(faltando)}"
+                f"{i}. `{m['pct']}% {m['urgencia']}` **{m['nome']}** "
+                f"({m['demanda']} perguntas) falta: {', '.join(faltando)}"
             )
     else:
         linhas.append("*Nenhuma lacuna com demanda registrada.*")
