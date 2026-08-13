@@ -128,6 +128,8 @@ INSTRUMENTATION = [
      "the collector already runs for 12 competitor videos, never for your own channel"),
     ("Patreon", "2 manual snapshots", "partial",
      "from April; the event log drops anything older than 90 days"),
+    ("Short links (locodev.dev)", "SQLite on Railway", "ok",
+     "click telemetry behind adminlocoILco; the panel reads its JSON API live"),
     ("Knowledge base", "hand curated", "partial",
      "entries only via staff reaction; lives on a Railway volume with no local copy"),
 ]
@@ -563,6 +565,108 @@ def post_youtube_reply(comment_id: str, text: str) -> tuple[bool, str]:
         return False, f"Could not reach YouTube: {exc.reason}"
 
 
+# --------------------------------------------------------------------------
+# Link telemetry: the locodev.dev short-link admin API (adminlocoILco).
+# Server-to-server, option A of the integration report: this local server
+# logs in with LOCODEV_ADMIN_SECRET, keeps the bearer token in memory and
+# exposes a cached /links.json to the page. The secret and the token never
+# reach the browser and are never logged.
+# --------------------------------------------------------------------------
+
+ADMIN_URL = os.getenv("LOCODEV_ADMIN_URL", "https://locodev.dev/adminlocoILco").rstrip("/")
+ADMIN_CACHE_TTL = 120          # seconds; the page polls every 60
+ADMIN_ERROR_TTL = 45           # failed fetches retry sooner, but never hammer
+ADMIN_TOKEN_MAX_AGE = 11 * 3600  # remote invalidates at 12h; stay under it
+
+_admin = {"token": "", "token_at": 0.0, "cache": None, "cache_at": 0.0}
+
+
+def _admin_call(path: str, token: str = "", payload: dict | None = None):
+    """One JSON request to the admin API: (http_status, parsed_or_None).
+    Status 0 means the request never got an HTTP answer (network)."""
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urlrequest.Request(
+        ADMIN_URL + path,
+        data=json.dumps(payload).encode() if payload is not None else None,
+        method="POST" if payload is not None else "GET",
+        headers=headers,
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=8) as resp:
+            return resp.status, json.load(resp)
+    except urlerror.HTTPError as exc:
+        return exc.code, None
+    except (urlerror.URLError, TimeoutError, ValueError, OSError):
+        return 0, None
+
+
+def _admin_token() -> tuple[str, str]:
+    """(token, error). error is '' on success, else a category the page can
+    show honestly: not-configured / auth / network / http-<code>. These stay
+    separate on purpose; a network failure must never read as a login one."""
+    secret = os.getenv("LOCODEV_ADMIN_SECRET", "").strip()
+    if not secret:
+        return "", "not-configured"
+    if _admin["token"] and time.time() - _admin["token_at"] < ADMIN_TOKEN_MAX_AGE:
+        return _admin["token"], ""
+    status, data = _admin_call("/login", payload={"password": secret})
+    if status == 200 and isinstance(data, dict) and data.get("token"):
+        _admin["token"] = data["token"]
+        _admin["token_at"] = time.time()
+        return _admin["token"], ""
+    if status in (401, 429):
+        return "", "auth"
+    if status == 0:
+        return "", "network"
+    return "", f"http-{status}"
+
+
+def fetch_link_telemetry() -> dict:
+    """Stats + links + 7d country breakdown, behind a short in-memory cache
+    so page refreshes do not hammer the remote service (or block this
+    single-threaded server on a slow network for every request)."""
+    now = time.time()
+    cached = _admin["cache"]
+    if cached is not None:
+        ttl = ADMIN_CACHE_TTL if cached.get("ok") else ADMIN_ERROR_TTL
+        if now - _admin["cache_at"] < ttl:
+            return cached
+
+    def keep(result: dict) -> dict:
+        _admin["cache"] = result
+        _admin["cache_at"] = now
+        return result
+
+    token, err = _admin_token()
+    if err:
+        return keep({"ok": False, "error": err})
+
+    status, stats = _admin_call("/api/stats", token=token)
+    if status == 401:
+        # Remote restart or 12h TTL: the old token died. Log in once more.
+        _admin["token"] = ""
+        token, err = _admin_token()
+        if err:
+            return keep({"ok": False, "error": err})
+        status, stats = _admin_call("/api/stats", token=token)
+    if status != 200 or not isinstance(stats, dict):
+        return keep({"ok": False,
+                     "error": "network" if status == 0 else f"http-{status}"})
+
+    _s1, links = _admin_call("/api/links", token=token)
+    _s2, countries = _admin_call("/api/clicks/by-country?window=7d", token=token)
+
+    return keep({
+        "ok": True,
+        "stats": stats,
+        "links": links if isinstance(links, list) else [],
+        "countries": countries if isinstance(countries, list) else [],
+        "fetched_at": int(now),
+    })
+
+
 def build_gaps(questions: list[dict]) -> list[dict]:
     """Group unanswerable questions into a ranked backlog of what to write."""
     buckets: dict[str, dict] = {}
@@ -954,6 +1058,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "epoch": _state["epoch"],
                 "building": _state["building"],
             }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/links.json"):
+            body = json.dumps(fetch_link_telemetry()).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-store")

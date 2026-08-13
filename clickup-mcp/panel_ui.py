@@ -44,6 +44,7 @@ _ICONS = {
     "replyic": '<polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>',
     "external": '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/>',
     "eye": '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+    "link": '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
 }
 
 
@@ -367,6 +368,28 @@ tr.qdet > td { background:var(--surface2); border-bottom:1px solid var(--line);
 .tag.sub { background:var(--accent-bg); color:var(--accent); }
 .empty { color:var(--ink3); font-size:12.5px; padding:8px 0; }
 
+/* ---- link telemetry ---- */
+.admlink { display:inline-flex; gap:5px; align-items:center; margin-left:10px;
+  font-size:11.5px; font-weight:600; text-decoration:none; }
+.admlink:hover { text-decoration:underline; }
+.ltk { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
+.mk { background:var(--surface2); border:1px solid var(--line2); border-radius:10px;
+  padding:8px 14px; min-width:92px; }
+.mk .v { font-size:18px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1.2; }
+.mk .l { color:var(--ink3); font-size:10.5px; }
+.ltgrid { display:grid; grid-template-columns:minmax(0,1fr) 280px; gap:18px; align-items:start; }
+@media (max-width:900px) { .ltgrid { grid-template-columns:1fr; } }
+.lchart { width:100%; height:72px; margin-bottom:12px; }
+.lchart rect { fill:var(--accent); opacity:.75; }
+.lsub { color:var(--ink3); font-family:var(--mono); font-size:10px; letter-spacing:.06em;
+  text-transform:uppercase; margin:0 0 6px; }
+.crow { display:flex; justify-content:space-between; gap:8px; padding:5px 0;
+  border-bottom:1px solid var(--line2); font-size:12.5px; }
+.crow:last-child { border-bottom:0; }
+.crow .n { font-family:var(--mono); font-size:11px; color:var(--ink2); text-align:right; }
+.slug { font-family:var(--mono); font-size:12px; }
+.host { color:var(--ink3); font-size:11px; }
+
 footer { margin-top:20px; color:var(--ink3); font-size:11.5px; font-family:var(--mono); }
 
 @media (max-width:1180px) {
@@ -630,6 +653,101 @@ $("#filtbtn").addEventListener("click", function () {
   f.classList.add("flash");
 });
 $("#bellbtn").addEventListener("click", function () { location.hash = "#questions"; });
+
+/* ---- link telemetry (locodev.dev admin API via the local server) ---- */
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+function rel(iso) {
+  var t = Date.parse(iso);
+  if (isNaN(t)) return esc(iso);
+  var s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+}
+function ltChart(hc) {
+  if (!hc.length) return '<div class="empty">no hourly data</div>';
+  var max = 1;
+  hc.forEach(function (p) { if (p.cnt > max) max = p.cnt; });
+  var w = 240, bw = w / hc.length;
+  var out = '<svg class="lchart" viewBox="0 0 ' + w + ' 64" preserveAspectRatio="none">';
+  hc.forEach(function (p, i) {
+    var bh = Math.max(1.5, p.cnt * 56 / max);
+    out += '<rect x="' + (i * bw + 1).toFixed(1) + '" y="' + (60 - bh).toFixed(1)
+      + '" width="' + (bw - 2).toFixed(1) + '" height="' + bh.toFixed(1) + '" rx="1.5">'
+      + "<title>" + esc(p.hour) + ":00 · " + p.cnt + " clicks</title></rect>";
+  });
+  return out + "</svg>";
+}
+function renderLinks(d) {
+  var st = $("#lt-state"), body = $("#lt-body");
+  if (!d.ok) {
+    var m = {
+      "not-configured": "not configured: set LOCODEV_ADMIN_SECRET in clickup-mcp/.env and restart the watcher",
+      "auth": "login refused: check LOCODEV_ADMIN_SECRET",
+      "network": "locodev.dev unreachable from this machine"
+    };
+    st.textContent = m[d.error] || ("error: " + d.error);
+    body.innerHTML = '<div class="empty">' + esc(st.textContent) + "</div>";
+    return;
+  }
+  var s = d.stats;
+  st.textContent = s.clicks_24h + " clicks in 24h · live from locodev.dev";
+  var h = '<div class="ltk">';
+  [[s.clicks_1h, "clicks 1h"], [s.clicks_24h, "clicks 24h"],
+   [s.clicks_7d, "clicks 7d"], [s.total_links, "links"]].forEach(function (kv) {
+    h += '<div class="mk"><div class="v">' + kv[0] + '</div><div class="l">' + kv[1] + "</div></div>";
+  });
+  if (s.top_country)
+    h += '<div class="mk"><div class="v">' + esc(s.top_country.country)
+      + '</div><div class="l">top country · ' + s.top_country.cnt + " clicks</div></div>";
+  h += '</div><div class="ltgrid"><div>';
+  h += '<p class="lsub">Clicks per hour, last 24h</p>' + ltChart(s.hourly_chart || []);
+  h += '<p class="lsub">Top links</p><div class="scroll"><table><thead><tr>'
+    + "<th>Link</th><th>1h</th><th>7d</th><th>Total</th></tr></thead><tbody>";
+  (d.links || []).slice(0, 10).forEach(function (l) {
+    var host = "";
+    try { host = new URL(l.url).host; } catch (e) {}
+    h += '<tr><td><span class="slug">/' + esc(l.prefix) + "/" + esc(l.slug)
+      + '</span><br><span class="host">' + esc(host) + '</span></td><td class="num">'
+      + l.clicks_1h + '</td><td class="num">' + l.clicks_7d + '</td><td class="num">'
+      + l.total_clicks + "</td></tr>";
+  });
+  h += "</tbody></table></div>";
+  if ((d.links || []).length > 10)
+    h += '<div class="empty">' + (d.links.length - 10) + " more links in the admin panel</div>";
+  h += "</div><div>";
+  h += '<p class="lsub">Recent clicks</p>';
+  var rc = (s.recent_clicks || []).slice(0, 8);
+  if (!rc.length) h += '<div class="empty">none yet</div>';
+  rc.forEach(function (c) {
+    h += '<div class="crow"><span class="slug">/' + esc(c.prefix) + "/" + esc(c.slug)
+      + '</span><span class="n">' + esc(c.country_code || "?") + " · "
+      + esc(c.referrer || "direct") + " · " + rel(c.clicked_at) + "</span></div>";
+  });
+  h += '<p class="lsub" style="margin-top:14px">Countries, 7 days</p>';
+  var cc = (d.countries || []).slice(0, 6);
+  if (!cc.length) h += '<div class="empty">none yet</div>';
+  cc.forEach(function (c) {
+    h += '<div class="crow"><span>' + esc(c.country) + '</span><span class="n">'
+      + c.clicks + "</span></div>";
+  });
+  h += "</div></div>";
+  body.innerHTML = h;
+}
+function loadLinks() {
+  if (!LIVE) { $("#lt-state").textContent = "needs the live watcher (panel.py --watch)"; return; }
+  fetch("/links.json", { cache: "no-store" })
+    .then(function (r) { return r.json(); })
+    .then(renderLinks)
+    .catch(function () { $("#lt-state").textContent = "local server unreachable"; });
+}
+loadLinks();
+if (LIVE) setInterval(loadLinks, 60000);
 
 /* ---- sidebar active state ---- */
 var links = {};
@@ -930,6 +1048,20 @@ def _videos_card(d: dict) -> str:
     )
 
 
+def _links_card() -> str:
+    """Skeleton only: the data comes client-side from the local /links.json,
+    which the panel server fills by calling the locodev.dev admin API
+    server-to-server. The page never sees the secret or the token."""
+    return (
+        f'<section class="card" id="links"><h2>{_icon("link")}Link telemetry'
+        f'<span class="cnt" id="lt-state">loading...</span>'
+        f'<a class="admlink" href="https://locodev.dev/adminlocoILco" target="_blank" '
+        f'rel="noopener">open admin {_icon("external", 12)}</a></h2>'
+        f'<div id="lt-body"><div class="empty">Waiting for the live server...</div></div>'
+        f'</section>'
+    )
+
+
 def _sources_card(instrumentation: list) -> str:
     rows = []
     for source, vol, state, note in instrumentation:
@@ -953,6 +1085,7 @@ def _sidebar() -> str:
         ("systems", "grid", "Systems"),
         ("people", "users", "People"),
         ("videos", "video", "Videos"),
+        ("links", "link", "Links"),
         ("sources", "database", "Sources"),
     ]
     parts = []
@@ -1024,6 +1157,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list) -> str
 {_coverage_card(d, n_facets)}
 </div>
 </div>
+{_links_card()}
 <div class="grid3">
 {_people_card(d)}
 {_videos_card(d)}
