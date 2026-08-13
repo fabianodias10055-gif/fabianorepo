@@ -168,14 +168,43 @@ def looks_like_question(text: str) -> bool:
     return any(t.startswith(w + " ") for w in QUESTION_WORDS)
 
 
+def _norm_author(name: str) -> str:
+    """Comment authors are '@Handle'; the channels.list title has no '@'.
+
+    Whitespace is stripped before the '@', not after: stripping in the other
+    order leaves the '@' in place for a name with leading space, which is
+    exactly the kind of case that only shows up once and is a pain to trace.
+    """
+    return name.strip().lstrip("@").strip().lower()
+
+
 def answered_by_channel(c: dict, channel_name: str) -> bool:
-    return any(r["author"].lower() == channel_name.lower() for r in c["replies"])
+    target = _norm_author(channel_name)
+    return any(_norm_author(r["author"]) == target for r in c["replies"])
+
+
+def needs_your_answer(c: dict, channel_name: str) -> bool:
+    """A question that is actually waiting on you.
+
+    Two things disqualify a comment: it already got a reply from the channel,
+    or the channel wrote the top-level comment itself. That second case is
+    common (pinned or engagement comments from you) and without this check
+    every one of your own comments would show up as an unanswered customer
+    question, which is nonsense.
+    """
+    if _norm_author(c["author"]) == _norm_author(channel_name):
+        return False
+    return looks_like_question(c["text"]) and not answered_by_channel(c, channel_name)
 
 
 def safe_name(s: str) -> str:
     s = re.sub(r'[\\/:*?"<>|]', "-", s)
     s = re.sub(r"\s+", " ", s).strip(" .")
-    return s[:70]
+    # Windows silently drops a trailing space or dot when a directory is
+    # created, so the string Python holds and the name actually on disk
+    # diverge and every later write misses. Truncating can land the cut
+    # right after a space, so strip again post-slice, not just before it.
+    return s[:70].strip(" .")
 
 
 def existing_folders() -> dict[str, Path]:
@@ -265,7 +294,9 @@ def write_description(folder: Path, v: dict, dry: bool) -> None:
 def write_comments(folder: Path, v: dict, comments: list[dict], channel_name: str,
                    dry: bool) -> None:
     """Fully generated: this file mirrors YouTube, so it is safe to overwrite."""
-    questions = [c for c in comments if looks_like_question(c["text"])]
+    questions = [c for c in comments
+                if _norm_author(c["author"]) != _norm_author(channel_name)
+                and looks_like_question(c["text"])]
     unanswered = [c for c in questions if not answered_by_channel(c, channel_name)]
 
     lines = [
@@ -303,7 +334,7 @@ def write_comments(folder: Path, v: dict, comments: list[dict], channel_name: st
         for c in answered:
             lines.append(f"- **{c['author']}** ({c['date']}): {c['text']}")
             for r in c["replies"]:
-                if r["author"].lower() == channel_name.lower():
+                if _norm_author(r["author"]) == _norm_author(channel_name):
                     lines.append(f"  - **reply:** {r['text']}")
         lines.append("")
 
@@ -431,7 +462,7 @@ def main() -> int:
         updated += 1
 
         for c in comments:
-            if looks_like_question(c["text"]) and not answered_by_channel(c, channel_name):
+            if needs_your_answer(c, channel_name):
                 total_unanswered += 1
                 inbox_rows.append({**c, "system": system})
 
