@@ -299,7 +299,15 @@ def _iter_inbox_blocks():
                 fm = _FIELD_LINE.match(line.strip())
                 if fm:
                     v = fm.group(2).strip()
-                    fields[fm.group(1)] = v if fm.group(1) == "video" else v.lower()
+                    # channel/system/status/subscriber are normalized labels;
+                    # the rest must keep their case: YouTube video and comment
+                    # ids are case sensitive, and a lowercased source would
+                    # both break the deep link and make the Reply button post
+                    # against a comment id that does not exist.
+                    if fm.group(1) in ("video", "source", "video_id", "video_url"):
+                        fields[fm.group(1)] = v
+                    else:
+                        fields[fm.group(1)] = v.lower()
             prose = "\n".join(
                 l for l in block.splitlines()
                 if l.strip() and not _FIELD_LINE.match(l.strip())
@@ -397,6 +405,44 @@ def append_answered_log(question: dict, answer: str, posted_to_youtube: bool) ->
     )
     with path.open("a", encoding="utf-8") as fh:
         fh.write(block)
+
+
+ANSWER_HEAD = re.compile(
+    r"^###\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s+reply to\s+(.+?)\s*$", re.M)
+
+
+def parse_answers() -> list[dict]:
+    """Read back what append_answered_log wrote, newest first, so the
+    dashboard's Answers section shows the replies actually sent."""
+    path = VAULT / "Inbox" / ANSWERED_LOG_NAME
+    if not path.is_file():
+        return []
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    out = []
+    matches = list(ANSWER_HEAD.finditer(raw))
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(raw)
+        block = raw[m.end():end]
+        fields = {}
+        for line in block.splitlines():
+            fm = re.match(r"^(channel|system|video|posted_to_platform):\s*(.*)$",
+                          line.strip())
+            if fm:
+                fields[fm.group(1)] = fm.group(2).strip()
+        qm = re.search(r"\*\*Q:\*\*\s*(.*?)(?=\n\*\*A:\*\*|\Z)", block, re.S)
+        am = re.search(r"\*\*A:\*\*\s*(.*)", block, re.S)
+        out.append({
+            "when": m.group(1),
+            "who": m.group(2),
+            "channel": fields.get("channel", "unknown"),
+            "system": fields.get("system", "-"),
+            "video": fields.get("video", ""),
+            "posted": fields.get("posted_to_platform", "no") == "yes",
+            "q": " ".join((qm.group(1) if qm else "").split()),
+            "a": (am.group(1).strip() if am else ""),
+        })
+    out.reverse()
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -589,16 +635,16 @@ def scan() -> dict:
     videos = []
     vroot = VAULT / "YouTube" / "Videos"
     if vroot.is_dir():
-        for folder in sorted(vroot.iterdir()):
+        # Newest first: the folder names start with the publish date.
+        for folder in sorted(vroot.iterdir(), reverse=True):
             if not folder.is_dir():
                 continue
             has = {}
+            meta = {}
             for note in folder.glob("*.md"):
-                useful = len(strip_template(note.read_text(encoding="utf-8", errors="replace")))
+                text = note.read_text(encoding="utf-8", errors="replace")
+                useful = len(strip_template(text))
                 low = note.stem.lower()
-                for key in ("overview", "description", "transcript", "comments"):
-                    if key in low or low.startswith(("00", "01", "02", "03")):
-                        pass
                 if "transcript" in low:
                     has["transcript"] = useful >= MIN_CONTENT
                 elif "comment" in low:
@@ -607,8 +653,19 @@ def scan() -> dict:
                     has["description"] = useful >= MIN_CONTENT
                 elif "overview" in low:
                     has["overview"] = useful >= MIN_CONTENT
+                    # The collector's frontmatter carries the id and url the
+                    # dashboard needs for thumbnails and deep links.
+                    for key in ("video_id", "url", "published", "system", "views"):
+                        fm = re.search(rf"^{key}:[ \t]*(\S+)[ \t]*$", text, re.M)
+                        if fm:
+                            meta[key] = fm.group(1)
             videos.append({
                 "name": folder.name,
+                "video_id": meta.get("video_id", ""),
+                "url": meta.get("url", ""),
+                "published": meta.get("published", folder.name[:10]),
+                "system": meta.get("system", ""),
+                "views": meta.get("views", ""),
                 "transcript": has.get("transcript", False),
                 "comments": has.get("comments", False),
                 "description": has.get("description", False),
@@ -632,6 +689,7 @@ def scan() -> dict:
         "questions": questions,
         "gaps": gaps,
         "people": people,
+        "answers": parse_answers(),
         "open_q": open_q,
         "answer_rate": answer_rate,
         "written": written,
@@ -807,677 +865,11 @@ def render_markdown(d: dict) -> str:
 # --------------------------------------------------------------------------
 
 def render_html(d: dict, live: bool) -> str:
-    pct = d["written"] * 100 // d["total_facets"] if d["total_facets"] else 0
-
-    rows = []
-    for s in d["systems"]:
-        cells = "".join(
-            f'<span class="f{" on" if ok else ""}" title="{lbl}"></span>'
-            for (_k, lbl, _p, _w), ok in zip(FACETS, s["facets"])
-        )
-        dem = f"{s['demand']}" if s["demand"] else "-"
-        rows.append(
-            f'<tr class="u-{s["urgency"]}">'
-            f'<td class="need"><span class="pct">{s["pct"]}%</span>'
-            f'<span class="lab">{s["urgency"]}</span></td>'
-            f'<td class="nm">{s["name"]}<small>{s["slug"]}</small></td>'
-            f'<td class="fx">{cells}</td>'
-            f'<td class="num">{s["done"]}/5</td>'
-            f'<td class="num">{dem}</td></tr>'
-        )
-
-    queue = [s for s in d["systems"] if s["demand"] > 0 and s["done"] < len(FACETS)]
-    queue_html = "".join(
-        f'<li><span class="qp u-{s["urgency"]}">{s["pct"]}%</span>'
-        f'<b>{s["name"]}</b> <span class="qm">missing: '
-        + ", ".join(lbl for (_k, lbl, _p, _w), ok in zip(FACETS, s["facets"]) if not ok)
-        + f'</span> <span class="qd">{s["demand"]} asked</span></li>'
-        for s in queue
-    ) or "<li>No gaps with recorded demand.</li>"
-
-    instr_html = "".join(
-        f'<tr class="s-{state}"><td>{source}</td><td class="num">{vol}</td>'
-        f'<td><span class="pill p-{state}">{state}</span></td><td class="dim">{note}</td></tr>'
-        for source, vol, state, note in INSTRUMENTATION
-    )
-
-    def esc(s: str) -> str:
-        return (s.replace("&", "&amp;").replace("<", "&lt;")
-                 .replace(">", "&gt;").replace('"', "&quot;"))
-
-    # --- incoming questions -------------------------------------------------
-    q_rows = []
-    for q in d["questions"]:
-        cls = STATUS_CLASS.get(q["status"], "mute")
-        colour = CHANNELS.get(q["channel"], "var(--ink3)")
-        sub = '<span class="pill p-mute">subscriber</span>' if q["subscriber"] == "yes" else ""
-        sysname = esc(q["system_name"]) if q["system"] != "-" else "catalog wide"
-
-        source_html = ""
-        if q["video"]:
-            link = (f'<a href="{esc(q["video_url"])}" target="_blank" rel="noopener">'
-                    f'{esc(q["video"])} ↗</a>' if q["video_url"] else esc(q["video"]))
-            source_html = f'<div class="q-src">from: {link}</div>'
-
-        answered = q["status"] == "answered"
-        q_rows.append(
-            f'<div class="q q-{cls}" data-id="{esc(q["id"])}" data-ch="{esc(q["channel"])}" '
-            f'data-st="{esc(q["status"])}" data-sys="{esc(q["system"])}" tabindex="0" '
-            f'role="button" aria-expanded="false">'
-            f'<div class="q-top">'
-            f'<span class="who"><i class="cd" style="background:{colour}"></i>{esc(q["who"])}</span>'
-            f'<span class="pill p-{cls}">{esc(q["status"])}</span>{sub}</div>'
-            f'<p class="q-text">"{esc(q["text"])}"</p>'
-            f'{source_html}'
-            f'<div class="q-foot"><span>{sysname}</span>'
-            f'<span>{esc(q["channel"])}</span><span>{q["date"]}</span></div>'
-            f'<div class="q-panel" hidden>'
-            f'<div class="q-panel-row">'
-            f'<button class="qbtn qsuggest" type="button"{" disabled" if answered else ""}>Suggest answer</button>'
-            f'<span class="qmsg"></span></div>'
-            f'<textarea class="qbox" rows="3" placeholder="Type or generate a reply…"'
-            f'{" disabled" if answered else ""}></textarea>'
-            f'<div class="q-panel-row">'
-            f'<button class="qbtn qreply" type="button"{" disabled" if answered else ""}>Reply</button>'
-            f'<span class="qhint">'
-            f'{"Already marked answered." if answered else "Updates the vault always; posts to YouTube only if reply-posting is set up."}'
-            f'</span></div></div></div>'
-        )
-    questions_html = "".join(q_rows) or '<p class="dim">No questions logged yet. Paste one into Inbox/00 - Questions.md</p>'
-
-    chans = sorted({q["channel"] for q in d["questions"]})
-    chan_filter_html = '<button class="fchip" data-f="ch" data-v="all" aria-pressed="true">All channels</button>' + "".join(
-        f'<button class="fchip" data-f="ch" data-v="{esc(c)}" aria-pressed="false">'
-        f'<i class="cd" style="background:{CHANNELS.get(c, "var(--ink3)")}"></i>{esc(c)}</button>'
-        for c in chans
-    )
-
-    statuses = sorted({q["status"] for q in d["questions"]})
-    status_filter_html = '<button class="fchip" data-f="st" data-v="all" aria-pressed="true">All statuses</button>' + "".join(
-        f'<button class="fchip" data-f="st" data-v="{esc(s)}" aria-pressed="false">{esc(s)}</button>'
-        for s in statuses
-    )
-
-    systems_present = sorted(
-        {(q["system"], q["system_name"] if q["system"] != "-" else "catalog wide")
-         for q in d["questions"]},
-        key=lambda t: t[1],
-    )
-    system_options = '<option value="all">All systems</option>' + "".join(
-        f'<option value="{esc(slug)}">{esc(label)}</option>' for slug, label in systems_present
-    )
-
-    # --- gaps (expandable) --------------------------------------------------
-    gap_rows = []
-    max_gap = d["gaps"][0]["count"] if d["gaps"] else 1
-    for g in d["gaps"]:
-        items = "".join(
-            f'<div class="gq-item"><span>"{esc(q["text"][:160])}"</span>'
-            f'<span class="gq-who">{esc(q["who"])} · {esc(q["channel"])} · {q["date"]}</span></div>'
-            for q in g["questions"]
-        )
-        action = (f'Write Systems/{esc(g["key"])}/00 - Overview and 02 - Setup'
-                  if g["key"] != "general"
-                  else "Write the catalog-wide answers: compatibility table per system, and the license")
-        gap_rows.append(
-            f'<div class="gap" tabindex="0" role="button" aria-expanded="false">'
-            f'<span class="gname">{esc(g["label"])}<span class="caret">▸</span></span>'
-            f'<span class="gcount">{g["count"]}×</span>'
-            f'<div class="gbar"><span style="width:{round(g["count"] * 100 / max_gap)}%"></span></div>'
-            f'<div class="gq" hidden>{items}<div class="gq-act">→ {action}</div></div></div>'
-        )
-    gaps_html = "".join(gap_rows) or '<p class="dim">No unanswerable questions logged. Mark a question <code>status: no-source</code> to see it here.</p>'
-
-    # --- people (compact table, collapsed past the first 8) -----------------
-    people_rows = []
-    for i, p in enumerate(d["people"]):
-        colour = CHANNELS.get(p["channel"], "var(--ink3)")
-        if p["subscriber"] == "yes":
-            tag = '<span class="pill p-ok">subscriber</span>'
-        elif p["subscriber"] == "no":
-            tag = '<span class="pill p-mute">not a subscriber</span>'
-        else:
-            tag = ""  # "unknown" on nearly every row is noise, not signal
-        lead = '<span class="pill p-partial">hot lead</span>' if p["lead"] else ""
-        people_rows.append(
-            f'<tr class="prow"{" hidden" if i >= 8 else ""}>'
-            f'<td class="nm"><i class="cd" style="background:{colour}"></i>'
-            f'{esc(p["who"])}{tag}{lead}</td>'
-            f'<td class="num">{p["asked"]}</td><td class="num">{p["open"]}</td>'
-            f'<td class="num">{p["last"]}</td></tr>'
-        )
-    people_html = "".join(people_rows) or '<tr><td colspan="4" class="dim">Nobody logged yet.</td></tr>'
-    people_hidden_count = max(0, len(d["people"]) - 8)
-
-    def video_cells(v: dict) -> str:
-        keys = ("overview", "description", "transcript", "comments")
-        return "".join(
-            '<span class="f on" title="{k}"></span>'.format(k=k) if v[k]
-            else '<span class="f" title="{k}"></span>'.format(k=k)
-            for k in keys
-        )
-
-    vid_html = "".join(
-        '<tr><td class="nm">{name}</td><td>{cells}</td></tr>'.format(
-            name=v["name"], cells=video_cells(v))
-        for v in d["videos"]
-    ) or '<tr><td colspan="2" class="dim">No video folders yet.</td></tr>'
-
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>LocoDev Operations Panel</title>
-<style>
-:root {{
-  --ground:#0D1311; --surface:#141C19; --surface2:#1B2521;
-  --ink:#E6EDEA; --ink2:#93A59F; --ink3:#6B7D77;
-  --line:#26312D; --line2:#1E2825; --accent:#3FD39C;
-  --ok:#48D49F; --ok-bg:#12332A; --warn:#E8B15C; --warn-bg:#33260F;
-  --crit:#F2818F; --crit-bg:#38191F; --info:#6FB4F5; --info-bg:#14283C;
-  --mono:"Cascadia Code","Cascadia Mono",Consolas,ui-monospace,monospace;
-  --ui:"Segoe UI Variable Display","Segoe UI",system-ui,-apple-system,sans-serif;
-}}
-@media (prefers-color-scheme: light) {{
-  :root:not([data-theme="dark"]) {{
-    --ground:#F5F7F6; --surface:#FFFFFF; --surface2:#EBEFED;
-    --ink:#121D19; --ink2:#55665F; --ink3:#82938D;
-    --line:#D9E1DE; --line2:#E7EDEA; --accent:#0B7A57;
-    --ok:#0B7A57; --ok-bg:#DDF0E8; --warn:#965900; --warn-bg:#F8EAD2;
-    --crit:#A32C3E; --crit-bg:#F8DFE3; --info:#1D5FA8; --info-bg:#DCE9F7;
-  }}
-}}
-* {{ box-sizing:border-box; }}
-body {{ margin:0; background:var(--ground); color:var(--ink);
-  font-family:var(--ui); font-size:14.5px; line-height:1.5;
-  -webkit-font-smoothing:antialiased; }}
-.wrap {{ max-width:1120px; margin:0 auto; padding:26px 20px 60px;
-  display:flex; flex-direction:column; gap:22px; }}
-header {{ display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; }}
-h1 {{ font-size:24px; margin:0; font-weight:650; letter-spacing:-.02em; }}
-h2 {{ font-size:16px; margin:0 0 10px; font-weight:640; }}
-.card {{ background:var(--surface); border:1px solid var(--line);
-  border-radius:10px; padding:16px 17px; }}
-.status {{ display:flex; align-items:center; gap:10px; }}
-.chip {{ display:inline-flex; align-items:center; gap:7px; font-family:var(--mono);
-  font-size:11.5px; padding:6px 11px; border-radius:999px;
-  border:1px solid var(--line); background:var(--surface); }}
-.chip .dot {{ width:7px; height:7px; border-radius:50%; background:var(--ok);
-  box-shadow:0 0 0 3px var(--ok-bg); }}
-.chip.stale .dot {{ background:var(--warn); box-shadow:0 0 0 3px var(--warn-bg); }}
-.chip.off .dot {{ background:var(--crit); box-shadow:0 0 0 3px var(--crit-bg); }}
-button {{ font-family:var(--ui); font-size:12.5px; font-weight:560;
-  color:var(--ink); background:var(--surface); border:1px solid var(--line);
-  border-radius:999px; padding:6px 14px; cursor:pointer;
-  transition:border-color .15s, background .15s; }}
-button:hover {{ border-color:var(--accent); background:var(--surface2); }}
-button:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }}
-button[disabled] {{ opacity:.5; cursor:default; }}
-.tiles {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:11px; }}
-.tile {{ background:var(--surface); border:1px solid var(--line);
-  border-radius:10px; padding:14px 15px; display:flex; flex-direction:column; gap:2px; }}
-.tile .l {{ font-size:12.5px; color:var(--ink2); }}
-.tile .v {{ font-size:25px; font-weight:660; letter-spacing:-.02em;
-  font-variant-numeric:tabular-nums; }}
-.tile.crit .v {{ color:var(--crit); }}
-.tile.ok .v {{ color:var(--ok); }}
-.scroll {{ overflow-x:auto; }}
-table {{ width:100%; border-collapse:collapse; font-size:13.5px; }}
-th {{ text-align:left; font-family:var(--mono); font-size:10.5px; letter-spacing:.05em;
-  text-transform:uppercase; color:var(--ink3); font-weight:600;
-  padding:0 12px 7px 0; border-bottom:1px solid var(--line); white-space:nowrap; }}
-td {{ padding:8px 12px 8px 0; border-bottom:1px solid var(--line2); vertical-align:middle; }}
-tr:last-child td {{ border-bottom:0; }}
-td.num {{ font-family:var(--mono); font-size:12.5px; font-variant-numeric:tabular-nums;
-  white-space:nowrap; color:var(--ink2); }}
-td.nm {{ font-weight:560; }}
-td.nm small {{ display:block; font-family:var(--mono); font-size:10px;
-  color:var(--ink3); font-weight:400; }}
-td.dim {{ color:var(--ink3); font-size:12.5px; }}
-td.need {{ white-space:nowrap; }}
-td.need .pct {{ font-family:var(--mono); font-weight:660; font-variant-numeric:tabular-nums; }}
-td.need .lab {{ font-family:var(--mono); font-size:10px; text-transform:uppercase;
-  letter-spacing:.04em; margin-left:6px; color:var(--ink3); }}
-tr.u-critical td.need .pct {{ color:var(--crit); }}
-tr.u-urgent td.need .pct {{ color:var(--warn); }}
-tr.u-done td.need .pct {{ color:var(--ok); }}
-.f {{ display:inline-block; width:24px; height:13px; border-radius:3px;
-  background:var(--surface2); border:1px solid var(--line); margin-right:3px; }}
-.f.on {{ background:var(--ok); border-color:var(--ok); }}
-.pill {{ font-family:var(--mono); font-size:10px; letter-spacing:.04em;
-  text-transform:uppercase; padding:2.5px 7px; border-radius:4px; font-weight:650; }}
-.p-ok {{ color:var(--ok); background:var(--ok-bg); }}
-.p-partial {{ color:var(--warn); background:var(--warn-bg); }}
-.p-blind {{ color:var(--crit); background:var(--crit-bg); }}
-.cols {{ display:grid; grid-template-columns:1.25fr 1fr; gap:16px; align-items:start; }}
-@media (max-width:880px) {{ .cols {{ grid-template-columns:1fr; }} }}
-.cd {{ display:inline-block; width:7px; height:7px; border-radius:2px; }}
-.qhead {{ display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:2px; }}
-.qhead h2 {{ margin:0; }}
-.qcount {{ font-family:var(--mono); font-size:11.5px; color:var(--ink3); white-space:nowrap; }}
-.fchips {{ display:flex; flex-wrap:wrap; gap:7px; margin-bottom:8px; }}
-.fchip {{ font-family:var(--ui); font-size:12.5px; background:transparent;
-  border:1px solid var(--line); color:var(--ink2); border-radius:999px;
-  padding:5px 12px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }}
-.fchip:hover {{ border-color:var(--ink3); color:var(--ink); }}
-.fchip[aria-pressed="true"] {{ border-color:var(--accent); background:var(--surface2);
-  color:var(--ink); font-weight:560; }}
-.fselect {{ font-family:var(--ui); font-size:12.5px; color:var(--ink); background:var(--surface);
-  border:1px solid var(--line); border-radius:8px; padding:6px 10px; margin-bottom:12px;
-  max-width:100%; }}
-.fselect:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }}
-.fmore {{ display:block; width:100%; margin-top:4px; font-family:var(--ui); font-size:12.5px;
-  font-weight:560; color:var(--ink2); background:var(--surface2); border:1px solid var(--line);
-  border-radius:8px; padding:9px; cursor:pointer; }}
-.fmore:hover {{ border-color:var(--accent); color:var(--ink); }}
-.fmore[hidden] {{ display:none; }}
-.q[hidden] {{ display:none; }}
-.feed {{ display:flex; flex-direction:column; gap:9px; }}
-.q {{ border:1px solid var(--line); border-left:3px solid var(--line);
-  border-radius:8px; padding:11px 13px; display:flex; flex-direction:column; gap:6px;
-  cursor:pointer; }}
-.q:hover {{ border-color:var(--ink3); }}
-.q:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }}
-.q-ok {{ border-left-color:var(--ok); }} .q-info {{ border-left-color:var(--info); }}
-.q-crit {{ border-left-color:var(--crit); }} .q-mute {{ border-left-color:var(--ink3); }}
-.q-top {{ display:flex; flex-wrap:wrap; align-items:center; gap:7px; }}
-.who {{ font-weight:620; font-size:13.5px; display:inline-flex; align-items:center; gap:6px; }}
-.q-text {{ margin:0; font-size:13.5px; color:var(--ink2); }}
-.q-src {{ font-size:12px; color:var(--ink3); }}
-.q-src a {{ color:var(--accent); text-decoration:none; }}
-.q-src a:hover {{ text-decoration:underline; }}
-.q-foot {{ display:flex; flex-wrap:wrap; gap:10px; font-family:var(--mono);
-  font-size:10.5px; color:var(--ink3); }}
-.q-panel {{ margin-top:6px; padding-top:10px; border-top:1px dashed var(--line);
-  display:flex; flex-direction:column; gap:8px; cursor:default; }}
-.q-panel[hidden] {{ display:none; }}
-.q-panel-row {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }}
-.qbtn {{ font-family:var(--ui); font-size:12.5px; font-weight:560; color:var(--ink);
-  background:var(--surface2); border:1px solid var(--line); border-radius:7px;
-  padding:6px 13px; cursor:pointer; }}
-.qbtn:hover:not(:disabled) {{ border-color:var(--accent); }}
-.qbtn:disabled {{ opacity:.5; cursor:default; }}
-.qbtn.qreply {{ background:var(--accent-soft); border-color:var(--accent); color:var(--ink); }}
-.qbox {{ width:100%; font-family:var(--ui); font-size:13px; color:var(--ink);
-  background:var(--surface2); border:1px solid var(--line); border-radius:8px;
-  padding:9px 11px; resize:vertical; }}
-.qbox:focus-visible {{ outline:2px solid var(--accent); outline-offset:1px; }}
-.qbox:disabled {{ opacity:.6; }}
-.qmsg {{ font-size:12px; color:var(--ink2); }}
-.qmsg.qerr {{ color:var(--crit); }}
-.qmsg.qok {{ color:var(--ok); }}
-.qhint {{ font-size:11.5px; color:var(--ink3); }}
-.p-info {{ color:var(--info); background:var(--info-bg); }}
-.p-crit {{ color:var(--crit); background:var(--crit-bg); }}
-.p-mute {{ color:var(--ink3); background:var(--surface2); }}
-.gaps {{ display:flex; flex-direction:column; gap:8px; }}
-.gap {{ display:grid; grid-template-columns:1fr auto; gap:4px 12px; align-items:center;
-  border:1px solid var(--line); border-radius:8px; padding:10px 12px; cursor:pointer; }}
-.gap:hover {{ border-color:var(--ink3); }}
-.gap:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }}
-.gname {{ font-weight:620; font-size:13.5px; }}
-.gcount {{ font-family:var(--mono); font-size:15px; font-weight:650; color:var(--crit);
-  font-variant-numeric:tabular-nums; }}
-.caret {{ font-family:var(--mono); font-size:10px; color:var(--ink3); margin-left:6px; }}
-.gbar {{ grid-column:1/-1; height:4px; border-radius:2px; background:var(--surface2);
-  overflow:hidden; margin-top:3px; }}
-.gbar span {{ display:block; height:100%; background:var(--crit); border-radius:2px; }}
-.gq {{ grid-column:1/-1; margin-top:8px; padding-top:9px;
-  border-top:1px dashed var(--line); display:flex; flex-direction:column; gap:6px; }}
-.gq[hidden] {{ display:none; }}
-.gq-item {{ font-size:12.5px; color:var(--ink2); display:flex; flex-direction:column; gap:2px; }}
-.gq-who {{ font-family:var(--mono); font-size:10.5px; color:var(--ink3); }}
-.gq-act {{ margin-top:4px; font-family:var(--mono); font-size:10.5px; color:var(--accent); }}
-.prow[hidden] {{ display:none; }}
-.dim {{ color:var(--ink3); font-size:13px; }}
-ol.queue {{ margin:0; padding-left:20px; display:flex; flex-direction:column; gap:7px; }}
-ol.queue li {{ font-size:13.5px; }}
-.qp {{ font-family:var(--mono); font-size:11.5px; font-weight:660; margin-right:8px; }}
-.qp.u-critical {{ color:var(--crit); }} .qp.u-urgent {{ color:var(--warn); }}
-.qm {{ color:var(--ink3); font-size:12.5px; }}
-.qd {{ font-family:var(--mono); font-size:11px; color:var(--ink3); }}
-.note {{ font-size:13px; color:var(--ink2); border-left:2px solid var(--accent);
-  padding:3px 0 3px 12px; margin:12px 0 0; max-width:74ch; }}
-footer {{ color:var(--ink3); font-size:12px; border-top:1px solid var(--line);
-  padding-top:14px; font-family:var(--mono); }}
-</style>
-</head>
-<body>
-<div class="wrap">
-
-<header>
-  <h1>LocoDev Operations Panel</h1>
-  <div class="status">
-    <span class="chip" id="chip"><span class="dot"></span><span id="chiptext">checking…</span></span>
-    <button id="refresh" type="button">Update now</button>
-  </div>
-</header>
-
-<div class="tiles">
-  <div class="tile crit"><span class="l">Open questions</span><span class="v">{d['open_q']}</span>
-    <span class="l">waiting on you</span></div>
-  <div class="tile"><span class="l">Answered</span><span class="v">{d['answer_rate']}%</span>
-    <span class="l">of {len(d['questions'])} logged</span></div>
-  <div class="tile"><span class="l">Catalog coverage</span><span class="v">{pct}%</span>
-    <span class="l">{d['written']} of {d['total_facets']} notes</span></div>
-  <div class="tile crit"><span class="l">Critical systems</span><span class="v">{d['critical']}</span>
-    <span class="l">{d['urgent']} more urgent</span></div>
-  <div class="tile ok"><span class="l">Complete</span><span class="v">{d['complete']}</span>
-    <span class="l">of {len(CATALOG)} systems</span></div>
-</div>
-
-<div class="cols">
-  <section class="card">
-    <div class="qhead">
-      <h2>Incoming questions</h2>
-      <span class="qcount" id="qcount"></span>
-    </div>
-    <div class="fchips" id="chanFilter">{chan_filter_html}</div>
-    <div class="fchips" id="statusFilter">{status_filter_html}</div>
-    <select class="fselect" id="sysFilter">{system_options}</select>
-    <div class="feed" id="feed">{questions_html}</div>
-    <button class="fmore" id="showMore" type="button" hidden>Show more</button>
-    <p class="note">Click a question to expand it: Suggest searches your own
-    notes for a draft, Reply updates the vault for real and posts to YouTube
-    once <code>youtube_oauth_setup.py</code> has been run once.</p>
-  </section>
-
-  <section class="card">
-    <h2>Gaps to close</h2>
-    <div class="gaps">{gaps_html}</div>
-    <p class="note">Click a row to see the actual questions behind it. This list is
-    written by demand, not by guesswork: every entry is somebody who asked and got
-    nothing.</p>
-  </section>
-</div>
-
-<div class="cols">
-  <section class="card">
-    <div class="qhead">
-      <h2>Who is asking</h2>
-      <span class="qcount">{len(d['people'])} people</span>
-    </div>
-    <div class="scroll">
-    <table>
-      <thead><tr><th>Who</th><th>Asked</th><th>Open</th><th>Last</th></tr></thead>
-      <tbody id="peopleBody">{people_html}</tbody>
-    </table>
-    </div>
-    <button class="fmore" id="peopleMore" type="button"{' hidden' if people_hidden_count <= 0 else ''}>Show {people_hidden_count} more</button>
-    <p class="note">Ranked by how many of their questions are still open. A non-subscriber
-    who is stuck is a <span class="pill p-partial">hot lead</span>, not a support ticket.</p>
-  </section>
-
-  <section class="card">
-    <h2>Priority queue</h2>
-    <ol class="queue">{queue_html}</ol>
-    <p class="note">Need combines how much is missing (overview and setup weigh most,
-    since they answer on their own) with real open demand where it exists, the old
-    guess only where nobody has asked yet. Demand counts 60%, the gap 40%.</p>
-  </section>
-</div>
-
-<section class="card">
-  <h2>Documentation coverage</h2>
-  <div class="scroll">
-  <table>
-    <thead><tr><th>Need</th><th>System</th>
-      <th>Overview · Logic · Setup · Issues · Blueprints</th>
-      <th>Done</th><th>Asked</th></tr></thead>
-    <tbody>{"".join(rows)}</tbody>
-  </table>
-  </div>
-</section>
-
-<section class="card">
-  <h2>Videos</h2>
-  <div class="scroll">
-  <table>
-    <thead><tr><th>Video</th><th>Overview · Description · Transcript · Comments</th></tr></thead>
-    <tbody>{vid_html}</tbody>
-  </table>
-  </div>
-</section>
-
-<section class="card">
-  <h2>What is measured, and what is blind</h2>
-  <div class="scroll">
-  <table>
-    <thead><tr><th>Source</th><th>Volume</th><th>State</th><th>Notes</th></tr></thead>
-    <tbody>{instr_html}</tbody>
-  </table>
-  </div>
-  <p class="note">The product has first-class telemetry; the customer has none.
-  Wiring the blind channels is what this panel needs to show real questions
-  instead of only coverage.</p>
-</section>
-
-<footer>
-  Generated {d['generated_at']} from {VAULT} · {"live watch mode" if live else "static build"}
-</footer>
-
-</div>
-<script>
-// Incoming questions: three filters (channel, status, system) combined with
-// AND, plus a collapse that only grows the visible slice of whatever
-// currently matches. All three live in one small state object so a filter
-// change and a "show more" click go through the same render path.
-(function () {{
-  var PAGE = 8;
-  var state = {{ ch: 'all', st: 'all', sys: 'all', limit: PAGE }};
-  var rows = Array.prototype.slice.call(document.querySelectorAll('#feed .q'));
-  var countEl = document.getElementById('qcount');
-  var moreBtn = document.getElementById('showMore');
-
-  function matches(row) {{
-    return (state.ch === 'all' || row.dataset.ch === state.ch)
-      && (state.st === 'all' || row.dataset.st === state.st)
-      && (state.sys === 'all' || row.dataset.sys === state.sys);
-  }}
-
-  function render() {{
-    var matched = rows.filter(matches);
-    matched.forEach(function (row, i) {{ row.hidden = i >= state.limit; }});
-    rows.filter(function (r) {{ return !matches(r); }}).forEach(function (r) {{ r.hidden = true; }});
-
-    var shown = Math.min(state.limit, matched.length);
-    countEl.textContent = matched.length
-      ? 'showing ' + shown + ' of ' + matched.length
-      : 'no matches';
-    moreBtn.hidden = shown >= matched.length;
-    if (!moreBtn.hidden) {{
-      moreBtn.textContent = 'Show more (' + (matched.length - shown) + ' left)';
-    }}
-  }}
-
-  function wireGroup(id, key) {{
-    document.querySelectorAll('#' + id + ' .fchip').forEach(function (b) {{
-      b.addEventListener('click', function () {{
-        document.querySelectorAll('#' + id + ' .fchip').forEach(function (o) {{
-          o.setAttribute('aria-pressed', String(o === b));
-        }});
-        state[key] = b.dataset.v;
-        state.limit = PAGE;
-        render();
-      }});
-    }});
-  }}
-  if (!rows.length) {{
-    return; // nothing logged yet: leave the empty-state message alone
-  }}
-  wireGroup('chanFilter', 'ch');
-  wireGroup('statusFilter', 'st');
-
-  document.getElementById('sysFilter').addEventListener('change', function (e) {{
-    state.sys = e.target.value;
-    state.limit = PAGE;
-    render();
-  }});
-
-  moreBtn.addEventListener('click', function () {{
-    state.limit += 20;
-    render();
-  }});
-
-  render();
-}})();
-
-// Question rows expand to a panel: Suggest reads your own notes for a
-// starting draft, Reply writes it to the vault for real (and to YouTube too,
-// once reply-posting is set up). A successful reply changes the vault, which
-// bumps the build epoch, which the status poll below picks up and reloads --
-// so this code does not need to hand-patch the row afterward.
-document.querySelectorAll('.q').forEach(function (row) {{
-  var panel = row.querySelector('.q-panel');
-  var box = row.querySelector('.qbox');
-  var msg = row.querySelector('.qmsg');
-  var suggestBtn = row.querySelector('.qsuggest');
-  var replyBtn = row.querySelector('.qreply');
-
-  function setMsg(text, kind) {{
-    msg.textContent = text || '';
-    msg.className = 'qmsg' + (kind ? ' ' + kind : '');
-  }}
-
-  row.addEventListener('click', function (e) {{
-    if (panel.contains(e.target)) return; // clicks inside the panel do not toggle it
-    var open = !panel.hidden;
-    panel.hidden = open;
-    row.setAttribute('aria-expanded', String(!open));
-  }});
-  row.addEventListener('keydown', function (e) {{
-    if ((e.key === 'Enter' || e.key === ' ') && e.target === row) {{
-      e.preventDefault();
-      row.click();
-    }}
-  }});
-
-  if (suggestBtn) {{
-    suggestBtn.addEventListener('click', function () {{
-      suggestBtn.disabled = true;
-      setMsg('searching your notes…');
-      fetch('/suggest', {{
-        method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
-        body: JSON.stringify({{ id: row.dataset.id }}),
-      }})
-        .then(function (r) {{ return r.json(); }})
-        .then(function (r) {{
-          suggestBtn.disabled = false;
-          if (!r.ok) {{ setMsg(r.error || 'failed', 'qerr'); return; }}
-          if (!r.text) {{ setMsg('Nothing in your notes matches this yet.', 'qerr'); return; }}
-          box.value = r.text;
-          setMsg('from ' + r.source, 'qok');
-        }})
-        .catch(function () {{ suggestBtn.disabled = false; setMsg('request failed', 'qerr'); }});
-    }});
-  }}
-
-  if (replyBtn) {{
-    replyBtn.addEventListener('click', function () {{
-      var text = box.value.trim();
-      if (!text) {{ setMsg('write or generate a reply first', 'qerr'); return; }}
-      replyBtn.disabled = true;
-      box.disabled = true;
-      setMsg('sending…');
-      fetch('/reply', {{
-        method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
-        body: JSON.stringify({{ id: row.dataset.id, text: text }}),
-      }})
-        .then(function (r) {{ return r.json(); }})
-        .then(function (r) {{
-          if (!r.ok) {{
-            replyBtn.disabled = false; box.disabled = false;
-            setMsg(r.error || 'failed', 'qerr');
-            return;
-          }}
-          setMsg('Vault updated. ' + r.platform_message,
-                r.posted_to_platform ? 'qok' : 'qerr');
-          // The vault changed; the live status poll reloads the page shortly.
-        }})
-        .catch(function () {{
-          replyBtn.disabled = false; box.disabled = false;
-          setMsg('request failed', 'qerr');
-        }});
-    }});
-  }}
-}});
-
-// "Who is asking" table: reveal the rest in one click, no re-filtering needed.
-var peopleMore = document.getElementById('peopleMore');
-if (peopleMore) {{
-  peopleMore.addEventListener('click', function () {{
-    document.querySelectorAll('#peopleBody .prow[hidden]').forEach(function (r) {{
-      r.hidden = false;
-    }});
-    peopleMore.hidden = true;
-  }});
-}}
-
-// Gap rows expand to show the questions behind the number.
-document.querySelectorAll('.gap').forEach(function (g) {{
-  function toggle() {{
-    var box = g.querySelector('.gq');
-    if (!box) return;
-    var open = !box.hidden;
-    box.hidden = open;
-    g.setAttribute('aria-expanded', String(!open));
-    var c = g.querySelector('.caret');
-    if (c) c.textContent = open ? '\\u25b8' : '\\u25be';
-  }}
-  g.addEventListener('click', toggle);
-  g.addEventListener('keydown', function (e) {{
-    if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); toggle(); }}
-  }});
-}});
-
-var BUILT = {d['epoch']};
-var LIVE = {str(live).lower()};
-var chip = document.getElementById('chip');
-var text = document.getElementById('chiptext');
-var btn = document.getElementById('refresh');
-
-function ago(sec) {{
-  if (sec < 5) return 'just now';
-  if (sec < 60) return sec + 's ago';
-  if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
-  return Math.floor(sec / 3600) + 'h ago';
-}}
-
-function paint(state, msg) {{
-  chip.className = 'chip' + (state ? ' ' + state : '');
-  text.textContent = msg;
-}}
-
-if (!LIVE) {{
-  paint('stale', 'static file · run panel.py --watch for live updates');
-  btn.disabled = true;
-}} else {{
-  var lastSeen = BUILT;
-  setInterval(function () {{
-    fetch('/status.json?t=' + Date.now(), {{ cache: 'no-store' }})
-      .then(function (r) {{ return r.json(); }})
-      .then(function (s) {{
-        if (s.epoch > lastSeen) {{ location.reload(); return; }}
-        var age = Math.max(0, Math.floor(Date.now() / 1000) - s.epoch);
-        if (s.building) paint('stale', 'rebuilding…');
-        else paint('', 'live · updated ' + ago(age));
-      }})
-      .catch(function () {{ paint('off', 'watcher stopped · start panel.py --watch'); }});
-  }}, 2000);
-
-  btn.addEventListener('click', function () {{
-    btn.disabled = true;
-    paint('stale', 'rebuilding…');
-    fetch('/rebuild', {{ method: 'POST' }})
-      .then(function () {{ setTimeout(function () {{ location.reload(); }}, 400); }})
-      .catch(function () {{ paint('off', 'watcher stopped'); btn.disabled = false; }});
-  }});
-}}
-</script>
-</body>
-</html>
-"""
+    """The dashboard UI lives in panel_ui.py. This passes the scan through
+    together with the static config the layout needs; splitting them keeps
+    the data pipeline (scan/suggest/reply/serve) apart from presentation."""
+    import panel_ui
+    return panel_ui.render_html(d, live, FACETS, INSTRUMENTATION)
 
 
 # --------------------------------------------------------------------------
@@ -1487,11 +879,44 @@ if (!LIVE) {{
 _state = {"epoch": 0, "building": False}
 
 
+def _update_history(out: Path, d: dict) -> list:
+    """Real trend points for the header tiles' sparklines.
+
+    One point per build whose numbers actually changed; a rebuild with the
+    same numbers only refreshes the last timestamp. The lines start flat and
+    grow meaning with use, rather than faking a trend that was never measured.
+    """
+    path = out / "history.json"
+    try:
+        hist = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(hist, list):
+            hist = []
+    except (OSError, ValueError):
+        hist = []
+
+    cov = d["written"] * 100 // d["total_facets"] if d["total_facets"] else 0
+    point = {"t": d["epoch"], "open": d["open_q"], "rate": d["answer_rate"],
+             "cov": cov, "crit": d["critical"], "complete": d["complete"]}
+    keys = ("open", "rate", "cov", "crit", "complete")
+    if hist and all(hist[-1].get(k) == point[k] for k in keys):
+        hist[-1]["t"] = point["t"]
+    else:
+        hist.append(point)
+    hist = hist[-400:]
+
+    try:
+        path.write_text(json.dumps(hist), encoding="utf-8")
+    except OSError:
+        pass  # a failed history write must never block the panel itself
+    return hist
+
+
 def build(live: bool) -> dict:
     _state["building"] = True
     data = scan()
     out = VAULT / "Panel"
     out.mkdir(parents=True, exist_ok=True)
+    data["history"] = _update_history(out, data)
     (out / "00 - Operations Center.md").write_text(render_markdown(data), encoding="utf-8")
     (out / "panel.html").write_text(render_html(data, live), encoding="utf-8")
     (out / "status.json").write_text(
