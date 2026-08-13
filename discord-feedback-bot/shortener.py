@@ -250,8 +250,14 @@ async def lookup_geo(ip: str) -> tuple[str, str, str | None]:
     try:
         timeout = aiohttp.ClientTimeout(total=2)
         async with aiohttp.ClientSession(timeout=timeout) as session:
+            # http, not https, on purpose: ip-api.com's free tier rejects SSL
+            # with 403 "SSL unavailable for this endpoint". The https switch
+            # (f574ffd security pass) silently killed all geo enrichment from
+            # 2026-07-07 onward. If plaintext to the geo provider is ever
+            # unacceptable, the fix is their paid pro endpoint, never https
+            # on this one.
             async with session.get(
-                f"https://ip-api.com/json/{ip}?fields=country,countryCode,timezone"
+                f"http://ip-api.com/json/{ip}?fields=country,countryCode,timezone"
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -259,8 +265,10 @@ async def lookup_geo(ip: str) -> tuple[str, str, str | None]:
                     code = _clean_geo(data.get("countryCode"), 4) or "??"
                     tz = _clean_geo(data.get("timezone")) or None
                     return country, code, tz
-    except Exception:
-        pass
+                # Never log the IP itself; the status code is what matters.
+                logger.warning("geo lookup failed: HTTP %s", resp.status)
+    except Exception as exc:
+        logger.warning("geo lookup error: %s", type(exc).__name__)
     return "Unknown", "??", None
 
 

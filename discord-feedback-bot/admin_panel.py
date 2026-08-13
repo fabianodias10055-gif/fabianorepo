@@ -103,30 +103,40 @@ async def handle_login(request: web.Request) -> web.Response:
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
+def _win(modifier: str) -> str:
+    """SQL for a UTC time threshold in the same ISO 'T' format log_click
+    stores. datetime('now') renders with a space separator; compared
+    lexicographically against 'T' timestamps, 'T' > ' ' made every intraday
+    window behave at whole-day granularity ("clicks 1h" was "clicks today").
+    modifier is always a hardcoded literal, never user input.
+    """
+    return f"strftime('%Y-%m-%dT%H:%M:%S','now','{modifier}')"
+
+
 async def handle_stats(request: web.Request) -> web.Response:
     if not _check_token(request):
         raise web.HTTPUnauthorized()
     from shortener import _conn
     with _conn() as db:
         clicks_1h = db.execute(
-            "SELECT COUNT(*) FROM clicks WHERE clicked_at >= datetime('now', '-1 hour')"
+            f"SELECT COUNT(*) FROM clicks WHERE clicked_at >= {_win('-1 hour')}"
         ).fetchone()[0]
         clicks_24h = db.execute(
-            "SELECT COUNT(*) FROM clicks WHERE clicked_at >= datetime('now', '-24 hours')"
+            f"SELECT COUNT(*) FROM clicks WHERE clicked_at >= {_win('-24 hours')}"
         ).fetchone()[0]
         clicks_7d = db.execute(
-            "SELECT COUNT(*) FROM clicks WHERE clicked_at >= datetime('now', '-7 days')"
+            f"SELECT COUNT(*) FROM clicks WHERE clicked_at >= {_win('-7 days')}"
         ).fetchone()[0]
         total_links = db.execute("SELECT COUNT(*) FROM links").fetchone()[0]
         top_country = db.execute(
-            """SELECT country, COUNT(*) cnt FROM clicks
-               WHERE clicked_at >= datetime('now','-7 days')
+            f"""SELECT country, COUNT(*) cnt FROM clicks
+               WHERE clicked_at >= {_win('-7 days')}
                  AND country IS NOT NULL AND country != 'Unknown'
                GROUP BY country ORDER BY cnt DESC LIMIT 1"""
         ).fetchone()
         hourly_rows = db.execute(
-            """SELECT strftime('%H', clicked_at) hour, COUNT(*) cnt
-               FROM clicks WHERE clicked_at >= datetime('now', '-24 hours')
+            f"""SELECT strftime('%H', clicked_at) hour, COUNT(*) cnt
+               FROM clicks WHERE clicked_at >= {_win('-24 hours')}
                GROUP BY hour ORDER BY hour"""
         ).fetchall()
         recent = db.execute(
@@ -163,10 +173,10 @@ async def handle_list_links(request: web.Request) -> web.Response:
     from shortener import _conn
     with _conn() as db:
         rows = db.execute(
-            """SELECT l.prefix, l.slug, l.url, l.created_at,
+            f"""SELECT l.prefix, l.slug, l.url, l.created_at,
                       COUNT(c.id) total_clicks,
-                      SUM(CASE WHEN c.clicked_at >= datetime('now','-7 days') THEN 1 ELSE 0 END) clicks_7d,
-                      SUM(CASE WHEN c.clicked_at >= datetime('now','-1 hour')  THEN 1 ELSE 0 END) clicks_1h
+                      SUM(CASE WHEN c.clicked_at >= {_win('-7 days')} THEN 1 ELSE 0 END) clicks_7d,
+                      SUM(CASE WHEN c.clicked_at >= {_win('-1 hour')}  THEN 1 ELSE 0 END) clicks_1h
                FROM links l LEFT JOIN clicks c ON c.link_id = l.id
                GROUP BY l.id ORDER BY total_clicks DESC"""
         ).fetchall()
@@ -274,9 +284,9 @@ async def handle_clicks_by_country(request: web.Request) -> web.Response:
         raise web.HTTPUnauthorized()
     window = request.query.get("window", "7d")
     if window == "24h":
-        time_filter = "AND clicked_at >= datetime('now', '-1 day')"
+        time_filter = f"AND clicked_at >= {_win('-1 day')}"
     elif window == "7d":
-        time_filter = "AND clicked_at >= datetime('now', '-7 days')"
+        time_filter = f"AND clicked_at >= {_win('-7 days')}"
     elif window == "all":
         time_filter = ""
     else:
