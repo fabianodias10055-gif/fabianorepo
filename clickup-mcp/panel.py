@@ -177,6 +177,118 @@ def urgency(m: dict, demand_max: int) -> tuple[int, str]:
     return pct, label
 
 
+QUESTION_HEAD = re.compile(r"^###\s+(\d{4}-\d{2}-\d{2})\s+(.+?)\s*$", re.M)
+
+CHANNELS = {
+    "discord": "#5865F2",
+    "youtube": "#E5332A",
+    "patreon": "#E6EDEA",
+    "email": "#3FD39C",
+}
+
+STATUS_CLASS = {
+    "answered": "ok",
+    "escalated": "info",
+    "no-source": "crit",
+    "out-of-scope": "mute",
+}
+
+NAME_BY_SLUG = {slug: name for slug, name, _c in CATALOG}
+
+
+def parse_questions() -> list[dict]:
+    """Read the hand written question inbox.
+
+    Deliberately forgiving: a missing field becomes 'unknown' rather than an
+    error, because the whole point is that pasting a question costs seconds.
+    """
+    note = VAULT / "Inbox" / "00 - Questions.md"
+    if not note.is_file():
+        return []
+    text = note.read_text(encoding="utf-8", errors="replace")
+
+    # Strip frontmatter first, otherwise its closing --- is mistaken for the
+    # separator below and the whole instructions block gets parsed as data.
+    text = re.sub(r"^---.*?\n---\n", "", text, count=1, flags=re.S)
+    # Fenced code blocks hold the format example: never read them as questions.
+    text = re.sub(r"```.*?```", "", text, flags=re.S)
+
+    parts = text.split("\n---\n", 1)
+    body = parts[1] if len(parts) > 1 else text
+
+    out = []
+    matches = list(QUESTION_HEAD.finditer(body))
+    for i, m in enumerate(matches):
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        block = body[start:end]
+
+        fields = {}
+        for line in block.splitlines():
+            fm = re.match(r"^(channel|system|status|subscriber):\s*(.*)$", line.strip())
+            if fm:
+                fields[fm.group(1)] = fm.group(2).strip().lower()
+        prose = "\n".join(
+            l for l in block.splitlines()
+            if l.strip() and not re.match(r"^(channel|system|status|subscriber):", l.strip())
+        ).strip()
+
+        system = fields.get("system", "-")
+        out.append({
+            "date": m.group(1),
+            "who": m.group(2),
+            "channel": fields.get("channel", "unknown"),
+            "system": system,
+            "system_name": NAME_BY_SLUG.get(system, system),
+            "status": fields.get("status", "unknown"),
+            "subscriber": fields.get("subscriber", "unknown"),
+            "text": " ".join(prose.split()),
+        })
+    out.sort(key=lambda q: q["date"], reverse=True)
+    return out
+
+
+def build_gaps(questions: list[dict]) -> list[dict]:
+    """Group unanswerable questions into a ranked backlog of what to write."""
+    buckets: dict[str, dict] = {}
+    for q in questions:
+        if q["status"] != "no-source":
+            continue
+        key = q["system"] if q["system"] != "-" else "general"
+        b = buckets.setdefault(key, {
+            "key": key,
+            "label": NAME_BY_SLUG.get(key, "General / catalog wide"),
+            "questions": [],
+        })
+        b["questions"].append(q)
+    gaps = list(buckets.values())
+    for g in gaps:
+        g["count"] = len(g["questions"])
+    gaps.sort(key=lambda g: -g["count"])
+    return gaps
+
+
+def build_people(questions: list[dict]) -> list[dict]:
+    people: dict[str, dict] = {}
+    for q in questions:
+        p = people.setdefault(q["who"], {
+            "who": q["who"], "channel": q["channel"],
+            "subscriber": q["subscriber"], "asked": 0, "open": 0,
+            "last": q["date"],
+        })
+        p["asked"] += 1
+        if q["status"] in ("escalated", "no-source"):
+            p["open"] += 1
+        if q["subscriber"] != "unknown":
+            p["subscriber"] = q["subscriber"]
+    ordered = sorted(people.values(), key=lambda p: (-p["open"], -p["asked"]))
+    for p in ordered:
+        # Someone who is not a subscriber and is asking how to subscribe is a
+        # lead, not a support ticket.
+        p["lead"] = p["subscriber"] == "no" and p["open"] > 0
+    return ordered
+
+
 def scan() -> dict:
     systems = [measure_system(slug, name) for slug, name, _c in CATALOG]
     demand_max = max((s["demand"] for s in systems), default=0)
@@ -213,6 +325,14 @@ def scan() -> dict:
                 "overview": has.get("overview", False),
             })
 
+    questions = parse_questions()
+    gaps = build_gaps(questions)
+    people = build_people(questions)
+
+    answered = sum(1 for q in questions if q["status"] == "answered")
+    open_q = sum(1 for q in questions if q["status"] in ("escalated", "no-source"))
+    answer_rate = round(answered * 100 / len(questions)) if questions else 0
+
     total_facets = len(CATALOG) * len(FACETS)
     written = sum(s["done"] for s in systems)
     return {
@@ -220,6 +340,11 @@ def scan() -> dict:
         "epoch": int(time.time()),
         "systems": systems,
         "videos": videos,
+        "questions": questions,
+        "gaps": gaps,
+        "people": people,
+        "open_q": open_q,
+        "answer_rate": answer_rate,
         "written": written,
         "total_facets": total_facets,
         "complete": sum(1 for s in systems if s["done"] == len(FACETS)),
@@ -286,6 +411,37 @@ def render_markdown(d: dict) -> str:
         "",
         "---",
         "",
+        "## Incoming questions",
+        "",
+        f"{d['open_q']} open of {len(d['questions'])} logged · {d['answer_rate']}% answered.",
+        "Written by hand in `Inbox/00 - Questions.md`.",
+        "",
+    ]
+    if d["questions"]:
+        lines += ["| When | Who | Channel | About | Status |", "|---|---|---|---|---|"]
+        for q in d["questions"]:
+            about = q["system_name"] if q["system"] != "-" else "catalog wide"
+            sub = " (subscriber)" if q["subscriber"] == "yes" else ""
+            lines.append(
+                f"| {q['date']} | {q['who']}{sub} | {q['channel']} | {about} | {q['status']} |"
+            )
+    else:
+        lines.append("*No questions logged yet.*")
+
+    lines += ["", "---", "", "## Gaps to close", ""]
+    if d["gaps"]:
+        for g in d["gaps"]:
+            lines.append(f"### {g['label']} — {g['count']} unanswered")
+            lines.append("")
+            for q in g["questions"]:
+                lines.append(f'- "{q["text"][:160]}" — {q["who"]}, {q["channel"]}, {q["date"]}')
+            lines.append("")
+    else:
+        lines.append("*Nothing marked `status: no-source`.*")
+
+    lines += [
+        "---",
+        "",
         "## Priority queue",
         "",
     ]
@@ -320,20 +476,23 @@ def render_markdown(d: dict) -> str:
         "",
         "---",
         "",
-        "## Not shown yet",
+        "## Still manual, and what would automate it",
         "",
-        "No data source today. Each becomes a section once capture exists:",
+        "Questions, gaps and people above are real, but you type them into",
+        "`Inbox/00 - Questions.md` by hand. Each one has a collector that would",
+        "fill it for you:",
         "",
-        "- **Incoming questions** (who, from where, about what): Discord questions",
-        "  currently become an ephemeral alert and are never stored.",
-        "- **Bot discipline** (confidence, what it answered, what it declined):",
-        "  needs the answer log with the similarity score.",
-        "- **YouTube comments**: the collector exists, never pointed at your channel.",
-        "- **Who is asking** (subscriber or not, history): needs Discord identity",
-        "  matched against the subscriber base.",
+        "- **Discord questions**: today they become an ephemeral alert and are",
+        "  never stored. Storing them is a few lines in the bot.",
+        "- **YouTube comments**: the collector already exists and runs for 12",
+        "  competitor videos. It has never been pointed at your own channel.",
+        "- **Subscriber status**: needs Discord identity matched against the",
+        "  Patreon member list, so `subscriber:` stops being a guess.",
+        "- **Bot confidence log**: what it answered, what it declined and with",
+        "  what score. Needs the answer path to write a row per question.",
         "",
-        "The demand column above is still **estimated by hand**. Once capture",
-        "exists it comes from the database.",
+        "The demand column in the coverage table is also **estimated by hand**.",
+        "Once the collectors run, it comes from the log instead.",
         "",
     ]
     return "\n".join(lines) + "\n"
@@ -377,6 +536,74 @@ def render_html(d: dict, live: bool) -> str:
         f'<td><span class="pill p-{state}">{state}</span></td><td class="dim">{note}</td></tr>'
         for source, vol, state, note in INSTRUMENTATION
     )
+
+    def esc(s: str) -> str:
+        return (s.replace("&", "&amp;").replace("<", "&lt;")
+                 .replace(">", "&gt;").replace('"', "&quot;"))
+
+    # --- incoming questions -------------------------------------------------
+    q_rows = []
+    for q in d["questions"]:
+        cls = STATUS_CLASS.get(q["status"], "mute")
+        colour = CHANNELS.get(q["channel"], "var(--ink3)")
+        sub = '<span class="pill p-mute">subscriber</span>' if q["subscriber"] == "yes" else ""
+        sysname = esc(q["system_name"]) if q["system"] != "-" else "catalog wide"
+        q_rows.append(
+            f'<div class="q q-{cls}" data-ch="{esc(q["channel"])}">'
+            f'<div class="q-top">'
+            f'<span class="who"><i class="cd" style="background:{colour}"></i>{esc(q["who"])}</span>'
+            f'<span class="pill p-{cls}">{esc(q["status"])}</span>{sub}</div>'
+            f'<p class="q-text">"{esc(q["text"])}"</p>'
+            f'<div class="q-foot"><span>{sysname}</span>'
+            f'<span>{esc(q["channel"])}</span><span>{q["date"]}</span></div></div>'
+        )
+    questions_html = "".join(q_rows) or '<p class="dim">No questions logged yet. Paste one into Inbox/00 - Questions.md</p>'
+
+    chans = sorted({q["channel"] for q in d["questions"]})
+    filter_html = '<button class="fchip" data-ch="all" aria-pressed="true">All</button>' + "".join(
+        f'<button class="fchip" data-ch="{esc(c)}" aria-pressed="false">'
+        f'<i class="cd" style="background:{CHANNELS.get(c, "var(--ink3)")}"></i>{esc(c)}</button>'
+        for c in chans
+    )
+
+    # --- gaps (expandable) --------------------------------------------------
+    gap_rows = []
+    max_gap = d["gaps"][0]["count"] if d["gaps"] else 1
+    for g in d["gaps"]:
+        items = "".join(
+            f'<div class="gq-item"><span>"{esc(q["text"][:160])}"</span>'
+            f'<span class="gq-who">{esc(q["who"])} · {esc(q["channel"])} · {q["date"]}</span></div>'
+            for q in g["questions"]
+        )
+        action = (f'Write Systems/{esc(g["key"])}/00 - Overview and 02 - Setup'
+                  if g["key"] != "general"
+                  else "Write the catalog-wide answers: compatibility table per system, and the license")
+        gap_rows.append(
+            f'<div class="gap" tabindex="0" role="button" aria-expanded="false">'
+            f'<span class="gname">{esc(g["label"])}<span class="caret">▸</span></span>'
+            f'<span class="gcount">{g["count"]}×</span>'
+            f'<div class="gbar"><span style="width:{round(g["count"] * 100 / max_gap)}%"></span></div>'
+            f'<div class="gq" hidden>{items}<div class="gq-act">→ {action}</div></div></div>'
+        )
+    gaps_html = "".join(gap_rows) or '<p class="dim">No unanswerable questions logged. Mark a question <code>status: no-source</code> to see it here.</p>'
+
+    # --- people -------------------------------------------------------------
+    people_rows = []
+    for p in d["people"]:
+        colour = CHANNELS.get(p["channel"], "var(--ink3)")
+        if p["subscriber"] == "yes":
+            tag = '<span class="pill p-ok">subscriber</span>'
+        elif p["subscriber"] == "no":
+            tag = '<span class="pill p-mute">not a subscriber</span>'
+        else:
+            tag = '<span class="pill p-mute">unknown</span>'
+        lead = '<span class="pill p-partial">hot lead</span>' if p["lead"] else ""
+        people_rows.append(
+            f'<div class="person"><div class="pname">'
+            f'<i class="cd" style="background:{colour}"></i>{esc(p["who"])}{tag}{lead}</div>'
+            f'<div class="pmeta">{p["asked"]} asked · {p["open"]} open · last {p["last"]}</div></div>'
+        )
+    people_html = "".join(people_rows) or '<p class="dim">Nobody logged yet.</p>'
 
     def video_cells(v: dict) -> str:
         keys = ("overview", "description", "transcript", "comments")
@@ -479,6 +706,54 @@ tr.u-done td.need .pct {{ color:var(--ok); }}
 .p-ok {{ color:var(--ok); background:var(--ok-bg); }}
 .p-partial {{ color:var(--warn); background:var(--warn-bg); }}
 .p-blind {{ color:var(--crit); background:var(--crit-bg); }}
+.cols {{ display:grid; grid-template-columns:1.25fr 1fr; gap:16px; align-items:start; }}
+@media (max-width:880px) {{ .cols {{ grid-template-columns:1fr; }} }}
+.cd {{ display:inline-block; width:7px; height:7px; border-radius:2px; }}
+.fchips {{ display:flex; flex-wrap:wrap; gap:7px; margin-bottom:12px; }}
+.fchip {{ font-family:var(--ui); font-size:12.5px; background:transparent;
+  border:1px solid var(--line); color:var(--ink2); border-radius:999px;
+  padding:5px 12px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }}
+.fchip:hover {{ border-color:var(--ink3); color:var(--ink); }}
+.fchip[aria-pressed="true"] {{ border-color:var(--accent); background:var(--surface2);
+  color:var(--ink); font-weight:560; }}
+.feed {{ display:flex; flex-direction:column; gap:9px; }}
+.q {{ border:1px solid var(--line); border-left:3px solid var(--line);
+  border-radius:8px; padding:11px 13px; display:flex; flex-direction:column; gap:6px; }}
+.q-ok {{ border-left-color:var(--ok); }} .q-info {{ border-left-color:var(--info); }}
+.q-crit {{ border-left-color:var(--crit); }} .q-mute {{ border-left-color:var(--ink3); }}
+.q-top {{ display:flex; flex-wrap:wrap; align-items:center; gap:7px; }}
+.who {{ font-weight:620; font-size:13.5px; display:inline-flex; align-items:center; gap:6px; }}
+.q-text {{ margin:0; font-size:13.5px; color:var(--ink2); }}
+.q-foot {{ display:flex; flex-wrap:wrap; gap:10px; font-family:var(--mono);
+  font-size:10.5px; color:var(--ink3); }}
+.p-info {{ color:var(--info); background:var(--info-bg); }}
+.p-crit {{ color:var(--crit); background:var(--crit-bg); }}
+.p-mute {{ color:var(--ink3); background:var(--surface2); }}
+.gaps {{ display:flex; flex-direction:column; gap:8px; }}
+.gap {{ display:grid; grid-template-columns:1fr auto; gap:4px 12px; align-items:center;
+  border:1px solid var(--line); border-radius:8px; padding:10px 12px; cursor:pointer; }}
+.gap:hover {{ border-color:var(--ink3); }}
+.gap:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }}
+.gname {{ font-weight:620; font-size:13.5px; }}
+.gcount {{ font-family:var(--mono); font-size:15px; font-weight:650; color:var(--crit);
+  font-variant-numeric:tabular-nums; }}
+.caret {{ font-family:var(--mono); font-size:10px; color:var(--ink3); margin-left:6px; }}
+.gbar {{ grid-column:1/-1; height:4px; border-radius:2px; background:var(--surface2);
+  overflow:hidden; margin-top:3px; }}
+.gbar span {{ display:block; height:100%; background:var(--crit); border-radius:2px; }}
+.gq {{ grid-column:1/-1; margin-top:8px; padding-top:9px;
+  border-top:1px dashed var(--line); display:flex; flex-direction:column; gap:6px; }}
+.gq[hidden] {{ display:none; }}
+.gq-item {{ font-size:12.5px; color:var(--ink2); display:flex; flex-direction:column; gap:2px; }}
+.gq-who {{ font-family:var(--mono); font-size:10.5px; color:var(--ink3); }}
+.gq-act {{ margin-top:4px; font-family:var(--mono); font-size:10.5px; color:var(--accent); }}
+.people {{ display:flex; flex-direction:column; gap:8px; }}
+.person {{ border:1px solid var(--line); border-radius:8px; padding:10px 12px; }}
+.pname {{ font-weight:620; font-size:13.5px; display:flex; align-items:center;
+  gap:7px; flex-wrap:wrap; }}
+.pmeta {{ font-family:var(--mono); font-size:10.5px; color:var(--ink3);
+  font-variant-numeric:tabular-nums; margin-top:3px; }}
+.dim {{ color:var(--ink3); font-size:13px; }}
 ol.queue {{ margin:0; padding-left:20px; display:flex; flex-direction:column; gap:7px; }}
 ol.queue li {{ font-size:13.5px; }}
 .qp {{ font-family:var(--mono); font-size:11.5px; font-weight:660; margin-right:8px; }}
@@ -503,25 +778,50 @@ footer {{ color:var(--ink3); font-size:12px; border-top:1px solid var(--line);
 </header>
 
 <div class="tiles">
+  <div class="tile crit"><span class="l">Open questions</span><span class="v">{d['open_q']}</span>
+    <span class="l">waiting on you</span></div>
+  <div class="tile"><span class="l">Answered</span><span class="v">{d['answer_rate']}%</span>
+    <span class="l">of {len(d['questions'])} logged</span></div>
   <div class="tile"><span class="l">Catalog coverage</span><span class="v">{pct}%</span>
     <span class="l">{d['written']} of {d['total_facets']} notes</span></div>
-  <div class="tile crit"><span class="l">Critical</span><span class="v">{d['critical']}</span>
-    <span class="l">systems needing work now</span></div>
-  <div class="tile"><span class="l">Urgent</span><span class="v">{d['urgent']}</span>
-    <span class="l">next in line</span></div>
-  <div class="tile"><span class="l">Nothing written</span><span class="v">{d['empty']}</span>
-    <span class="l">of {len(CATALOG)} systems</span></div>
+  <div class="tile crit"><span class="l">Critical systems</span><span class="v">{d['critical']}</span>
+    <span class="l">{d['urgent']} more urgent</span></div>
   <div class="tile ok"><span class="l">Complete</span><span class="v">{d['complete']}</span>
-    <span class="l">all 5 notes written</span></div>
+    <span class="l">of {len(CATALOG)} systems</span></div>
 </div>
 
-<section class="card">
-  <h2>Priority queue</h2>
-  <ol class="queue">{queue_html}</ol>
-  <p class="note">Need combines how much is missing (overview and setup weigh most,
-  since they answer on their own) with how many people asked. Demand counts 60%,
-  the gap 40%.</p>
-</section>
+<div class="cols">
+  <section class="card">
+    <h2>Incoming questions</h2>
+    <div class="fchips" id="chans">{filter_html}</div>
+    <div class="feed" id="feed">{questions_html}</div>
+    <p class="note">Written by hand in <code>Inbox/00 - Questions.md</code>.
+    Paste a question when it arrives and this updates within seconds.</p>
+  </section>
+
+  <section class="card">
+    <h2>Gaps to close</h2>
+    <div class="gaps">{gaps_html}</div>
+    <p class="note">Click a row to see the actual questions behind it. This list is
+    written by demand, not by guesswork: every entry is somebody who asked and got
+    nothing.</p>
+  </section>
+</div>
+
+<div class="cols">
+  <section class="card">
+    <h2>Who is asking</h2>
+    <div class="people">{people_html}</div>
+  </section>
+
+  <section class="card">
+    <h2>Priority queue</h2>
+    <ol class="queue">{queue_html}</ol>
+    <p class="note">Need combines how much is missing (overview and setup weigh most,
+    since they answer on their own) with how many people asked. Demand counts 60%,
+    the gap 40%.</p>
+  </section>
+</div>
 
 <section class="card">
   <h2>Documentation coverage</h2>
@@ -564,6 +864,35 @@ footer {{ color:var(--ink3); font-size:12px; border-top:1px solid var(--line);
 
 </div>
 <script>
+// Channel filter on the incoming feed.
+var chips = document.querySelectorAll('#chans .fchip');
+chips.forEach(function (b) {{
+  b.addEventListener('click', function () {{
+    chips.forEach(function (o) {{ o.setAttribute('aria-pressed', String(o === b)); }});
+    var want = b.dataset.ch;
+    document.querySelectorAll('#feed .q').forEach(function (q) {{
+      q.style.display = (want === 'all' || q.dataset.ch === want) ? '' : 'none';
+    }});
+  }});
+}});
+
+// Gap rows expand to show the questions behind the number.
+document.querySelectorAll('.gap').forEach(function (g) {{
+  function toggle() {{
+    var box = g.querySelector('.gq');
+    if (!box) return;
+    var open = !box.hidden;
+    box.hidden = open;
+    g.setAttribute('aria-expanded', String(!open));
+    var c = g.querySelector('.caret');
+    if (c) c.textContent = open ? '\\u25b8' : '\\u25be';
+  }}
+  g.addEventListener('click', toggle);
+  g.addEventListener('keydown', function (e) {{
+    if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); toggle(); }}
+  }});
+}});
+
 var BUILT = {d['epoch']};
 var LIVE = {str(live).lower()};
 var chip = document.getElementById('chip');
