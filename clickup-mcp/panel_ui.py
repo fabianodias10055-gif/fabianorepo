@@ -734,6 +734,17 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
   font-family:var(--mono); display:flex; align-items:center; gap:var(--s2); flex-wrap:wrap; }
 .sugout pre { margin:0 0 var(--s3); white-space:pre-wrap; font-family:inherit;
   line-height:1.55; max-height:280px; overflow:auto; }
+.ctxout { border:1px solid var(--line); border-radius:var(--r-md);
+  padding:var(--s3) var(--s4); background:var(--surface); display:none;
+  max-height:340px; overflow:auto; }
+.ctxout .src { color:var(--ink3); font-size:var(--t-xs); margin-bottom:var(--s2);
+  font-family:var(--mono); }
+.ctxline { font-size:var(--t-sm); line-height:1.5; padding:2px 0;
+  border-left:2px solid transparent; padding-left:var(--s2); }
+.ctxline b { color:var(--ink); font-weight:640; }
+.ctxline .w { color:var(--ink3); font-family:var(--mono); font-size:var(--t-2xs); }
+.ctxline.self { border-left-color:var(--accent); background:var(--accent-bg);
+  border-radius:var(--r-xs); }
 .aiout { border:1px solid var(--info-line); border-left:3px solid var(--info);
   border-radius:var(--r-md); padding:var(--s3) var(--s4); font-size:var(--t-base);
   background:var(--surface); display:none; }
@@ -1398,9 +1409,11 @@ function detailFor(qid) {
   parts.push('<div class="detbtns">'
     + '<button class="btn tiny" data-ai="search">Find existing answer</button>'
     + '<button class="btn tiny ai" data-ai="draft">Draft with Claude</button>'
+    + '<button class="btn tiny" data-ctx>What is this about?</button>'
     + (q.video_url ? '<button class="btn tiny" data-copy="' + esc(q.video_url)
         + '">Copy link</button>' : "")
     + "</div>");
+  parts.push('<div class="ctxout"></div>');
   parts.push('<div class="aiout" data-mode="search"></div>');
   parts.push('<div class="aiout" data-mode="draft"></div>');
   parts.push('<textarea class="qbox" aria-label="Reply text" '
@@ -1433,6 +1446,9 @@ function detailFor(qid) {
     b.addEventListener("click", function () { runAi(tr, b.dataset.ai, false); });
   });
   det.querySelector("[data-reply]").addEventListener("click", function () { runReply(tr); });
+  det.querySelector("[data-ctx]").addEventListener("click", function () {
+    runContext(tr, det.querySelector("[data-ctx]"));
+  });
   return tr;
 }
 
@@ -1646,6 +1662,36 @@ function aiRender(det, mode, s, btn) {
     out.appendChild(use);
   }
 }
+/* The conversation a question sits in. Half of what people ask in a chat
+   is a reply to something, and the question alone reads as nonsense. */
+function runContext(det, btn) {
+  var out = det.querySelector(".ctxout");
+  out.style.display = "block";
+  if (!LIVE) { out.textContent = "needs the live server"; return; }
+  btn.disabled = true;
+  out.innerHTML = '<div class="src">reading the conversation...</div>';
+  fetch("/context", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: det.dataset.id }) })
+    .then(function (r) { return r.json(); })
+    .then(function (s) {
+      btn.disabled = false;
+      if (!s.ok) { out.innerHTML = '<div class="src">' + esc(s.error || "no context") + "</div>"; return; }
+      var h = '<div class="src">around this message in ' + esc(s.where) + "</div>";
+      s.lines.forEach(function (l) {
+        h += '<div class="ctxline' + (l.self ? " self" : "") + '">'
+          + (l.who ? "<b>" + esc(l.who) + "</b> " : "")
+          + (l.when ? '<span class="w">' + esc(l.when) + "</span> " : "")
+          + (l.reply_to ? '<span class="w">↪</span> ' : "")
+          + esc(l.text) + "</div>";
+      });
+      out.innerHTML = h;
+    })
+    .catch(function () {
+      btn.disabled = false;
+      out.innerHTML = '<div class="src">could not reach the panel server</div>';
+    });
+}
+
 function runAi(det, mode, force) {
   var out = aiOut(det, mode), btn = aiBtn(det, mode);
   out.style.display = "block";

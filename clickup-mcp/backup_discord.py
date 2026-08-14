@@ -29,10 +29,10 @@ import re
 import sys
 import time
 from pathlib import Path
-from urllib import error
+from urllib import error, request
 
-from collect_discord import (api_get, channel_info, forum_threads,
-                             fetch_messages, FORUM_TYPES)
+from collect_discord import (api_get, author_handle, channel_info,
+                             fetch_messages, forum_threads, FORUM_TYPES)
 
 VAULT = Path(r"F:\LocoDev Vault")
 BASE_DIR = Path(__file__).resolve().parent
@@ -42,6 +42,52 @@ READABLE = (0, 5, 15, 16)     # text, announcement, forum, media
 ROOT_NAME = "Discord"
 # The backup channel is an archive of an archive; the user asked to skip it.
 DEFAULT_EXCLUDE = "backup"
+
+
+IMAGE_EXT = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}
+_media_budget = {"bytes": 0, "files": 0, "skipped": 0}
+
+
+def download_media(att: dict, folder: Path, msg_id: str, want: set,
+                   max_mb: int, dry: bool) -> str | None:
+    """Save one attachment next to the note and return its relative path.
+
+    Downloading, not linking: Discord signs attachment URLs with an expiry
+    of about a day, so a stored link is dead by tomorrow and the archive
+    would be text with holes where the screenshots used to be.
+    """
+    name = att.get("filename") or "file"
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in want:
+        return None
+    size = int(att.get("size") or 0)
+    if size > max_mb * 1024 * 1024:
+        _media_budget["skipped"] += 1
+        return None
+
+    target = folder / "media" / f"{msg_id}-{safe_name(name)}"
+    if target.is_file() and target.stat().st_size > 0:
+        return f"media/{target.name}"
+    if dry:
+        _media_budget["files"] += 1
+        _media_budget["bytes"] += size
+        return f"media/{target.name}"
+
+    url = att.get("url") or att.get("proxy_url")
+    if not url:
+        return None
+    try:
+        req = request.Request(url, headers={"User-Agent": "LocoDevPanel/1.0"})
+        with request.urlopen(req, timeout=60) as resp:
+            data = resp.read()
+    except Exception:  # noqa: BLE001 - a dead attachment must not end the run
+        _media_budget["skipped"] += 1
+        return None
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    _media_budget["files"] += 1
+    _media_budget["bytes"] += len(data)
+    return f"media/{target.name}"
 
 
 def safe_name(s: str) -> str:
@@ -67,7 +113,8 @@ def save_state(state: dict) -> None:
         pass
 
 
-def render(messages: list[dict], guild: str, channel_id: str) -> str:
+def render(messages: list[dict], guild: str, channel_id: str,
+           media: dict | None = None) -> str:
     """Messages oldest first, grouped under a heading per day."""
     lines = []
     day = None
@@ -78,7 +125,7 @@ def render(messages: list[dict], guild: str, channel_id: str) -> str:
             day = d
             lines += ["", f"## {d}", ""]
         author = (m.get("author") or {})
-        name = author.get("global_name") or author.get("username") or "unknown"
+        name = author_handle(author)
         if author.get("bot"):
             name += " [bot]"
 
@@ -87,8 +134,13 @@ def render(messages: list[dict], guild: str, channel_id: str) -> str:
         ref = m.get("message_reference") or {}
         if ref.get("message_id"):
             parts.append("↪ reply")
+        embeds_local = []
         for a in m.get("attachments") or []:
-            parts.append(f"[attachment: {a.get('filename', 'file')}]")
+            saved = (media or {}).get(str(a.get("id", "")))
+            if saved:
+                embeds_local.append(f"![[{saved}]]")
+            else:
+                parts.append(f"[attachment: {a.get('filename', 'file')}]")
         for e in m.get("embeds") or []:
             title = e.get("title") or e.get("url") or "embed"
             parts.append(f"[embed: {title}]")
@@ -99,6 +151,8 @@ def render(messages: list[dict], guild: str, channel_id: str) -> str:
         body = " ".join(text.split()) if text else ""
         url = f"https://discord.com/channels/{guild}/{channel_id}/{m['id']}"
         lines.append(f"- **{t}** **{name}**: {prefix}{body}  [·]({url})")
+        for e in embeds_local:
+            lines.append(f"  {e}")
     return "\n".join(lines).strip() + "\n"
 
 
@@ -116,12 +170,28 @@ def write_note(path: Path, header: dict, body: str, dry: bool) -> bool:
     return True
 
 
+def collect_media(messages: list[dict], folder: Path, want: set,
+                  max_mb: int, dry: bool) -> dict:
+    saved: dict[str, str] = {}
+    if not want:
+        return saved
+    for m in messages:
+        for a in m.get("attachments") or []:
+            path = download_media(a, folder, m["id"], want, max_mb, dry)
+            if path:
+                saved[str(a.get("id", ""))] = path
+    return saved
+
+
 def backup_text_channel(cid: str, name: str, folder: Path, guild: str,
-                        after: str | None, cap: int, dry: bool) -> tuple[int, int, str | None]:
+                        after: str | None, cap: int, dry: bool,
+                        want: set | None = None,
+                        max_mb: int = 12) -> tuple[int, int, str | None]:
     messages = fetch_messages(cid, after, cap)
     if not messages:
         return 0, 0, None
     messages.sort(key=lambda m: int(m["id"]))
+    media = collect_media(messages, folder, want or set(), max_mb, dry)
 
     by_month: dict[str, list[dict]] = {}
     for m in messages:
@@ -143,7 +213,7 @@ def backup_text_channel(cid: str, name: str, folder: Path, guild: str,
             new_only = [m for m in batch if m["id"] not in existing_ids]
             if not new_only:
                 continue
-            body = body + "\n" + render(new_only, guild, cid)
+            body = body + "\n" + render(new_only, guild, cid, media)
             if write_note(path, {"channel": f"#{name}", "channel_id": cid,
                                  "month": month, "source": "backup_discord.py"},
                           body, dry):
@@ -152,13 +222,14 @@ def backup_text_channel(cid: str, name: str, folder: Path, guild: str,
         if write_note(path, {"channel": f"#{name}", "channel_id": cid,
                              "month": month, "messages": len(merged),
                              "source": "backup_discord.py"},
-                      render(merged, guild, cid), dry):
+                      render(merged, guild, cid, media), dry):
             written += 1
     return len(messages), written, str(max(int(m["id"]) for m in messages))
 
 
 def backup_forum(cid: str, name: str, folder: Path, guild: str,
-                 cap: int, dry: bool) -> tuple[int, int]:
+                 cap: int, dry: bool, want: set | None = None,
+                 max_mb: int = 12) -> tuple[int, int]:
     posts = forum_threads(cid, guild)
     total = written = 0
     for t in posts:
@@ -167,12 +238,13 @@ def backup_forum(cid: str, name: str, folder: Path, guild: str,
             continue
         msgs.sort(key=lambda m: int(m["id"]))
         total += len(msgs)
+        media = collect_media(msgs, folder, want or set(), max_mb, dry)
         opened = (msgs[0].get("timestamp") or "")[:10]
         path = folder / f"{opened} {safe_name(t.get('name', t['id']))}.md"
         if write_note(path, {"channel": f"#{name}", "post": t.get("name", ""),
                              "thread_id": t["id"], "opened": opened,
                              "messages": len(msgs), "source": "backup_discord.py"},
-                      render(msgs, guild, t["id"]), dry):
+                      render(msgs, guild, t["id"], media), dry):
             written += 1
     return total, written
 
@@ -192,6 +264,9 @@ def main() -> int:
                     help="comma separated channel names to skip")
     ap.add_argument("--only", default="", help="comma separated names to include")
     ap.add_argument("--max-per-channel", type=int, default=50000)
+    ap.add_argument("--media", default="images",
+                    help="images | none | a comma list of extensions")
+    ap.add_argument("--max-media-mb", type=int, default=12)
     ap.add_argument("--full", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -204,6 +279,13 @@ def main() -> int:
     if not VAULT.is_dir():
         print(f"ERROR: vault not found at {VAULT}")
         return 1
+
+    if args.media == "none":
+        want = set()
+    elif args.media == "images":
+        want = set(IMAGE_EXT)
+    else:
+        want = {e.strip().lower().lstrip(".") for e in args.media.split(",") if e.strip()}
 
     skip = {s.strip().lower() for s in args.exclude.split(",") if s.strip()}
     only = {s.strip().lower() for s in args.only.split(",") if s.strip()}
@@ -228,17 +310,21 @@ def main() -> int:
         category = safe_name(cats.get(c.get("parent_id"), "Uncategorised"))
         folder = root / category / safe_name(name)
         is_forum = c["type"] in FORUM_TYPES
-        after = state.get(c["id"], {}).get("last_id") if not args.full else None
+        # A media pass has to re-read the history: the URLs it needs are
+        # only valid at fetch time, and the notes stored none.
+        after = (state.get(c["id"], {}).get("last_id")
+                 if not args.full and not want else None)
 
         try:
             if is_forum:
                 read, files = backup_forum(c["id"], name, folder, guild,
-                                           args.max_per_channel, args.dry_run)
+                                           args.max_per_channel, args.dry_run,
+                                           want, args.max_media_mb)
                 newest = None
             else:
                 read, files, newest = backup_text_channel(
                     c["id"], name, folder, guild, after,
-                    args.max_per_channel, args.dry_run)
+                    args.max_per_channel, args.dry_run, want, args.max_media_mb)
         except error.HTTPError as exc:
             if exc.code == 403:
                 denied += 1
@@ -271,7 +357,11 @@ def main() -> int:
         write_note(root / "00 - Index.md", {}, "\n".join(index[3:]), args.dry_run)
 
     verb = "would be " if args.dry_run else ""
-    print(f"\nmessages read: {total_msgs:,} · files {verb}written: {total_files} "
+    mb = _media_budget["bytes"] / 1024 / 1024
+    saved_n = _media_budget["files"]
+    skipped_n = _media_budget["skipped"]
+    print(f"\nmedia {verb}saved: {saved_n:,} files, {mb:,.0f} MB · too large or unreachable: {skipped_n}")
+    print(f"messages read: {total_msgs:,} · files {verb}written: {total_files} "
           f"· channels skipped by name: {skipped} · no access: {denied} "
           f"· {time.time() - t0:.0f}s")
     return 0

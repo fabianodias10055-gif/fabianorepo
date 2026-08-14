@@ -112,6 +112,59 @@ def save_state(state: dict) -> None:
         pass
 
 
+_MENTION = re.compile(r"<@!?(\d+)>")
+_ROLE = re.compile(r"<@&(\d+)>")
+_CHAN = re.compile(r"<#(\d+)>")
+_EMOJI = re.compile(r"<a?:(\w+):\d+>")
+_name_cache: dict[str, str] = {}
+
+
+def resolve_mentions(text: str, msg: dict | None = None) -> str:
+    """Turn <@690691536983425044> into @name.
+
+    A raw id tells the reader nothing and tells a model even less: it cannot
+    know whether the person was addressing the creator or another member.
+    The message carries the mentioned users, so most resolve for free; the
+    rest are looked up once and remembered.
+    """
+    for u in (msg or {}).get("mentions") or []:
+        uid = str(u.get("id", ""))
+        if uid:
+            _name_cache[uid] = u.get("global_name") or u.get("username") or uid
+
+    def user(m):
+        uid = m.group(1)
+        if uid not in _name_cache:
+            try:
+                u = api_get(f"/users/{uid}")
+                _name_cache[uid] = u.get("global_name") or u.get("username") or uid
+            except Exception:  # noqa: BLE001 - an unknown id stays an id
+                _name_cache[uid] = uid
+        return "@" + _name_cache[uid]
+
+    text = _MENTION.sub(user, text)
+    text = _ROLE.sub("@role", text)
+    text = _CHAN.sub(lambda m: "#channel", text)
+    return _EMOJI.sub(lambda m: ":" + m.group(1) + ":", text)
+
+
+def author_handle(author: dict) -> str:
+    """@handle, the way YouTube questions already read.
+
+    Discord has two names: username, which is the unique handle you can
+    actually mention or search for, and global_name, the display name that
+    two people can share. The handle is what identifies the person; the
+    display name goes in parentheses when it says something different.
+    """
+    handle = (author or {}).get("username") or ""
+    shown = (author or {}).get("global_name") or ""
+    if not handle:
+        return shown or "unknown"
+    if shown and shown.lower().replace(" ", "") != handle.lower().replace(".", ""):
+        return f"@{handle} ({shown})"
+    return f"@{handle}"
+
+
 def looks_like_question(text: str) -> bool:
     t = " ".join(text.split()).lower()
     if len(t) < MIN_QUESTION_LEN:
@@ -383,14 +436,15 @@ def main() -> int:
                 continue
             if str(author.get("id", "")) in staff:
                 continue          # a staff message is an answer, not a question
-            text = " ".join((m.get("content") or "").split())
+            text = resolve_mentions(" ".join((m.get("content") or "").split()), m)
             if not looks_like_question(text):
                 continue
             answer = find_answer(m, messages, staff)
-            reply = " ".join((answer.get("content") or "").split())[:900] if answer else ""
+            reply = (resolve_mentions(" ".join((answer.get("content") or "").split()),
+                                      answer)[:900] if answer else "")
             rows.append({
                 "date": (m.get("timestamp") or "")[:10],
-                "author": author.get("global_name") or author.get("username") or "unknown",
+                "author": author_handle(author),
                 "text": text,
                 "status": "answered" if reply else "no-source",
                 "reply": reply,

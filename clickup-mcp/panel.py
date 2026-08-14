@@ -1439,6 +1439,79 @@ def post_discord_reply(channel_id: str, message_id: str, text: str) -> tuple[boo
         return False, f"Could not reach Discord: {exc.reason}"
 
 
+def question_context(question: dict, span: int = 12) -> dict:
+    """The conversation around a question, so a fragment makes sense.
+
+    Half of what people ask in a chat is a reply to something: "do I have
+    to change any value?" is unanswerable alone and obvious with the three
+    messages before it. Discord can return the exact neighbourhood of a
+    message, so this asks for it directly rather than guessing from the
+    archive, which may lag behind by up to fifteen minutes.
+    """
+    target = discord_target(question)
+    if target:
+        channel_id, message_id = target
+        token = os.getenv("DISCORD_BOT_TOKEN", "").strip()
+        if not token:
+            return {"ok": False, "error": "Discord token not set"}
+        url = (f"{DISCORD_API}/channels/{channel_id}/messages"
+               f"?around={message_id}&limit={min(span * 2, 50)}")
+        req = urlrequest.Request(url, headers={
+            "Authorization": f"Bot {token}",
+            "User-Agent": "LocoDevPanel (https://locodev.dev, 1.0)"})
+        try:
+            with urlrequest.urlopen(req, timeout=20) as resp:
+                msgs = json.load(resp)
+        except urlerror.HTTPError as exc:
+            return {"ok": False, "error": f"Discord refused ({exc.code})"}
+        except urlerror.URLError as exc:
+            return {"ok": False, "error": f"Could not reach Discord: {exc.reason}"}
+
+        msgs.sort(key=lambda m: int(m["id"]))
+        try:
+            import collect_discord
+            resolve = collect_discord.resolve_mentions
+            handle = collect_discord.author_handle
+        except Exception:  # noqa: BLE001 - context is worth showing raw
+            resolve = lambda t, m=None: t          # noqa: E731
+            handle = lambda a: (a or {}).get("username", "?")  # noqa: E731
+
+        lines = []
+        for m in msgs:
+            text = " ".join((m.get("content") or "").split())
+            atts = [a.get("filename", "file") for a in (m.get("attachments") or [])]
+            if not text and not atts:
+                continue
+            lines.append({
+                "who": handle(m.get("author") or {}),
+                "when": (m.get("timestamp") or "")[:16].replace("T", " "),
+                "text": resolve(text, m) + ("".join(f"  [{a}]" for a in atts)),
+                "self": m["id"] == message_id,
+                "reply_to": bool((m.get("message_reference") or {}).get("message_id")),
+            })
+        return {"ok": True, "where": question.get("thread", "Discord"), "lines": lines}
+
+    # A YouTube question already carries its video; the useful context is
+    # what that video actually covers.
+    if question.get("video"):
+        folder = VAULT / "YouTube" / "Videos" / question["video"]
+        note = folder / "00 - Overview.md"
+        if note.is_file():
+            body = strip_scaffold(note.read_text(encoding="utf-8", errors="replace"))
+            chapters = [l.strip("- ").strip() for l in body.splitlines()
+                        if l.strip().startswith("- **[")]
+            if chapters:
+                return {"ok": True, "where": question["video"],
+                        "lines": [{"who": "", "when": "", "text": c, "self": False}
+                                  for c in chapters[:25]]}
+        return {"ok": True, "where": question["video"],
+                "lines": [{"who": "", "when": "",
+                           "text": "No chapter list for this video yet.",
+                           "self": False}]}
+
+    return {"ok": False, "error": "no conversation is recorded for this question"}
+
+
 def build_gaps(questions: list[dict]) -> list[dict]:
     """Group unanswerable questions into a ranked backlog of what to write."""
     buckets: dict[str, dict] = {}
@@ -2004,6 +2077,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/suggest_ai_status":
             payload = self._json_body()
             return self._send_json({"ok": True, **ai_job_status(str(payload.get("job", "")))})
+
+        if self.path == "/context":
+            payload = self._json_body()
+            question = find_question_by_id(str(payload.get("id", "")))
+            if not question:
+                return self._send_json({"ok": False, "error": "question not found"}, 404)
+            return self._send_json(question_context(question))
+
+        if self.path == "/context":
+            payload = self._json_body()
+            question = find_question_by_id(str(payload.get("id", "")))
+            if not question:
+                return self._send_json({"ok": False, "error": "question not found"}, 404)
+            return self._send_json(question_context(question))
 
         if self.path == "/resend":
             payload = self._json_body()
