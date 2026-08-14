@@ -1512,6 +1512,41 @@ def question_context(question: dict, span: int = 12) -> dict:
     return {"ok": False, "error": "no conversation is recorded for this question"}
 
 
+def load_discord_members() -> dict:
+    """Who is who in the server right now, refreshed by the collector."""
+    try:
+        data = json.loads((VAULT / "Panel" / "discord-members.json")
+                          .read_text(encoding="utf-8"))
+        return data.get("members") or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def attach_member_facts(questions: list[dict]) -> None:
+    """Give each Discord question its asker's current roles and avatar.
+
+    Deliberately current, not historical: the useful question is whether
+    this person is a paying member now, when you are deciding whether and
+    how to answer them.
+    """
+    members = load_discord_members()
+    if not members:
+        return
+    for q in questions:
+        if q["channel"] != "discord":
+            continue
+        handle = re.match(r"@([^\s(]+)", q["who"])
+        hit = members.get(handle.group(1).lower()) if handle else None
+        if not hit:
+            continue
+        q["roles"] = hit.get("roles", [])
+        q["avatar_url"] = hit.get("avatar", "")
+        q["joined"] = hit.get("joined", "")
+        # A tier role is proof of a paying member; the old field was a guess.
+        if any(r.startswith("Loco") or r == "Patreon" for r in q["roles"]):
+            q["subscriber"] = "yes"
+
+
 def build_gaps(questions: list[dict]) -> list[dict]:
     """Group unanswerable questions into a ranked backlog of what to write."""
     buckets: dict[str, dict] = {}
@@ -1562,6 +1597,7 @@ def scan() -> dict:
     # (or before the collector has ever run), so the two numbers never argue
     # with the Gaps section, which is built from the same count.
     questions = parse_questions()
+    attach_member_facts(questions)
 
     # A code is only useful if it points at exactly one question; say so
     # loudly rather than let two rows quietly share one.

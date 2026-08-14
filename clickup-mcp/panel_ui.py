@@ -140,13 +140,20 @@ def _safe_url(url: str) -> str:
 _AV_HUES = (214, 245, 268, 292, 318, 344, 8, 26, 162, 190)
 
 
-def _avatar(who: str, size: str = "") -> str:
+def _avatar(who: str, size: str = "", url: str = "") -> str:
     import hashlib
     idx = int(hashlib.sha1(who.encode()).hexdigest()[:6], 16) % len(_AV_HUES)
     hue = _AV_HUES[idx]
     initial = escape((who.lstrip("@")[:1] or "?").upper())
     cls = f"av {size}".strip()
-    return (f'<span class="{cls}" style="--h:{hue}" aria-hidden="true">{initial}</span>')
+    # The coloured initial stays underneath: a CDN image that fails to load
+    # leaves an identity behind rather than a hole.
+    img = ""
+    if _safe_url(url):
+        img = (f'<img loading="lazy" alt="" referrerpolicy="no-referrer" '
+               f'src="{escape(url, quote=True)}">')
+    return (f'<span class="{cls}" style="--h:{hue}" aria-hidden="true">'
+            f'{initial}{img}</span>')
 
 
 def _thumb_url(video_id: str, size: str = "mqdefault") -> str:
@@ -167,6 +174,29 @@ def _mini_thumb(q: dict) -> str:
             f'<img loading="lazy" alt="" width="48" height="27" '
             f'referrerpolicy="no-referrer" src="{url}" '
             f'onerror="this.parentNode.classList.add(\'hide\')"></span>')
+
+
+_ROLE_CLASS = {
+    "LocoPremium": "r-premium", "LocoStandard": "r-standard",
+    "LocoBasic": "r-basic", "LocoHelper": "r-helper",
+    "LocoDev Team": "r-team", "LocoTester": "r-team", "Patreon": "r-patreon",
+}
+
+
+def _roles(q: dict, limit: int = 3) -> str:
+    """What the asker is in the server today, tiers first."""
+    roles = q.get("roles") or []
+    if not roles:
+        return ""
+    out = []
+    for r in roles[:limit]:
+        out.append(f'<span class="role {_ROLE_CLASS.get(r, "r-other")}">'
+                   f'{escape(r)}</span>')
+    if len(roles) > limit:
+        rest = escape(", ".join(roles[limit:]), quote=True)
+        out.append(f'<span class="role r-other" title="{rest}">'
+                   f'+{len(roles) - limit}</span>')
+    return "".join(out)
 
 
 def _st_class(status: str) -> str:
@@ -604,6 +634,22 @@ tr.qdet.open > td { box-shadow:inset 3px 0 0 var(--accent); }
   background:hsl(var(--h) var(--av-s) var(--av-l)); letter-spacing:-.01em;
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.14); }
 .av.sm { width:22px; height:22px; font-size:var(--t-2xs); }
+.av { position:relative; overflow:hidden; }
+.av img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+.roles { display:flex; gap:3px; flex-wrap:wrap; margin-top:2px; }
+.role { font-size:var(--t-2xs); font-weight:650; padding:1px 6px;
+  border-radius:var(--r-xs); background:var(--mute-bg); color:var(--ink2);
+  white-space:nowrap; }
+.r-premium { background:var(--info-bg); color:var(--info); }
+.r-standard { background:var(--accent-bg); color:var(--accent); }
+.r-basic { background:var(--ok-bg); color:var(--ok); }
+.r-helper, .r-team { background:var(--warn-bg); color:var(--warn); }
+.r-patreon { background:var(--crit-bg); color:var(--crit); }
+.asker { display:flex; align-items:center; gap:var(--s2); flex-wrap:wrap;
+  padding-bottom:var(--s2); border-bottom:1px solid var(--line2); }
+.asker b { font-size:var(--t-md); }
+.asker .w { color:var(--ink3); font-size:var(--t-xs); font-family:var(--mono); }
+.askerpic { width:28px; height:28px; border-radius:var(--r-full); object-fit:cover; }
 .uc .n { font-weight:600; font-size:var(--t-sm); line-height:1.3; letter-spacing:-.005em; }
 .uc .m { color:var(--ink3); font-size:var(--t-2xs); }
 .pill { display:inline-flex; align-items:center; gap:4px; padding:3px 9px;
@@ -1397,6 +1443,15 @@ function detailFor(qid) {
     parts.push('<div class="vidcard novid"><span class="vmeta"><b>No video linked</b>'
       + "<span>logged by hand: add video_id: to this block in the vault</span></span></div>");
   }
+  var whoLine = '<div class="asker">';
+  if (q.avatar) whoLine += '<img class="askerpic" src="' + esc(q.avatar)
+    + '" alt="" referrerpolicy="no-referrer">';
+  whoLine += "<b>" + esc(q.asker || "") + "</b>";
+  (q.roles || []).forEach(function (r) {
+    whoLine += '<span class="role ' + (ROLE_CLASS[r] || "r-other") + '">' + esc(r) + "</span>";
+  });
+  if (q.joined) whoLine += '<span class="w">in the server since ' + esc(q.joined) + "</span>";
+  parts.push(whoLine + "</div>");
   parts.push('<div class="full">' + esc(q.text) + "</div>");
   if (q.reply) {
     parts.push('<div class="yourreply"><b>Your reply on ' + esc(q.channel) + "</b>"
@@ -1578,6 +1633,11 @@ $$("[data-act]").forEach(function (el) {
    Every finished result is cached server side, embedded in the page on the
    next build, and replayed here on load, so the reload that follows every
    vault change never throws away a generation. */
+var ROLE_CLASS = {
+  "LocoPremium": "r-premium", "LocoStandard": "r-standard",
+  "LocoBasic": "r-basic", "LocoHelper": "r-helper",
+  "LocoDev Team": "r-team", "LocoTester": "r-team", "Patreon": "r-patreon"
+};
 function aiOut(det, mode) { return det.querySelector('.aiout[data-mode="' + mode + '"]'); }
 function aiBtn(det, mode) { return det.querySelector('[data-ai="' + mode + '"]'); }
 function ageText(ts) {
@@ -2340,8 +2400,9 @@ def _question_rows(questions: list) -> str:
             f'<div class="qmeta">{"".join(meta)}</div></div></div></td>'
             f'<td class="stcell">{_pill(q["status"])}</td>'
             f'<td>{_diff_pill(q)}</td>'
-            f'<td><span class="uc">{_avatar(q["who"], "sm")}'
-            f'<span class="n">{escape(q["who"])}</span></span></td>'
+            f'<td><span class="uc">{_avatar(q["who"], "sm", q.get("avatar_url", ""))}'
+            f'<span><span class="n">{escape(q["who"])}</span>'
+            f'<span class="roles">{_roles(q)}</span></span></span></td>'
             f'<td class="syscell">{escape(sys_label)}</td>'
             f'<td class="num agecell" data-date="{escape(q["date"], quote=True)}">'
             f'{q["date"]}</td>'
@@ -2363,6 +2424,8 @@ def _question_payload(questions: list) -> dict:
             "video": q.get("video", ""), "video_id": q.get("video_id", ""),
             "video_url": url, "source": q.get("source", ""),
             "link": _safe_url(q.get("url", "")), "thread": q.get("thread", ""),
+            "roles": q.get("roles") or [], "avatar": _safe_url(q.get("avatar_url", "")),
+            "joined": q.get("joined", ""), "asker": q["who"],
             "thumb": _thumb_url(q.get("video_id", "")),
             # Only a YouTube comment can be answered in place; everything
             # else is filed in the vault and the button must say so.

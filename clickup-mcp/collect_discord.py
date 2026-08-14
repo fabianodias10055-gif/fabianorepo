@@ -165,6 +165,83 @@ def author_handle(author: dict) -> str:
     return f"@{handle}"
 
 
+MEMBERS_NAME = "discord-members.json"
+# Tier roles first: knowing someone is LocoPremium changes how a question
+# is prioritised, and it is the one fact the message itself never carries.
+ROLE_PRIORITY = ("LocoPremium", "LocoStandard", "LocoBasic", "LocoHelper",
+                 "LocoTester", "LocoDev Team", "Patreon", "Content Creator")
+
+
+def refresh_members(guild_id: str, vault: Path) -> int:
+    """Snapshot every member's roles and avatar into Panel/.
+
+    Roles change: someone upgrades a tier, someone lapses. The snapshot is
+    rewritten on each collector run, so a fifteen minute schedule keeps the
+    panel honest about who is a paying member today rather than who was one
+    when the question was asked. Written under Panel/ because it is derived
+    data the watcher deliberately ignores.
+    """
+    if not guild_id:
+        return 0
+    try:
+        roles = {r["id"]: r["name"] for r in api_get(f"/guilds/{guild_id}/roles")}
+    except Exception:  # noqa: BLE001
+        return 0
+
+    members: dict[str, dict] = {}
+    after = None
+    while True:
+        params = {"limit": 1000}
+        if after:
+            params["after"] = after
+        try:
+            page = api_get(f"/guilds/{guild_id}/members", params)
+        except Exception:  # noqa: BLE001 - a partial snapshot beats none
+            break
+        if not page:
+            break
+        for m in page:
+            u = m.get("user") or {}
+            uid = str(u.get("id", ""))
+            if not uid:
+                continue
+            names = [roles.get(r) for r in (m.get("roles") or []) if roles.get(r)]
+            # @everyone is on everyone and says nothing.
+            names = [x for x in names if x and x != "@everyone"]
+            names.sort(key=lambda x: (ROLE_PRIORITY.index(x)
+                                      if x in ROLE_PRIORITY else 99, x))
+            # A per-server avatar wins over the account one, which is what
+            # the member actually looks like in this server.
+            avatar = ""
+            if m.get("avatar"):
+                avatar = (f"https://cdn.discordapp.com/guilds/{guild_id}/users/"
+                          f"{uid}/avatars/{m['avatar']}.png?size=64")
+            elif u.get("avatar"):
+                avatar = (f"https://cdn.discordapp.com/avatars/{uid}/"
+                          f"{u['avatar']}.png?size=64")
+            members[uid] = {
+                "handle": u.get("username", ""),
+                "name": m.get("nick") or u.get("global_name") or u.get("username", ""),
+                "roles": names,
+                "avatar": avatar,
+                "joined": (m.get("joined_at") or "")[:10],
+            }
+        after = page[-1].get("user", {}).get("id")
+        if len(page) < 1000:
+            break
+
+    by_handle = {v["handle"].lower(): v for v in members.values() if v.get("handle")}
+    out = {"updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+           "roles_known": len(roles), "members": by_handle}
+    path = vault / "Panel" / MEMBERS_NAME
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(out), encoding="utf-8")
+    except OSError:
+        return 0
+    return len(by_handle)
+
+
 def looks_like_question(text: str) -> bool:
     t = " ".join(text.split()).lower()
     if len(t) < MIN_QUESTION_LEN:
@@ -465,6 +542,8 @@ def main() -> int:
                           "checked": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         print(f"#{name}: {len(messages)} messages read, {found} questions")
 
+    members = 0 if args.dry_run else refresh_members(guild, VAULT)
+
     added = write_inbox(rows, args.dry_run)
     if not args.dry_run:
         save_state(state)
@@ -473,7 +552,7 @@ def main() -> int:
     print(f"\nmessages read: {read} \u00b7 questions found: {len(rows)} "
           f"({answered_n} already answered by staff)")
     print(f"{verb}added to the inbox: {added} (new ones only) \u00b7 "
-          f"{time.time() - t0:.0f}s")
+          f"member roles refreshed: {members} \u00b7 {time.time() - t0:.0f}s")
     if not read:
         print("\nNothing came back. If the channels are right, the usual cause is")
         print("the Message Content intent being off: Discord Developer Portal >")
