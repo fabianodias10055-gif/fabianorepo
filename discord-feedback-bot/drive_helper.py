@@ -88,3 +88,52 @@ def list_project_folders() -> list[dict]:
     except Exception as exc:
         logger.warning("Drive folder list failed: %s", exc)
     return _cache
+
+
+def fetch_file_by_name(name: str, max_bytes: int = 8 * 1024 * 1024) -> bytes | None:
+    """Download the newest file with this name from anything shared with us.
+
+    By name rather than by folder id so setup is one action: share a folder
+    with the service account and drop the file in it. Nothing to reconfigure
+    here when the owner moves it somewhere else later.
+    """
+    svc = _get_service()
+    if not svc:
+        return None
+    try:
+        safe = name.replace("\\", "\\\\").replace("'", "\\'")
+        res = (
+            svc.files()
+            .list(
+                q=f"name = '{safe}' and trashed = false",
+                fields="files(id,name,size,modifiedTime)",
+                orderBy="modifiedTime desc",
+                pageSize=5,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            )
+            .execute()
+        )
+        files = res.get("files", [])
+        if not files:
+            logger.info("Drive: nothing named %s is shared with the bot", name)
+            return None
+        found = files[0]
+        # A cap, because this is read into memory and parsed on the same box
+        # that is serving Discord.
+        size = int(found.get("size") or 0)
+        if size > max_bytes:
+            logger.warning(
+                "Drive: %s is %d bytes, over the %d cap; skipped",
+                name, size, max_bytes,
+            )
+            return None
+        data = svc.files().get_media(fileId=found["id"]).execute()
+        logger.info(
+            "Drive: fetched %s (%d bytes, modified %s)",
+            name, len(data or b""), found.get("modifiedTime", "?"),
+        )
+        return data
+    except Exception as exc:
+        logger.warning("Drive fetch failed for %s: %s", name, exc)
+        return None

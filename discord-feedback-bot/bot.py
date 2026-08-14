@@ -2323,9 +2323,11 @@ async def kb_scan_slash(interaction: discord.Interaction, limit: int = 500) -> N
                         if a.content_type and a.content_type.startswith("image/")
                     ]
                     if question and answer:
-                        before = len(_kb_load())
-                        _kb_add(question, answer, msg.author.display_name, images=images or None)
-                        if len(_kb_load()) > before:
+                        # The count comes from the add itself: an approval
+                        # that replaces a vault answer leaves the total
+                        # unchanged, so comparing lengths under-reports it.
+                        if _kb_add(question, answer, msg.author.display_name,
+                                   images=images or None):
                             saved += 1
                 except Exception:
                     continue
@@ -3262,6 +3264,7 @@ class FeedbackBot(discord.Client):
         self._weekly_task: asyncio.Task | None = None
         self._youtube_task: asyncio.Task | None = None
         self._merch_task: asyncio.Task | None = None
+        self._kb_sync_task: asyncio.Task | None = None
         self._ue_seen_video_ids: set[str] = set()
         self._conversation_history: dict[int, list[dict]] = {}
         self._processed_messages: set[int] = set()
@@ -3705,6 +3708,33 @@ class FeedbackBot(discord.Client):
         self.tree.add_command(link_stats_slash)
         self.tree.add_command(top_links_slash)
 
+    async def _sync_kb_from_drive(self) -> None:
+        """Pull the vault's answers from Drive into the knowledge base.
+
+        The vault lives on the owner's PC and this runs in the cloud, so the
+        panel exports the answers to a shared Drive folder and the bot reads
+        them from there. Nothing here can reach F:\\LocoDev Vault directly.
+
+        Entries staff approved with a check mark are never touched: they win
+        every conflict and are the only ones allowed to auto-reply verbatim.
+        """
+        await self.wait_until_ready()
+        while not self.is_closed():
+            try:
+                raw = await asyncio.to_thread(_kb_fetch_vault_export)
+                if raw:
+                    curated, vault, before = await asyncio.to_thread(
+                        _kb_merge_vault, raw
+                    )
+                    logger.info(
+                        "KB sync: %d approved kept, %d from the vault "
+                        "(was %d)", curated, vault, before,
+                    )
+            except Exception as exc:  # noqa: BLE001 - a bad sync must not
+                # take the bot down; the next pass tries again.
+                logger.warning("KB sync failed: %s", exc)
+            await asyncio.sleep(KB_SYNC_SECS)
+
     async def on_ready(self) -> None:
         if not self.synced:
             # Clear global commands to remove duplicates
@@ -3750,6 +3780,10 @@ class FeedbackBot(discord.Client):
             self._youtube_task = asyncio.create_task(self._watch_unreal_engine_youtube())
         if self._merch_task is None or self._merch_task.done():
             self._merch_task = asyncio.create_task(self._watch_merch_email())
+        if KB_SYNC_ENABLED and (
+            self._kb_sync_task is None or self._kb_sync_task.done()
+        ):
+            self._kb_sync_task = asyncio.create_task(self._sync_kb_from_drive())
         assert self.user is not None
         logger.info("Logged in as %s (%s)", self.user, self.user.id)
 
@@ -4427,7 +4461,10 @@ class FeedbackBot(discord.Client):
         if now - self._kb_auto_cooldown.get(key, 0.0) < KB_AUTO_COOLDOWN:
             return False
 
-        matches = _kb_search_scored(text, top_n=1, min_score=KB_AUTO_MIN_SCORE)
+        # Approved entries only: this posts the answer verbatim, and a vault
+        # answer written for one person in one thread is not FAQ copy.
+        matches = _kb_search_scored(text, top_n=1, min_score=KB_AUTO_MIN_SCORE,
+                                    curated_only=True)
         if not matches:
             return False
 
@@ -5608,6 +5645,86 @@ def _save_webhook_seen(seen: dict) -> None:
 _KB_PATH = "/app/data/knowledge_base.json"
 _KB_APPROVE_EMOJI = "✅"
 
+# Answers exported from the Obsidian vault, marked so they stay separable from
+# the ones staff approved with a check mark. The distinction matters: approved
+# entries can be posted verbatim, vault entries only inform the AI.
+_KB_VAULT_ORIGIN = "vault"
+KB_SYNC_ENABLED = os.getenv("KB_SYNC_ENABLED", "1") not in ("0", "false", "False")
+KB_DRIVE_FILE = os.getenv("KB_DRIVE_FILE", "knowledge_base.json")
+# Floor of 5 minutes: this hits the Drive API and rewrites the KB file.
+KB_SYNC_SECS = max(300, int(os.getenv("KB_SYNC_MINUTES", "60")) * 60)
+
+
+def _kb_key(question: str) -> str:
+    return " ".join((question or "").lower().split())
+
+
+def _kb_fetch_vault_export() -> list[dict]:
+    """The vault export from Drive, or an empty list if it is not usable."""
+    try:
+        from drive_helper import fetch_file_by_name
+    except Exception as exc:  # noqa: BLE001 - google libs missing is not fatal
+        logger.warning("KB sync: drive_helper unavailable: %s", exc)
+        return []
+    raw = fetch_file_by_name(KB_DRIVE_FILE)
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("KB sync: %s is not valid JSON: %s", KB_DRIVE_FILE, exc)
+        return []
+    if not isinstance(data, list):
+        logger.warning("KB sync: %s is not a list of entries", KB_DRIVE_FILE)
+        return []
+    return data
+
+
+def _kb_merge_vault(fresh: list[dict]) -> tuple[int, int, int]:
+    """Replace the vault half of the KB, leave the approved half alone.
+
+    Vault entries are replaced rather than added to, so an answer edited or
+    deleted in the vault stops being served here too. Approved entries are
+    keyed out first, so a question answered in both places keeps the version
+    a human signed off on.
+    """
+    entries = _kb_load()
+    curated = [e for e in entries if e.get("origin") != _KB_VAULT_ORIGIN]
+    before = len(entries) - len(curated)
+
+    taken = {_kb_key(e.get("question", "")) for e in curated}
+    incoming: list[dict] = []
+    for e in fresh:
+        if not isinstance(e, dict):
+            continue
+        question = str(e.get("question") or "").strip()
+        answer = str(e.get("answer") or "").strip()
+        if not question or not answer:
+            continue
+        key = _kb_key(question)
+        if key in taken:
+            continue
+        taken.add(key)
+        entry = dict(e)
+        entry["question"] = question
+        entry["answer"] = answer
+        entry["origin"] = _KB_VAULT_ORIGIN
+        incoming.append(entry)
+
+    # A half-written export or a truncated download should not quietly wipe
+    # what the last good one delivered. Losing the approved entries is not
+    # possible here, but losing the vault ones for an hour is still bad.
+    if before and len(incoming) < before * 0.5:
+        logger.warning(
+            "KB sync: export carries %d vault entries against %d already "
+            "here; too small to trust, keeping what we have",
+            len(incoming), before,
+        )
+        return len(curated), before, before
+
+    _kb_save(curated + incoming)
+    return len(curated), len(incoming), before
+
 def _kb_load() -> list[dict]:
     try:
         with open(_KB_PATH, "r", encoding="utf-8") as f:
@@ -5618,12 +5735,25 @@ def _kb_load() -> list[dict]:
 def _kb_save(entries: list[dict]) -> None:
     _atomic_write_json(_KB_PATH, entries)
 
-def _kb_add(question: str, answer: str, author: str, images: list[str] | None = None) -> None:
+def _kb_add(question: str, answer: str, author: str, images: list[str] | None = None) -> bool:
+    """Save an approved Q&A. Returns whether the knowledge base changed.
+
+    An approval supersedes the vault's answer to the same question: a person
+    read this one and signed off on it. Without that, a vault entry arriving
+    first would make the check mark do nothing at all.
+    """
     entries = _kb_load()
-    # Avoid duplicates
+    key = _kb_key(question)
+    kept: list[dict] = []
+    replaced = False
     for e in entries:
-        if e["question"].strip().lower() == question.strip().lower():
-            return
+        if _kb_key(e.get("question", "")) == key:
+            if e.get("origin") == _KB_VAULT_ORIGIN:
+                replaced = True
+                continue
+            return False  # already approved
+        kept.append(e)
+    entries = kept
     entry: dict = {
         "question": question.strip(),
         "answer": answer.strip(),
@@ -5634,7 +5764,10 @@ def _kb_add(question: str, answer: str, author: str, images: list[str] | None = 
         entry["images"] = images
     entries.append(entry)
     _kb_save(entries)
-    logger.info("KB: saved Q&A — %s (%d images)", question[:60], len(images or []))
+    logger.info("KB: saved Q&A — %s (%d images, %s)", question[:60],
+                len(images or []),
+                "replaced the vault answer" if replaced else "new")
+    return True
 
 def _kb_search(query: str, top_n: int = 3) -> list[dict]:
     """Simple keyword search over the knowledge base."""
@@ -5671,9 +5804,17 @@ def _looks_like_question(text: str) -> bool:
     words = text.lower().split()
     return bool(words) and words[0] in _KB_QUESTION_STARTERS and len(words) >= 4
 
-def _kb_search_scored(query: str, top_n: int = 3, min_score: int = 1) -> list[tuple[int, dict]]:
-    """Like _kb_search but filters stopwords, returns (score, entry) pairs, min_score enforced."""
+def _kb_search_scored(query: str, top_n: int = 3, min_score: int = 1,
+                      curated_only: bool = False) -> list[tuple[int, dict]]:
+    """Like _kb_search but filters stopwords, returns (score, entry) pairs, min_score enforced.
+
+    curated_only skips the answers synced from the vault. Those were written
+    as replies to one person on YouTube or Discord, not as FAQ copy, so they
+    inform the AI but are not fit to be posted word for word.
+    """
     entries = _kb_load()
+    if curated_only:
+        entries = [e for e in entries if e.get("origin") != _KB_VAULT_ORIGIN]
     query_words = {w.strip("?.,!") for w in query.lower().split()
                    if w not in _KB_STOPWORDS and len(w) > 2}
     if not query_words:
