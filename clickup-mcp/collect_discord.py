@@ -161,6 +161,72 @@ def resolve_mentions(text: str, msg: dict | None = None) -> str:
     return _EMOJI.sub(lambda m: ":" + m.group(1) + ":", text)
 
 
+def _words(text: str) -> set:
+    """Significant words, for the rough overlap checks in this module."""
+    return {w for w in re.findall(r"[a-z0-9]{3,}", (text or "").lower())}
+
+
+_SENT = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def split_questions(text: str) -> list[str]:
+    """One message, one entry per question asked in it.
+
+    People stack two unrelated questions in a single message, and a single
+    staff reply then marks the whole thing answered, which quietly buries
+    the half nobody addressed. Each question becomes its own entry so each
+    can be tracked, answered and closed on its own.
+
+    Sentences that are not themselves questions ride along with the question
+    they precede: "I bought the pack yesterday. How do I migrate it?" is one
+    question with its context, not a fragment plus a question.
+    """
+    sentences = [x.strip() for x in _SENT.split(text) if x.strip()]
+    if len(sentences) < 2:
+        return [text]
+
+    parts: list[list[str]] = []
+    buf: list[str] = []
+    for sent in sentences:
+        buf.append(sent)
+        if looks_like_question(sent) or sent.rstrip().endswith("?"):
+            parts.append(buf)
+            buf = []
+    if buf:
+        # Trailing context belongs to the question it follows.
+        if parts:
+            parts[-1].extend(buf)
+        else:
+            parts.append(buf)
+
+    joined = [" ".join(p).strip() for p in parts]
+    joined = [p for p in joined if len(p) >= MIN_QUESTION_LEN]
+    # Splitting is only worth it when the pieces really are separate asks.
+    if len(joined) < 2:
+        return [text]
+    return joined
+
+
+def which_part_answered(parts: list[str], reply: str) -> int:
+    """Which of the questions the staff reply actually addressed.
+
+    A guess, and labelled as one: word overlap between the reply and each
+    question. When nothing overlaps, the first is assumed, because a reply
+    usually answers the thing asked first. Getting it wrong costs one click
+    on Mark as answered or Reopen, which is the point of having those.
+    """
+    if not reply:
+        return -1
+    rw = _words(reply)
+    best, score = 0, 0
+    for i, p in enumerate(parts):
+        pw = _words(p)
+        overlap = len(rw & pw)
+        if overlap > score:
+            best, score = i, overlap
+    return best
+
+
 def author_handle(author: dict) -> str:
     """@handle, the way YouTube questions already read.
 
@@ -431,7 +497,12 @@ def existing_sources(path: Path) -> set[str]:
 def write_inbox(rows: list[dict], dry: bool) -> int:
     path = VAULT / "Inbox" / INBOX_NAME
     seen = existing_sources(path)
-    fresh = [r for r in rows if r["source"] not in seen]
+    # dc:123 already in the inbox covers dc:123#1 and #2: splitting only
+    # applies to messages that were not filed before, or the old entry and
+    # its pieces would sit side by side saying the same thing.
+    fresh = [r for r in rows
+             if r["source"] not in seen
+             and r["source"].split("#")[0] not in seen]
     if not fresh:
         return 0
 
@@ -484,6 +555,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--vault", default=str(VAULT))
     ap.add_argument("--channels", default=os.getenv("DISCORD_CHANNEL_IDS", DEFAULT_CHANNELS))
+    ap.add_argument("--no-split", dest="split", action="store_false",
+                    help="keep a message with two questions as one entry")
     ap.add_argument("--full", action="store_true",
                     help="ignore the saved position and re-walk the history")
     ap.add_argument("--max-per-channel", type=int,
@@ -514,7 +587,7 @@ def main() -> int:
     channels = list(dict.fromkeys(channels))
 
     rows: list[dict] = []
-    read = answered_n = 0
+    read = answered_n = split_n = 0
     t0 = time.time()
 
     for cid in channels:
@@ -576,23 +649,37 @@ def main() -> int:
             answer = find_answer(m, messages, staff)
             reply = (resolve_mentions(" ".join((answer.get("content") or "").split()),
                                       answer)[:900] if answer else "")
-            rows.append({
-                "date": (m.get("timestamp") or "")[:10],
-                "author": author_handle(author),
-                "text": text,
-                "status": "answered" if reply else "no-source",
-                "reply": reply,
-                "source": f"dc:{m['id']}",
-                "channel_name": name,
-                # A forum question belongs to its post, not to the forum, and
-                # the link has to point at the post to be worth clicking.
-                "thread": thread_of.get(m["id"], ""),
-                "url": (f"https://discord.com/channels/{guild or '@me'}/"
-                        f"{m.get('channel_id', cid)}/{m['id']}"),
-            })
-            found += 1
-            if reply:
-                answered_n += 1
+            parts = split_questions(text) if args.split else [text]
+            answered_idx = which_part_answered(parts, reply) if len(parts) > 1 else 0
+
+            for pi, part in enumerate(parts):
+                # The first part keeps the message id unsuffixed, so a
+                # question already filed and referenced keeps its code
+                # when a second ask is split out of it.
+                suffix = f"#{pi + 1}" if pi else ""
+                if len(parts) > 1:
+                    part_status = "answered" if pi == answered_idx and reply else "no-source"
+                else:
+                    part_status = "answered" if reply else "no-source"
+                rows.append({
+                    "date": (m.get("timestamp") or "")[:10],
+                    "author": author_handle(author),
+                    "text": part,
+                    "status": part_status,
+                    "reply": reply,
+                    "source": f"dc:{m['id']}{suffix}",
+                    "channel_name": name,
+                    # A forum question belongs to its post, not to the forum,
+                    # and the link has to point at the post to be clickable.
+                    "thread": thread_of.get(m["id"], ""),
+                    "url": (f"https://discord.com/channels/{guild or '@me'}/"
+                            f"{m.get('channel_id', cid)}/{m['id']}"),
+                })
+                found += 1
+                if part_status == "answered":
+                    answered_n += 1
+            if len(parts) > 1:
+                split_n += 1
 
         if newest and not args.dry_run:
             state[cid] = {"last_id": str(newest), "name": name,
@@ -608,6 +695,8 @@ def main() -> int:
     verb = "would be " if args.dry_run else ""
     print(f"\nmessages read: {read} \u00b7 questions found: {len(rows)} "
           f"({answered_n} already answered by staff)")
+    if split_n:
+        print(f"messages carrying more than one question, split apart: {split_n}")
     print(f"{verb}added to the inbox: {added} (new ones only) \u00b7 "
           f"member roles refreshed: {members} \u00b7 {time.time() - t0:.0f}s")
     if not read:
