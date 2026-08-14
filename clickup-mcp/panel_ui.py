@@ -742,6 +742,7 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
 .msg { font-size:var(--t-sm); color:var(--ink2); }
 .msg.good { color:var(--ok); font-weight:600; }
 .msg.bad { color:var(--crit); font-weight:600; }
+.msg.warn { color:var(--warn); font-weight:600; }
 
 /* ================= right rail ================= */
 .grow { display:flex; justify-content:space-between; align-items:center; gap:var(--s2);
@@ -807,8 +808,12 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
   margin-left:auto; }
 .arow .q { color:var(--ink3); font-size:var(--t-sm); display:-webkit-box;
   -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden; }
-.arow .a { margin-top:2px; display:-webkit-box; -webkit-line-clamp:3;
-  -webkit-box-orient:vertical; overflow:hidden; line-height:1.5; }
+.arow .a { margin-top:2px; line-height:1.5; }
+.arow .abody { display:flex; gap:var(--s3); align-items:flex-start; }
+.arow .abody > div { min-width:0; }
+.athumb { flex:none; display:block; border-radius:var(--r-xs); overflow:hidden;
+  border:1px solid transparent; transition:border-color var(--dur) var(--ease); }
+.athumb:hover { border-color:var(--accent); }
 .tag { display:inline-block; background:var(--mute-bg); color:var(--ink2);
   border-radius:var(--r-xs); padding:1px 7px; font-size:var(--t-2xs); font-weight:680; }
 .tag.lead { background:var(--warn-bg); color:var(--warn); }
@@ -1261,9 +1266,17 @@ function runReply(det) {
       if (s.ok) {
         holdUntil = Date.now() + 6000;
         ss("lp-draft:" + det.dataset.id, null);
-        msg.textContent = "Vault updated. " + (s.platform_message || "");
-        msg.classList.add("good");
-        toast("Reply saved to the vault and filed as knowledge.", "good");
+        /* Saving to the vault is not the same as the customer receiving it.
+           Only a real platform post earns the green. */
+        msg.textContent = s.posted_to_platform
+          ? "Sent, and filed in the vault."
+          : "Saved to the vault only, NOT sent to the customer. "
+            + (s.platform_message || "");
+        msg.classList.add(s.posted_to_platform ? "good" : "warn");
+        toast(s.posted_to_platform
+          ? "Reply posted and filed as knowledge."
+          : "Filed in the vault. Nothing was posted to the platform.",
+          s.posted_to_platform ? "good" : "bad");
         var row = det.previousElementSibling;
         var pill = row.querySelector(".pill");
         pill.className = "pill st-answered";
@@ -2053,14 +2066,31 @@ def _answers_card(d: dict) -> str:
     rows = []
     for i, a in enumerate(answers):
         hid = "" if i < 5 else " xtra hide"
-        posted = ('<span class="pill st-ok">posted to youtube</span>' if a["posted"]
-                  else '<span class="pill st-unknown">vault only</span>')
+        # "vault only" is not a neutral state: the customer never got the
+        # reply. It reads as a warning until the platform actually has it.
+        posted = ('<span class="pill st-ok"><i class="pe">\U0001f4e4</i>'
+                  'posted to youtube</span>' if a["posted"]
+                  else '<span class="pill st-escalated"><i class="pe">⚠️</i>'
+                       'not sent yet</span>')
+        code = (f'<span class="qid" data-copy="{escape(a["code"], quote=True)}">'
+                f'{escape(a["code"])}</span>') if a.get("code") else ""
+        url = _safe_url(a.get("video_url", ""))
+        thumb = ""
+        if a.get("video_id"):
+            img = (f'<span class="vthumb"><img loading="lazy" alt="" width="68" '
+                   f'height="38" referrerpolicy="no-referrer" '
+                   f'src="{_thumb_url(a["video_id"])}" '
+                   f'onerror="this.parentNode.classList.add(\'hide\')"></span>')
+            thumb = (f'<a class="athumb" href="{escape(url, quote=True)}" target="_blank" '
+                     f'rel="noopener" title="{escape(a.get("video", ""), quote=True)}">'
+                     f'{img}</a>') if url else img
         rows.append(
-            f'<div class="arow{hid}"><div class="hd">{_avatar(a["who"], "sm")}'
+            f'<div class="arow{hid}"><div class="hd">{code}{_avatar(a["who"], "sm")}'
             f'<b>{escape(a["who"])}</b>{_chn(a["channel"])}{posted}'
             f'<span class="w">{escape(a["when"])}</span></div>'
+            f'<div class="abody">{thumb}<div>'
             f'<div class="q">{escape(a["q"])}</div>'
-            f'<div class="a">{escape(a["a"])}</div></div>'
+            f'<div class="a">{escape(a["a"])}</div></div></div></div>'
         )
     more = (f'<button class="linkbtn" data-viewall>View all {len(answers)} replies</button>'
             if len(answers) > 5 else "")

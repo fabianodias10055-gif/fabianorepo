@@ -420,6 +420,10 @@ def append_answered_log(question: dict, answer: str, posted_to_youtube: bool) ->
     where = ""
     if question.get("video"):
         where = f"\nvideo: {question['video']}"
+    if question.get("video_id"):
+        where += f"\nvideo_id: {question['video_id']}"
+    if question.get("video_url"):
+        where += f"\nvideo_url: {question['video_url']}"
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     block = (
         f"\n### {stamp} reply to {question['who']}\n"
@@ -438,6 +442,21 @@ ANSWER_HEAD = re.compile(
     r"^###\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s+reply to\s+(.+?)\s*$", re.M)
 
 
+def video_index() -> dict[str, str]:
+    """folder name -> video_id, so anything that only recorded the folder
+    can still be turned into a thumbnail and a link."""
+    out: dict[str, str] = {}
+    root = VAULT / "YouTube" / "Videos"
+    if not root.is_dir():
+        return out
+    for note in root.glob("*/00 - Overview.md"):
+        m = re.search(r"^video_id:\s*(\S+)",
+                      note.read_text(encoding="utf-8", errors="replace"), re.M)
+        if m:
+            out[note.parent.name] = m.group(1)
+    return out
+
+
 def parse_answers() -> list[dict]:
     """Read back what append_answered_log wrote, newest first, so the
     dashboard's Answers section shows the replies actually sent."""
@@ -445,6 +464,10 @@ def parse_answers() -> list[dict]:
     if not path.is_file():
         return []
     raw = path.read_text(encoding="utf-8", errors="replace")
+    # Older entries recorded only the folder name, so the id is resolved on
+    # read rather than by rewriting the log: replies already filed still get
+    # their thumbnail and their link.
+    videos = video_index()
     out = []
     matches = list(ANSWER_HEAD.finditer(raw))
     for i, m in enumerate(matches):
@@ -452,18 +475,26 @@ def parse_answers() -> list[dict]:
         block = raw[m.end():end]
         fields = {}
         for line in block.splitlines():
-            fm = re.match(r"^(channel|system|video|posted_to_platform):\s*(.*)$",
-                          line.strip())
+            fm = re.match(
+                r"^(channel|system|video|video_id|video_url|question|"
+                r"posted_to_platform):\s*(.*)$", line.strip())
             if fm:
                 fields[fm.group(1)] = fm.group(2).strip()
         qm = re.search(r"\*\*Q:\*\*\s*(.*?)(?=\n\*\*A:\*\*|\Z)", block, re.S)
         am = re.search(r"\*\*A:\*\*\s*(.*)", block, re.S)
+        video = fields.get("video", "")
+        video_id = fields.get("video_id", "") or videos.get(video, "")
         out.append({
             "when": m.group(1),
             "who": m.group(2),
+            "code": fields.get("question", ""),
             "channel": fields.get("channel", "unknown"),
             "system": fields.get("system", "-"),
-            "video": fields.get("video", ""),
+            "video": video,
+            "video_id": video_id,
+            "video_url": (fields.get("video_url", "")
+                          or (f"https://www.youtube.com/watch?v={video_id}"
+                              if video_id else "")),
             "posted": fields.get("posted_to_platform", "no") == "yes",
             "q": " ".join((qm.group(1) if qm else "").split()),
             "a": (am.group(1).strip() if am else ""),
