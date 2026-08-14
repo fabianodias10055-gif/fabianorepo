@@ -7,14 +7,19 @@ vault holds 640 real answers already given on YouTube and Discord, plus
 whatever documentation exists, and the bot cannot see any of it.
 
 This writes that knowledge in the bot's exact format so it needs no new
-parser: same keys, same list, same file. What it does not do is replace the
-bot's own entries. Those were curated by hand and win every conflict; the
-export merges into them and reports what it added.
+parser: same keys, same list, same file. Every entry is marked origin=vault,
+which is how the bot keeps the two halves apart: it replaces its vault half
+on each sync and never touches the entries staff approved with a check mark,
+and only those approved ones are ever posted verbatim.
+
+The copy in the Drive folder is the one the bot reads. It runs on Railway and
+cannot see F:\\LocoDev Vault, so Drive is the only route from this PC to it.
 
 Usage:
     python export_kb.py --dry-run
-    python export_kb.py
-    python export_kb.py --merge-with downloaded_knowledge_base.json
+    python export_kb.py                       vault + Drive copies
+    python export_kb.py --no-drive            local copy only
+    python export_kb.py --merge-with x.json   only to hand-replace the bot's file
 """
 
 import argparse
@@ -33,6 +38,12 @@ import panel  # noqa: E402
 # bot look confident about nothing.
 MIN_ANSWER = 40
 MIN_QUESTION = 15
+
+# The bot runs in the cloud and cannot see F:\LocoDev Vault, so the export
+# goes through Drive. Its own folder, not the vault mirror: that one is kept
+# with robocopy /MIR, which deletes anything in the destination that is not
+# in the source, and this file is not part of the vault tree it copies.
+DRIVE_OUT = Path(r"G:\My Drive\LocoDev Bot KB\knowledge_base.json")
 
 
 def norm(text: str) -> str:
@@ -60,6 +71,10 @@ def from_vault() -> list[dict]:
             "answer": answer,
             "author": "LocoDev",
             "ts": f"{q['date']}T00:00:00",
+            # The bot keys on this: vault entries are refreshed wholesale on
+            # every sync and never auto-posted verbatim, unlike the ones
+            # staff approved with a check mark.
+            "origin": "vault",
             # Provenance the bot ignores and a human reading the file needs.
             "source": q.get("code", ""),
             "channel": q.get("channel", ""),
@@ -80,6 +95,7 @@ def from_vault() -> list[dict]:
             "answer": answer,
             "author": "LocoDev",
             "ts": f"{a['when'][:10]}T00:00:00",
+            "origin": "vault",
             "source": a.get("code", ""),
             "channel": a.get("channel", ""),
             "system": a.get("system", ""),
@@ -118,6 +134,10 @@ def main() -> int:
                          "curated entries survive")
     ap.add_argument("--out", default="",
                     help="where to write (default: <vault>/Panel/knowledge_base.json)")
+    ap.add_argument("--drive-out", default=str(DRIVE_OUT),
+                    help="the Google Drive folder the bot reads from")
+    ap.add_argument("--no-drive", action="store_true",
+                    help="write the local copy only")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -151,21 +171,40 @@ def main() -> int:
     print(f"total in the file: {len(merged)}")
 
     out = Path(args.out) if args.out else panel.VAULT / "Panel" / "knowledge_base.json"
+    targets = [out]
+    if not args.no_drive:
+        targets.append(Path(args.drive_out))
+
     if args.dry_run:
-        print(f"\n(simulation: would write {out})")
+        for t in targets:
+            print(f"\n(simulation: would write {t})")
         return 0
 
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(merged, ensure_ascii=False, indent=1), encoding="utf-8")
-    size = out.stat().st_size / 1024
-    print(f"\nwritten: {out} ({size:,.0f} KB)")
+    payload = json.dumps(merged, ensure_ascii=False, indent=1)
+    written = 0
+    for t in targets:
+        # Drive Desktop mounts G: only while it is running. Creating the
+        # folder on a drive that is not there would write to a path the bot
+        # never sees and report success for a file nobody receives.
+        if t.parent.parent.exists() or t.parent.exists():
+            t.parent.mkdir(parents=True, exist_ok=True)
+            t.write_text(payload, encoding="utf-8")
+            print(f"\nwritten: {t} ({t.stat().st_size / 1024:,.0f} KB)")
+            written += 1
+        else:
+            print(f"\nSKIPPED {t}: {t.parent.parent} does not exist. If this is "
+                  f"the Drive copy, Google Drive Desktop is not running, and "
+                  f"the bot will keep serving the last version it fetched.")
+
     print(f"stamp: {datetime.now(timezone.utc).isoformat(timespec='seconds')}")
-    if not args.merge_with:
-        print("\nNote: no existing file was merged, so this contains vault answers "
-              "only. Download the bot's knowledge_base.json and pass it with "
-              "--merge-with before replacing the one it is using, or its "
-              "check-mark entries are lost.")
-    return 0
+    print("\nEvery entry is marked origin=vault. The bot replaces its vault "
+          "half on each sync and leaves the check-mark entries alone, so this "
+          "file is meant to hold vault answers only.")
+    if args.merge_with:
+        print("Merged with an existing file, which is what you want only when "
+              "you are replacing /app/data/knowledge_base.json by hand. For "
+              "the Drive path, export without --merge-with.")
+    return 0 if written else 1
 
 
 if __name__ == "__main__":
