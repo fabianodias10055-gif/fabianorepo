@@ -862,7 +862,11 @@ def _vault_map() -> str:
 - Systems/<slug>/05 - Answered questions.md holds real replies already given
   to customers. Systems/_general/ holds licensing, tier and compatibility
   answers that apply to every system.
-- YouTube/Videos/<date title>/ holds each video's description and comments."""
+- YouTube/Videos/<date title>/ holds each video's description, comments and
+  02 - Transcript.md, the spoken transcript with a clickable timestamp on
+  every paragraph. When the answer is demonstrated on screen rather than
+  written down, that transcript is where it lives, and citing the timestamp
+  is more useful to the person than describing the steps."""
 
 
 def _ai_context(question: dict) -> str:
