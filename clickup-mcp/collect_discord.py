@@ -46,7 +46,20 @@ API = "https://discord.com/api/v10"
 INBOX_NAME = "03 - From Discord.md"
 
 # The channels asked for, overridable without touching the code.
-DEFAULT_CHANNELS = "1158395982485147692,1460338435163164827,1158461639197216768"
+# Every channel where a question can land. general-support was missing
+# from the first list and is the busiest of them: the channel topic
+# literally invites people to post their problem there.
+DEFAULT_CHANNELS = ",".join((
+    "1158395982485147692",   # general-chat
+    "1459914723330883727",   # general-support
+    "1460338435163164827",   # support-hub (forum)
+    "1160715880787869729",   # patreon-support
+    "1158461639197216768",   # blueprint-tips
+    "1481100889757581434",   # mover-tips
+    "1230971979515826277",   # cpp-tips
+    "1158854094597935155",   # als-coding-tips
+    "1158414318975582309",   # funny-bugs
+))
 
 MIN_QUESTION_LEN = 25
 QUESTION_WORDS = (
