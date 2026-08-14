@@ -835,6 +835,8 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
   margin-left:auto; }
 .arow .q { color:var(--ink3); font-size:var(--t-sm); display:-webkit-box;
   -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden; }
+.aacts { display:flex; gap:var(--s2); align-items:center; margin-top:var(--s3); }
+.amsg { font-size:var(--t-xs); color:var(--ink2); }
 .arow .a { margin-top:2px; line-height:1.5; }
 .arow .abody { display:flex; gap:var(--s3); align-items:flex-start; }
 .arow .abody > div { min-width:0; }
@@ -1652,6 +1654,65 @@ Object.keys(AI_CACHE).forEach(function (key) {
   }
 });
 
+/* ---- a logged answer can be resent or edited ---- */
+function answerRow(el) { return el.closest(".arow"); }
+
+$$("[data-resend]").forEach(function (b) {
+  b.addEventListener("click", function () {
+    var row = answerRow(b), msg = row.querySelector(".amsg");
+    if (!LIVE) { msg.textContent = "needs the live server"; return; }
+    b.disabled = true;
+    b.classList.add("spin");
+    msg.textContent = "posting...";
+    fetch("/resend", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: b.dataset.code, when: b.dataset.when }) })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        b.classList.remove("spin");
+        if (s.ok) {
+          msg.textContent = "posted";
+          toast("Answer posted to YouTube.", "good");
+        } else {
+          msg.textContent = s.error || "failed";
+          b.disabled = false;
+        }
+      })
+      .catch(function () {
+        b.classList.remove("spin");
+        msg.textContent = "could not reach the panel server";
+        b.disabled = false;
+      });
+  });
+});
+
+/* Edit reopens the question itself with this answer loaded, so a correction
+   goes through the same composer and the same delivery rules as any reply. */
+$$("[data-editans]").forEach(function (b) {
+  b.addEventListener("click", function () {
+    var code = b.dataset.code.toLowerCase();
+    var text = answerRow(b).dataset.answer || "";
+    var target = null;
+    $$("#qtbody tr.qrow").forEach(function (r) {
+      if (r.dataset.txt.indexOf(code) !== -1) target = r;
+    });
+    if (!target) {
+      answerRow(b).querySelector(".amsg").textContent = "question not in the inbox";
+      return;
+    }
+    setGroup("st", "all");        /* it is answered: the open queue hides it */
+    state.q = code;
+    $("#q").value = b.dataset.code;
+    page = 0;
+    apply();
+    syncUrl();
+    ss("lp-draft:" + target.dataset.id, text);
+    toggleDet(target, "box");
+    var box = $("tr.qdet .qbox");
+    if (box) { box.value = text; box.focus(); }
+    $("#questions").scrollIntoView({ block: "start" });
+  });
+});
+
 /* ---- gaps and coverage drill into the question table ---- */
 function drillTo(sys) {
   var sel = $("#sysSel");
@@ -2263,13 +2324,31 @@ def _answers_card(d: dict) -> str:
             thumb = (f'<a class="athumb" href="{escape(url, quote=True)}" target="_blank" '
                      f'rel="noopener" title="{escape(a.get("video", ""), quote=True)}">'
                      f'{img}</a>') if url else img
+
+        # A reply that never reached the customer needs a way out, not just
+        # a warning label. Retry only appears where there is somewhere to
+        # post to; Edit reopens the question with this text loaded.
+        acts = []
+        if a.get("code"):
+            acts.append(f'<button class="btn tiny" data-editans '
+                        f'data-code="{escape(a["code"], quote=True)}">Edit</button>')
+            if not a["posted"] and a["channel"] == "youtube":
+                acts.append(f'<button class="btn tiny primary" data-resend '
+                            f'data-code="{escape(a["code"], quote=True)}" '
+                            f'data-when="{escape(a["when"], quote=True)}">'
+                            f'Retry send</button>')
+        actions = (f'<div class="aacts">{"".join(acts)}'
+                   f'<span class="amsg" aria-live="polite"></span></div>'
+                   if acts else "")
+
         rows.append(
-            f'<div class="arow{hid}"><div class="hd">{code}{_avatar(a["who"], "sm")}'
+            f'<div class="arow{hid}" data-answer="{escape(a["a"], quote=True)}">'
+            f'<div class="hd">{code}{_avatar(a["who"], "sm")}'
             f'<b>{escape(a["who"])}</b>{_chn(a["channel"])}{posted}'
             f'<span class="w">{escape(a["when"])}</span></div>'
             f'<div class="abody">{thumb}<div>'
             f'<div class="q">{escape(a["q"])}</div>'
-            f'<div class="a">{escape(a["a"])}</div></div></div></div>'
+            f'<div class="a">{escape(a["a"])}</div>{actions}</div></div></div>'
         )
     more = (f'<button class="linkbtn" data-viewall>View all {len(answers)} replies</button>'
             if len(answers) > 5 else "")

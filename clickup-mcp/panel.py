@@ -372,6 +372,59 @@ def parse_questions() -> list[dict]:
     return out
 
 
+def find_question_by_code(code: str) -> dict | None:
+    for q in parse_questions():
+        if q["code"] == code:
+            return q
+    return None
+
+
+def resend_answer(code: str, when: str) -> dict:
+    """Post an already-written answer that never reached the platform.
+
+    A reply filed before OAuth existed sits in the log marked
+    posted_to_platform: no, which is honest but leaves the customer with
+    nothing. This posts the stored text and flips that one line, so the log
+    keeps telling the truth about what was actually delivered.
+    """
+    path = VAULT / "Inbox" / ANSWERED_LOG_NAME
+    if not path.is_file():
+        return {"ok": False, "error": "no answer log yet"}
+    raw = path.read_text(encoding="utf-8", errors="replace")
+
+    matches = list(ANSWER_HEAD.finditer(raw))
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(raw)
+        block = raw[m.end():end]
+        if m.group(1) != when or f"question: {code}" not in block:
+            continue
+        if re.search(r"^posted_to_platform:\s*yes", block, re.M):
+            return {"ok": False, "error": "already posted"}
+        am = re.search(r"\*\*A:\*\*\s*(.*)", block, re.S)
+        answer = (am.group(1).strip() if am else "")
+        if not answer:
+            return {"ok": False, "error": "no answer text stored"}
+
+        question = find_question_by_code(code)
+        if not question:
+            return {"ok": False, "error": "question no longer in the inbox"}
+        source = question.get("source", "")
+        if question["channel"] != "youtube" or not source.startswith("yt:"):
+            return {"ok": False,
+                    "error": "this channel cannot be posted to from here"}
+
+        posted, msg = post_youtube_reply(source[len("yt:"):], answer)
+        if not posted:
+            return {"ok": False, "error": msg}
+
+        new_block = re.sub(r"^posted_to_platform:\s*no\s*$",
+                           "posted_to_platform: yes", block, count=1, flags=re.M)
+        path.write_text(raw[:m.end()] + new_block + raw[end:], encoding="utf-8")
+        return {"ok": True, "message": msg}
+
+    return {"ok": False, "error": "answer not found in the log"}
+
+
 def find_question_by_id(qid: str) -> dict | None:
     for q in parse_questions():
         if q["id"] == qid:
@@ -1851,6 +1904,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/suggest_ai_status":
             payload = self._json_body()
             return self._send_json({"ok": True, **ai_job_status(str(payload.get("job", "")))})
+
+        if self.path == "/resend":
+            payload = self._json_body()
+            result = resend_answer(str(payload.get("code", "")),
+                                   str(payload.get("when", "")))
+            if result.get("ok"):
+                build(live=True)   # the log changed: the page must show it
+            return self._send_json(result, 200 if result.get("ok") else 400)
 
         if self.path == "/reply":
             payload = self._json_body()
