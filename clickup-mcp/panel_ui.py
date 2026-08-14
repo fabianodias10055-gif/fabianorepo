@@ -1481,6 +1481,9 @@ function detailFor(qid) {
     + '<button class="btn tiny" data-ai="search">Find existing answer</button>'
     + '<button class="btn tiny ai" data-ai="draft">Draft with Claude</button>'
     + '<button class="btn tiny" data-ctx>What is this about?</button>'
+    + '<button class="btn tiny" data-mark="'
+    + (q.status === "answered" ? "no-source" : "answered") + '">'
+    + (q.status === "answered" ? "Reopen" : "Mark as answered") + "</button>"
     + (q.video_url ? '<button class="btn tiny" data-copy="' + esc(q.video_url)
         + '">Copy link</button>' : "")
     + "</div>");
@@ -1519,6 +1522,37 @@ function detailFor(qid) {
   det.querySelector("[data-reply]").addEventListener("click", function () { runReply(tr); });
   det.querySelector("[data-ctx]").addEventListener("click", function () {
     runContext(tr, det.querySelector("[data-ctx]"));
+  });
+  /* Not every question is closed by replying from here: some were handled
+     in the thread, some are not really questions. Closing one should not
+     require posting something. */
+  det.querySelector("[data-mark]").addEventListener("click", function () {
+    var b = det.querySelector("[data-mark]");
+    var msg = det.querySelector(".msg");
+    b.disabled = true;
+    msg.className = "msg";
+    msg.textContent = "updating the vault...";
+    fetch("/mark", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: qid, status: b.dataset.mark }) })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (!s.ok) { msg.textContent = s.error || "failed"; b.disabled = false; return; }
+        holdUntil = Date.now() + 4000;
+        var row = rowById(qid);
+        var done = s.status === "answered";
+        row.dataset.st = s.status;
+        var pill = row.querySelector(".pill");
+        pill.className = "pill " + (done ? "st-answered" : "st-no-source");
+        pill.innerHTML = '<i class="pe">' + (done ? "✅" : "📥") + "</i>"
+          + (done ? "answered" : "unanswered");
+        toast(done ? "Marked answered in the vault." : "Reopened in the vault.", "good");
+        closeDet();
+        apply();
+      })
+      .catch(function () {
+        msg.textContent = "could not reach the panel server";
+        b.disabled = false;
+      });
   });
   return tr;
 }
@@ -2442,6 +2476,7 @@ def _question_payload(questions: list) -> dict:
             "link": _safe_url(q.get("url", "")), "thread": q.get("thread", ""),
             "roles": q.get("roles") or [], "avatar": _safe_url(q.get("avatar_url", "")),
             "joined": q.get("joined", ""), "asker": q["who"],
+            "status": q["status"],
             "thumb": _thumb_url(q.get("video_id", "")),
             # Only a YouTube comment can be answered in place; everything
             # else is filed in the vault and the button must say so.

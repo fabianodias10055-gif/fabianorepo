@@ -255,13 +255,57 @@ def refresh_members(guild_id: str, vault: Path) -> int:
     return len(by_handle)
 
 
+# Somebody reporting a broken thing wants an answer as much as somebody
+# asking outright, and they rarely use a question mark: "it crashes when I
+# jump", "I cant get it to work in 5.6". Requiring a "?" filed all of those
+# as ordinary chatter and they never reached the panel.
+PROBLEM_MARKERS = (
+    "doesn't work", "does not work", "dont work", "not working", "won't work",
+    "wont work", "isn't working", "isnt working", "stopped working",
+    "crash", "error", "bug", "broken", "stuck", "freeze", "glitch",
+    "can't", "cant ", "cannot", "unable to", "fails", "failing", "failed",
+    "issue", "problem", "not able", "no idea how", "dont know how",
+    "don't know how", "i need help", "need help", "help me", "any help",
+    "i need the", "i want to", "im trying", "i'm trying", "trying to",
+    "does not have", "doesn't have", "i dont see", "i don't see",
+    "not showing", "not appearing", "missing", "wrong",
+    # "the montage is not playing", "the trace is not detecting": the shape
+    # is "<thing> is not <verb>ing", which no single phrase above catches.
+)
+NEGATED_VERB = re.compile(r"\b(is|are|was|were|does|do|did|will|wont|won.t)\s+not\s+\w+")
+# A message that is only praise or thanks is not a request, even when it
+# happens to contain a marker word.
+CLOSERS = ("thank", "thanks", "tks", "obrigad", "worked", "solved", "fixed it",
+           "amazing", "awesome", "great work", "great stuff", "congrat",
+           "nice work", "love it", "keep it up", "well done")
+
+
 def looks_like_question(text: str) -> bool:
     t = " ".join(text.split()).lower()
     if len(t) < MIN_QUESTION_LEN:
         return False
+    # Someone closing a thread often uses a marker word in passing
+    # ("this is not the first time I buy from you"). Gratitude with no
+    # question mark is a thank-you, not a request.
+    if len(t) < 160 and "?" not in t and any(c in t for c in CLOSERS):
+        return False
+    # Someone closing a thread often uses a marker word in passing ("this
+    # is not the first time I buy from you"). Gratitude with no question
+    # mark is a thank-you, not a request.
+    if len(t) < 160 and "?" not in t and any(c in t for c in CLOSERS):
+        return False
+    has_marker = (any(m in t for m in PROBLEM_MARKERS)
+                  or bool(NEGATED_VERB.search(t)))
+    if has_marker:
+        return True
     if "?" in t:
         return True
-    return any(t.startswith(w + " ") for w in QUESTION_WORDS)
+    if any(t.startswith(w + " ") for w in QUESTION_WORDS):
+        return True
+    # Short and grateful: someone closing a thread, not opening one.
+    if len(t) < 120 and any(c in t for c in CLOSERS):
+        return False
+    return False
 
 
 def fetch_messages(channel_id: str, after: str | None, hard_cap: int) -> list[dict]:
