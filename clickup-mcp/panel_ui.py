@@ -534,16 +534,23 @@ tr.qrow:hover > td { background:var(--surface2); }
 tr.qrow.kfocus > td { background:var(--accent-bg); }
 tr.qrow.kfocus > td:first-child { box-shadow:inset 3px 0 0 var(--accent); }
 tr.qrow[aria-expanded="true"] > td { background:var(--surface2); }
-/* Expanded, the row is just an identity header: the snippet, system,
+/* Expanded, the row is just the card's title bar: the snippet, system,
    channel, date and actions all reappear inside the panel below, and
-   showing them twice made the card read as noise. visibility, not display:
-   a hidden <td> would change the cell count and break column alignment for
-   every other row. */
-tr.qrow[aria-expanded="true"] > td:nth-child(3) .snip,
-tr.qrow[aria-expanded="true"] > td:nth-child(4),
-tr.qrow[aria-expanded="true"] > td:nth-child(5),
-tr.qrow[aria-expanded="true"] > td:nth-child(6),
+   showing them twice made the card read as noise.
+   The CONTENT is hidden, never the <td>: hiding a cell takes its background
+   with it and punched a lighter rectangle through the row, and hiding it
+   with display would change the cell count and break every other row's
+   column alignment. */
+tr.qrow[aria-expanded="true"] .snip,
+tr.qrow[aria-expanded="true"] .cval,
+tr.qrow[aria-expanded="true"] .chn,
 tr.qrow[aria-expanded="true"] .rowacts { visibility:hidden; }
+/* Title bar and panel are one surface: no rule between them, and a rounded
+   accent edge marks where the card starts. */
+tr.qrow[aria-expanded="true"] > td { border-bottom-color:transparent; }
+tr.qrow[aria-expanded="true"] > td:first-child {
+  box-shadow:inset 3px 0 0 var(--accent); }
+tr.qdet.open > td { box-shadow:inset 3px 0 0 var(--accent); }
 .agew { color:var(--warn); }
 .agec { color:var(--crit); font-weight:650; }
 .uc { display:flex; gap:var(--s2); align-items:center; min-width:132px; }
@@ -661,6 +668,8 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
 .aiout pre { margin:0 0 var(--s3); white-space:pre-wrap; font-family:inherit;
   line-height:1.55; }
 .aimiss { background:var(--warn-bg); color:var(--warn); border-radius:var(--r-sm);
+  padding:var(--s2) var(--s3); font-size:var(--t-sm); margin-bottom:var(--s2); }
+.ainote { background:var(--surface2); color:var(--ink2); border-radius:var(--r-sm);
   padding:var(--s2) var(--s3); font-size:var(--t-sm); margin-bottom:var(--s2); }
 .aisrc { color:var(--ink3); font-family:var(--mono); font-size:var(--t-2xs);
   margin-bottom:var(--s3); word-break:break-all; }
@@ -1295,8 +1304,10 @@ function aiRender(det, mode, s, btn) {
   }
   if (s.missing) {
     var miss = document.createElement("div");
-    miss.className = "aimiss";
-    miss.textContent = (s.answer ? "Not in the vault: " : "") + s.missing;
+    var explains = mode === "search" && s.answer;
+    miss.className = explains ? "ainote" : "aimiss";
+    miss.textContent = explains ? "Why this matches: " + s.missing
+      : (s.answer ? "Not in the vault: " : "") + s.missing;
     out.appendChild(miss);
   }
   if (s.sources && s.sources.length) {
@@ -1858,9 +1869,9 @@ def _question_rows(questions: list) -> str:
             f'<td class="stcell">{_pill(q["status"])}{_diff_pill(q)}</td>'
             f'<td><div class="qcell">{_mini_thumb(q)}'
             f'<div class="snip">{escape(q["text"][:230])}</div></div></td>'
-            f'<td>{escape(sys_label)}</td>'
+            f'<td><span class="cval">{escape(sys_label)}</span></td>'
             f'<td>{_chn(q["channel"])}</td>'
-            f'<td class="num">{q["date"]}</td>'
+            f'<td class="num"><span class="cval">{q["date"]}</span></td>'
             f'<td class="acts"><span class="rowacts">'
             f'<span class="alink" data-act="suggest" title="Search your notes and past answers">'
             f'{_icon("sparkle", 13)}Suggest</span>'
