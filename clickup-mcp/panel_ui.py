@@ -578,6 +578,12 @@ tr.qdet.open > td { box-shadow:inset 3px 0 0 var(--accent); }
 .qthumb { flex:none; width:48px; height:27px; border-radius:var(--r-xs);
   overflow:hidden; background:var(--surface3); }
 .qthumb img { width:100%; height:100%; object-fit:cover; display:block; }
+.idcell { width:1%; white-space:nowrap; }
+.qid { font-family:var(--mono); font-size:var(--t-xs); color:var(--ink3);
+  background:var(--surface2); border:1px solid var(--line2);
+  border-radius:var(--r-xs); padding:2px 7px; cursor:pointer;
+  transition:color var(--dur) var(--ease), border-color var(--dur) var(--ease); }
+.qid:hover { color:var(--accent); border-color:var(--accent-line); }
 .stcell { white-space:nowrap; }
 .dpill { display:inline-flex; align-items:center; gap:4px; margin-left:6px;
   padding:2px 7px; border-radius:var(--r-full); font-size:var(--t-2xs);
@@ -1854,7 +1860,8 @@ def _question_rows(questions: list) -> str:
         sys_label = q["system_name"] if q["system"] != "-" else "catalog wide"
         sub = '<span class="m">subscriber</span>' if q["subscriber"] == "yes" else ""
         txt = escape(
-            " ".join((q["who"], q["text"], sys_label, q["channel"], q["status"])).lower(),
+            " ".join((q["code"], q["who"], q["text"], sys_label,
+                      q["channel"], q["status"])).lower(),
             quote=True)
         qid = escape(q["id"], quote=True)
 
@@ -1864,6 +1871,10 @@ def _question_rows(questions: list) -> str:
             f' data-sys="{escape(q["system"], quote=True)}"'
             f' data-date="{escape(q["date"], quote=True)}"'
             f' data-who="{escape(q["who"].lower(), quote=True)}" data-df="{escape(q.get("difficulty", ""), quote=True)}" data-txt="{txt}">'
+            f'<td class="idcell"><span class="qid" '
+            f'data-copy="{escape(q["code"], quote=True)}" '
+            f'title="Question code, stable across rebuilds. Click to copy.">'
+            f'{escape(q["code"])}</span></td>'
             f'<td><span class="uc">{_avatar(q["who"])}'
             f'<span><span class="n">{escape(q["who"])}</span><br>{sub}</span></span></td>'
             f'<td class="stcell">{_pill(q["status"])}{_diff_pill(q)}</td>'
@@ -1880,7 +1891,9 @@ def _question_rows(questions: list) -> str:
             f'</span></td></tr>'
         )
 
-        prov = [f'{_chn(q["channel"])}', f'<span class="num">{q["date"]}</span>']
+        prov = [f'<span class="qid" data-copy="{escape(q["code"], quote=True)}">'
+                f'{escape(q["code"])}</span>',
+                f'{_chn(q["channel"])}', f'<span class="num">{q["date"]}</span>']
         copy_target = _safe_url(q.get("video_url", ""))
         if q.get("source"):
             prov.append(f'<span class="num">{escape(q["source"])}</span>')
@@ -1911,7 +1924,7 @@ def _question_rows(questions: list) -> str:
                           f'{escape(q["channel"])}</b>{escape(q["reply"])}</div>')
 
         rows.append(
-            f'<tr class="qdet hide" data-id="{qid}"><td colspan="7">'
+            f'<tr class="qdet hide" data-id="{qid}"><td colspan="8">'
             f'<div class="detwrap"><div class="detinner"><div class="det">'
             f'{vidcard}'
             f'<div class="full">{escape(q["text"])}</div>'
@@ -1940,7 +1953,7 @@ def _question_rows(questions: list) -> str:
 
 def _questions_card(d: dict) -> str:
     empty = (
-        f'<tr><td colspan="7"><div class="emptybox">'
+        f'<tr><td colspan="8"><div class="emptybox">'
         f'<span class="eic">{_icon("inbox", 20)}</span>'
         f'<b>No questions logged yet</b>'
         f'<p>They arrive automatically from collect_youtube.py, or by hand in '
@@ -1954,6 +1967,7 @@ def _questions_card(d: dict) -> str:
         f'j/k navigate &middot; n next open</span></h2>'
         f'{_filters(d["questions"])}'
         f'<div class="scroll"><table aria-label="Incoming questions"><thead><tr>'
+        f'<th scope="col">ID</th>'
         f'<th scope="col" data-sort="who" aria-sort="none">User{arrow}</th>'
         f'<th scope="col" data-sort="status" aria-sort="none">Status{arrow}</th>'
         f'<th scope="col">Question</th>'

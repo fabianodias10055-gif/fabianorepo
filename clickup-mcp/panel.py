@@ -254,6 +254,28 @@ def _derive_id(date: str, who: str, source: str, text: str) -> str:
     return "local:" + hashlib.sha1(f"{date}|{who}|{text}".encode()).hexdigest()[:12]
 
 
+# Crockford's alphabet: no I, L, O or U, so a code read off the screen and
+# typed back cannot turn into a different one.
+_B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def short_id(qid: str, length: int = 6) -> str:
+    """A short human code for a question, derived from its internal id.
+
+    Derived, never assigned: a counter would renumber every question each
+    time one is added, and the whole point of the code is that it still
+    means the same question tomorrow. For a YouTube question the internal id
+    is the comment id, so the code is permanent; for a hand-typed one it is
+    a hash of date, author and text, so editing the text mints a new code.
+    """
+    h = int(hashlib.sha1(qid.encode()).hexdigest(), 16)
+    out = []
+    for _ in range(length):
+        out.append(_B32[h % 32])
+        h //= 32
+    return "Q-" + "".join(reversed(out))
+
+
 def _mask(raw: str, pattern: str, flags=re.S) -> str:
     """Blank out a region length-for-length (spaces, newlines kept), so byte
     offsets found in the masked copy still point at the right place in the
@@ -331,6 +353,7 @@ def parse_questions() -> list[dict]:
         system = fields.get("system", "-")
         out.append({
             "id": qid,
+            "code": short_id(qid),
             "date": date,
             "who": who,
             "channel": fields.get("channel", "unknown"),
@@ -400,6 +423,7 @@ def append_answered_log(question: dict, answer: str, posted_to_youtube: bool) ->
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     block = (
         f"\n### {stamp} reply to {question['who']}\n"
+        f"question: {question.get('code', '')}\n"
         f"channel: {question['channel']}\n"
         f"system: {question['system']}{where}\n"
         f"posted_to_platform: {'yes' if posted_to_youtube else 'no'}\n\n"
@@ -1279,6 +1303,15 @@ def scan() -> dict:
     # (or before the collector has ever run), so the two numbers never argue
     # with the Gaps section, which is built from the same count.
     questions = parse_questions()
+
+    # A code is only useful if it points at exactly one question; say so
+    # loudly rather than let two rows quietly share one.
+    codes: dict[str, str] = {}
+    for q in questions:
+        clash = codes.get(q["code"])
+        if clash and clash != q["id"]:
+            print(f"WARNING: question code {q['code']} is shared by two questions")
+        codes[q["code"]] = q["id"]
 
     # How much the vault already covers each question, so the page can say
     # easy / medium / hard instead of only "unanswered".
