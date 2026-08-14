@@ -40,6 +40,13 @@ BASE_DIR = Path(__file__).resolve().parent
 if load_dotenv:
     load_dotenv(BASE_DIR / ".env")
 
+
+try:
+    from secrets_store import get_secret
+except ImportError:                      # standalone copy without the module
+    def get_secret(name: str, default: str = "") -> str:
+        return os.getenv(name, default)
+
 VAULT = Path(r"F:\LocoDev Vault")
 STATE_PATH = BASE_DIR / ".discord_state.json"
 API = "https://discord.com/api/v10"
@@ -70,7 +77,7 @@ QUESTION_WORDS = (
 
 
 def _headers() -> dict:
-    token = os.getenv("DISCORD_BOT_TOKEN", "").strip()
+    token = get_secret("DISCORD_BOT_TOKEN")
     return {
         "Authorization": f"Bot {token}",
         "User-Agent": "LocoDevPanel (https://locodev.dev, 1.0)",
@@ -565,7 +572,7 @@ def main() -> int:
     args = ap.parse_args()
 
     VAULT = Path(args.vault)
-    if not os.getenv("DISCORD_BOT_TOKEN", "").strip():
+    if not get_secret("DISCORD_BOT_TOKEN"):
         print("ERROR: DISCORD_BOT_TOKEN is not set in clickup-mcp/.env")
         print("Use the same token the bot runs with (Railway > the bot service >")
         print("Variables > DISCORD_BOT_TOKEN). Reading needs no new bot.")

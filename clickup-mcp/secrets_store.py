@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Read secrets from the Windows credential store instead of a plaintext file.
+
+Everything that can act on your behalf lived together in one .env: the
+Discord bot token, the YouTube refresh token, the ClickUp token, the
+shortener admin secret. Any process running as this user could read that
+file, and every one of those values is enough to post as you.
+
+The Windows credential store keeps them encrypted under the account, so a
+file copied off the disk is worth nothing without the account, and a stray
+`cat .env` shows names rather than credentials.
+
+Config stays in .env. Channel ids, model names and budgets are not secrets
+and are far easier to read and edit as text.
+
+Usage:
+    python secrets_store.py --status          what lives where
+    python secrets_store.py --migrate --dry-run
+    python secrets_store.py --migrate         move them, then blank the file
+    python secrets_store.py --set NAME        type one in without echoing it
+"""
+
+import argparse
+import os
+import re
+import sys
+from getpass import getpass
+from pathlib import Path
+
+try:
+    import keyring
+except ImportError:
+    keyring = None
+
+BASE_DIR = Path(__file__).resolve().parent
+ENV_PATH = BASE_DIR / ".env"
+SERVICE = "locodev-panel"
+
+# Values that can act on your behalf. Everything else in .env is settings.
+SECRET_KEYS = (
+    "CLICKUP_API_TOKEN",
+    "YOUTUBE_API_KEY",
+    "YOUTUBE_OAUTH_CLIENT_ID",
+    "YOUTUBE_OAUTH_CLIENT_SECRET",
+    "YOUTUBE_REFRESH_TOKEN",
+    "DISCORD_BOT_TOKEN",
+    "LOCODEV_ADMIN_SECRET",
+    "RESEND_API_KEY",
+    "DISCORD_WEBHOOK_URL",
+    "ANTHROPIC_API_KEY",
+)
+
+_cache: dict[str, str] = {}
+
+
+def get_secret(name: str, default: str = "") -> str:
+    """A secret, from the environment first and the credential store next.
+
+    Environment first so a one-off override still works and so nothing
+    breaks for anyone who has not migrated; the store is where they should
+    live. Cached because the panel asks for the same token on every request
+    and each lookup is a Windows API call.
+    """
+    val = os.getenv(name, "").strip()
+    # A value that is only a comment came from a mangled .env line, not from
+    # anyone's credential; treating it as one produced auth errors that
+    # looked like a revoked token.
+    if val and not val.startswith("#"):
+        return val
+    if name in _cache:
+        return _cache[name]
+    if keyring is None:
+        return default
+    try:
+        stored = keyring.get_password(SERVICE, name) or ""
+    except Exception:  # noqa: BLE001 - a locked store must not crash a collector
+        stored = ""
+    stored = stored.strip()
+    if stored:
+        _cache[name] = stored
+    return stored or default
+
+
+def set_secret(name: str, value: str) -> bool:
+    if keyring is None:
+        return False
+    keyring.set_password(SERVICE, name, value)
+    _cache[name] = value
+    return True
+
+
+def read_env() -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not ENV_PATH.is_file():
+        return out
+    for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"^([A-Z_][A-Z0-9_]*)=(.*)$", line.strip())
+        if m:
+            out[m.group(1)] = m.group(2).strip()
+    return out
+
+
+def blank_in_env(names: list[str]) -> int:
+    """Leave the key, drop the value, say where it went.
+
+    Deleting the line would hide that the setting exists at all; a reader
+    should be able to see what the panel expects and where to find it.
+    """
+    if not ENV_PATH.is_file():
+        return 0
+    lines = ENV_PATH.read_text(encoding="utf-8").splitlines()
+    done = 0
+    for i, line in enumerate(lines):
+        m = re.match(r"^([A-Z_][A-Z0-9_]*)=(.*)$", line.strip())
+        if m and m.group(1) in names and m.group(2).strip():
+            # The note goes above, not after the '=': python-dotenv reads an
+            # inline comment as part of the value, so "KEY=  # moved" made
+            # the comment itself the credential and every call failed auth.
+            lines[i] = (f"# moved to Windows Credential Manager ({SERVICE})"
+                        + "\n" + f"{m.group(1)}=")
+            done += 1
+    ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return done
+
+
+def status() -> None:
+    env = read_env()
+    print(f"credential store: {'available' if keyring else 'keyring NOT installed'}")
+    if keyring:
+        print(f"backend: {keyring.get_keyring().__class__.__name__}")
+    print(f"service name: {SERVICE}\n")
+    print(f"{'secret':<30} {'.env':<12} {'store':<10}")
+    print("-" * 54)
+    for k in SECRET_KEYS:
+        in_env = "plaintext" if env.get(k) else "-"
+        stored = ""
+        if keyring:
+            try:
+                stored = keyring.get_password(SERVICE, k) or ""
+            except Exception:  # noqa: BLE001
+                stored = ""
+        print(f"{k:<30} {in_env:<12} {'yes' if stored else '-':<10}")
+    extra = [k for k in env if k not in SECRET_KEYS and env[k]]
+    print(f"\nsettings left in .env as plain text: {len(extra)}")
+    print("  " + ", ".join(sorted(extra)))
+
+
+def migrate(dry: bool) -> int:
+    if keyring is None:
+        print("ERROR: keyring is not installed. pip install keyring")
+        return 1
+    env = read_env()
+    moving = [k for k in SECRET_KEYS if env.get(k)]
+    if not moving:
+        print("nothing to move: no secret in .env carries a value")
+        return 0
+
+    print(f"secrets to move: {len(moving)}")
+    for k in moving:
+        print(f"  {k}: {len(env[k])} chars")
+
+    if dry:
+        print("\n(simulation: nothing written, nothing blanked)")
+        return 0
+
+    verified = []
+    for k in moving:
+        try:
+            keyring.set_password(SERVICE, k, env[k])
+        except Exception as exc:  # noqa: BLE001
+            print(f"  FAILED to store {k}: {type(exc).__name__}")
+            continue
+        # Read it back before touching the file: a secret blanked from .env
+        # and missing from the store is a credential lost, not moved.
+        if (keyring.get_password(SERVICE, k) or "") == env[k]:
+            verified.append(k)
+        else:
+            print(f"  FAILED to verify {k}; leaving it in .env")
+
+    print(f"\nstored and verified: {len(verified)} of {len(moving)}")
+    if verified:
+        n = blank_in_env(verified)
+        print(f"blanked in .env: {n}")
+    if len(verified) != len(moving):
+        print("Some secrets stayed in .env because they could not be verified.")
+        return 1
+    return 0
+
+
+def main() -> int:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--status", action="store_true")
+    ap.add_argument("--migrate", action="store_true")
+    ap.add_argument("--set", metavar="NAME")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    if args.set:
+        if keyring is None:
+            print("ERROR: keyring is not installed. pip install keyring")
+            return 1
+        value = getpass(f"value for {args.set} (not echoed): ").strip()
+        if not value:
+            print("nothing entered")
+            return 1
+        set_secret(args.set, value)
+        print(f"{args.set} stored in {SERVICE}")
+        return 0
+
+    if args.migrate:
+        return migrate(args.dry_run)
+
+    status()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

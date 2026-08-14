@@ -43,6 +43,13 @@ BASE_DIR = Path(__file__).resolve().parent
 if load_dotenv:
     load_dotenv(BASE_DIR / ".env")
 
+
+try:
+    from secrets_store import get_secret
+except ImportError:                      # standalone copy without the module
+    def get_secret(name: str, default: str = "") -> str:
+        return os.getenv(name, default)
+
 VAULT = Path(r"F:\LocoDev Vault")
 LEGACY_VAULT = Path(r"C:\Users\LocoDevPC\Documents\Vaults")
 PORT = 8765
@@ -1284,9 +1291,9 @@ def _youtube_access_token() -> str | None:
     Returns None when OAuth has never been set up; the caller treats that as
     "cannot post", not as an error, and says so plainly instead of pretending.
     """
-    refresh = os.getenv("YOUTUBE_REFRESH_TOKEN", "").strip()
-    client_id = os.getenv("YOUTUBE_OAUTH_CLIENT_ID", "").strip()
-    client_secret = os.getenv("YOUTUBE_OAUTH_CLIENT_SECRET", "").strip()
+    refresh = get_secret("YOUTUBE_REFRESH_TOKEN")
+    client_id = get_secret("YOUTUBE_OAUTH_CLIENT_ID")
+    client_secret = get_secret("YOUTUBE_OAUTH_CLIENT_SECRET")
     if not (refresh and client_id and client_secret):
         return None
 
@@ -1373,7 +1380,7 @@ def _admin_token() -> tuple[str, str]:
     """(token, error). error is '' on success, else a category the page can
     show honestly: not-configured / auth / network / http-<code>. These stay
     separate on purpose; a network failure must never read as a login one."""
-    secret = os.getenv("LOCODEV_ADMIN_SECRET", "").strip()
+    secret = get_secret("LOCODEV_ADMIN_SECRET")
     if not secret:
         return "", "not-configured"
     if _admin["token"] and time.time() - _admin["token_at"] < ADMIN_TOKEN_MAX_AGE:
@@ -1456,7 +1463,7 @@ def discord_target(question: dict) -> tuple[str, str] | None:
 
 
 def post_discord_reply(channel_id: str, message_id: str, text: str) -> tuple[bool, str]:
-    token = os.getenv("DISCORD_BOT_TOKEN", "").strip()
+    token = get_secret("DISCORD_BOT_TOKEN")
     if not token:
         return False, ("Discord posting is not set up. The vault was still "
                        "updated. Put DISCORD_BOT_TOKEN in clickup-mcp/.env.")
@@ -1501,7 +1508,7 @@ def question_context(question: dict, span: int = 12) -> dict:
     target = discord_target(question)
     if target:
         channel_id, message_id = target
-        token = os.getenv("DISCORD_BOT_TOKEN", "").strip()
+        token = get_secret("DISCORD_BOT_TOKEN")
         if not token:
             return {"ok": False, "error": "Discord token not set"}
         url = (f"{DISCORD_API}/channels/{channel_id}/messages"

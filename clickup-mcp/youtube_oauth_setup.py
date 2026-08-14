@@ -117,6 +117,24 @@ def exchange_code(client_id: str, client_secret: str, redirect_uri: str, code: s
 
 
 def save_to_env(client_id: str, client_secret: str, refresh_token: str) -> None:
+    """Straight into the credential store when it is available.
+
+    Writing a refresh token back into a plaintext file would undo the point
+    of having moved the others out of one.
+    """
+    try:
+        from secrets_store import set_secret
+        stored = all(set_secret(k, v) for k, v in (
+            ("YOUTUBE_OAUTH_CLIENT_ID", client_id),
+            ("YOUTUBE_OAUTH_CLIENT_SECRET", client_secret),
+            ("YOUTUBE_REFRESH_TOKEN", refresh_token),
+        ))
+        if stored:
+            print("Saved to Windows Credential Manager (locodev-panel).")
+            return
+    except Exception:  # noqa: BLE001 - fall back to the file below
+        pass
+
     lines = ENV_PATH.read_text(encoding="utf-8").splitlines() if ENV_PATH.is_file() else []
     values = {
         "YOUTUBE_OAUTH_CLIENT_ID": client_id,

@@ -42,6 +42,13 @@ if load_dotenv:
     load_dotenv(BASE_DIR.parent / "discord-feedback-bot" / ".env")
 
 API = "https://www.googleapis.com/youtube/v3"
+
+try:
+    from secrets_store import get_secret
+except ImportError:                      # standalone copy without the module
+    def get_secret(name: str, default: str = "") -> str:
+        return os.getenv(name, default)
+
 VAULT = Path(r"F:\LocoDev Vault")
 CHANNEL_ID = "UCr8NttLeGyLd6m4qVS2Zb8g"  # LocoDev
 UA = "LocoDev-KB-Collector/1.0"
@@ -61,7 +68,7 @@ _quota = {"units": 0}
 
 
 def api_get(endpoint: str, params: dict, cost: int = 1) -> dict:
-    params = {**params, "key": os.getenv("YOUTUBE_API_KEY", "")}
+    params = {**params, "key": get_secret("YOUTUBE_API_KEY")}
     req = request.Request(f"{API}/{endpoint}?{parse.urlencode(params)}",
                           headers={"User-Agent": UA})
     try:
@@ -604,7 +611,7 @@ def main() -> int:
         print(f"questions linked to a video: {backfill_provenance(args.dry_run)}")
         return 0
 
-    if not os.getenv("YOUTUBE_API_KEY", "").strip():
+    if not get_secret("YOUTUBE_API_KEY"):
         print("ERROR: YOUTUBE_API_KEY is not set.")
         print("Put it in clickup-mcp/.env (the bot's key works: it only needs read access).")
         print("Get one at console.cloud.google.com > APIs > YouTube Data API v3 > Credentials.")

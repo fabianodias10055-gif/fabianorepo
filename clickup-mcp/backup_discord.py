@@ -33,6 +33,7 @@ from urllib import error, request
 
 from collect_discord import (api_get, author_handle, channel_info,
                              fetch_messages, forum_threads, FORUM_TYPES)
+from secrets_store import get_secret
 
 VAULT = Path(r"F:\LocoDev Vault")
 BASE_DIR = Path(__file__).resolve().parent
@@ -273,7 +274,7 @@ def main() -> int:
 
     VAULT = Path(args.vault)
     guild = os.getenv("DISCORD_GUILD_ID", "").strip()
-    if not os.getenv("DISCORD_BOT_TOKEN", "").strip() or not guild:
+    if not get_secret("DISCORD_BOT_TOKEN") or not guild:
         print("ERROR: DISCORD_BOT_TOKEN and DISCORD_GUILD_ID must be set in .env")
         return 1
     if not VAULT.is_dir():
