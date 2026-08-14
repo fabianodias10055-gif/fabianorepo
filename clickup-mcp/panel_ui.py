@@ -542,6 +542,7 @@ tr.qrow[aria-expanded="true"] > td { background:var(--surface2); }
    with display would change the cell count and break every other row's
    column alignment. */
 tr.qrow[aria-expanded="true"] .snip,
+tr.qrow[aria-expanded="true"] .qid,
 tr.qrow[aria-expanded="true"] .cval,
 tr.qrow[aria-expanded="true"] .chn,
 tr.qrow[aria-expanded="true"] .rowacts { visibility:hidden; }
@@ -608,7 +609,9 @@ a.vidcard:hover { border-color:var(--accent); background:var(--accent-bg); }
   letter-spacing:-.01em; }
 .vidcard .vmeta > span { display:inline-flex; align-items:center; gap:5px;
   color:var(--accent); font-size:var(--t-sm); font-weight:600; }
-.vidcard.novid { color:var(--ink2); }
+.vidcard.novid { color:var(--ink2); border-style:dashed; }
+.vidcard.novid .vmeta b { font-size:var(--t-base); color:var(--ink2); }
+.vidcard.novid .vmeta > span { color:var(--ink3); font-weight:500; }
 .chn { display:inline-flex; gap:6px; align-items:center; color:var(--ink2);
   font-size:var(--t-sm); }
 .cd { width:8px; height:8px; border-radius:var(--r-full); flex:none; }
@@ -1915,7 +1918,15 @@ def _question_rows(questions: list) -> str:
                 f'target="_blank" rel="noopener">{inner}</a>'
                 if copy_target else f'<div class="vidcard">{inner}</div>')
         elif q.get("video"):
-            vidcard = f'<div class="vidcard novid"><span class="vmeta"><b>{escape(q["video"])}</b></span></div>'
+            vidcard = (f'<div class="vidcard novid"><span class="vmeta">'
+                       f'<b>{escape(q["video"])}</b></span></div>')
+        elif q["channel"] == "youtube":
+            # Hand-logged questions carry no video. Absence has to be legible
+            # and actionable, not an empty space that reads as a bug.
+            vidcard = (f'<div class="vidcard novid"><span class="vmeta">'
+                       f'<b>No video linked</b><span>logged by hand: add '
+                       f'video_id: to this block in the vault to link it'
+                       f'</span></span></div>')
         copy_btn = (f'<button class="btn tiny" data-copy="{escape(copy_target, quote=True)}">'
                     f'{_icon("copy", 12)}Copy link</button>') if copy_target else ""
         your_reply = ""

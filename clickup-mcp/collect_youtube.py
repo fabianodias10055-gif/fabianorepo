@@ -437,6 +437,78 @@ def reconcile_answered(rows: list[dict], dry: bool) -> int:
     return flipped
 
 
+_COMMENT_LINE = re.compile(r"^- \*\*(.+?)\*\* \(([^)]*)\): (.*)$")
+
+
+def backfill_provenance(dry: bool) -> int:
+    """Give hand-logged YouTube questions the video they came from.
+
+    Questions typed by hand record the channel but not the video, so their
+    card has no thumbnail and no link and you cannot tell which tutorial the
+    person is talking about. Every collected comment is already in the vault,
+    so this matches on author plus text and writes the video fields back into
+    the hand-written block. Offline: it reads the comment notes, never the
+    API, so it costs nothing and can run any time.
+    """
+    index: dict[str, list[tuple[str, str, set]]] = {}
+    for note in (VAULT / "YouTube" / "Videos").glob("*/03 - Comments.md"):
+        raw = note.read_text(encoding="utf-8", errors="replace")
+        vid = re.search(r"^video_id:\s*(\S+)", raw, re.M)
+        if not vid:
+            continue
+        for line in raw.splitlines():
+            m = _COMMENT_LINE.match(line)
+            if m:
+                index.setdefault(_norm_author(m.group(1)), []).append(
+                    (vid.group(1), note.parent.name, _words(m.group(3))))
+
+    filled = 0
+    for note in sorted((VAULT / "Inbox").glob("*.md")):
+        if note.name in ("01 - From YouTube.md", "02 - Answered.md"):
+            continue
+        raw = note.read_text(encoding="utf-8", errors="replace")
+        heads = list(re.finditer(r"(?m)^###\s+\d{4}-\d{2}-\d{2}\s+(.+?)\s*$", raw))
+        # Reverse order keeps earlier byte offsets valid across edits.
+        for i in range(len(heads) - 1, -1, -1):
+            start = heads[i].end()
+            end = heads[i + 1].start() if i + 1 < len(heads) else len(raw)
+            block = raw[start:end]
+            if not re.search(r"^channel:[ \t]*youtube", block, re.M):
+                continue
+            if re.search(r"^video_id:[ \t]*\S", block, re.M):
+                continue
+
+            prose = " ".join(
+                l.strip() for l in block.splitlines()
+                if l.strip() and not re.match(r"^[a-z_]+:[ \t]", l.strip())
+            )
+            qw = _words(prose)
+            best = (0.0, None)
+            for vid, folder, cw in index.get(_norm_author(heads[i].group(1)), ()):
+                if not cw or not qw:
+                    continue
+                j = len(qw & cw) / len(qw | cw)
+                if j > best[0]:
+                    best = (j, (vid, folder))
+            if best[0] < 0.35 or not best[1]:
+                continue
+
+            vid, folder = best[1]
+            add = (f"video_id: {vid}\n"
+                   f"video: {folder}\n"
+                   f"video_url: https://www.youtube.com/watch?v={vid}\n")
+            new_block, n = re.subn(r"^(subscriber:[ \t]*.*)$", r"\1\n" + add.rstrip(),
+                                   block, count=1, flags=re.M)
+            if not n:
+                continue
+            raw = raw[:start] + new_block + raw[end:]
+            filled += 1
+            print(f"  linked {heads[i].group(1)} to {folder} ({best[0]:.0%} match)")
+        if filled and not dry:
+            note.write_text(raw, encoding="utf-8")
+    return filled
+
+
 def write_inbox(rows: list[dict], dry: bool) -> int:
     """Questions go to their own inbox file: unanswered ones as no-source,
     ones you already answered on YouTube as answered, with your reply kept.
@@ -519,9 +591,18 @@ def main() -> int:
     ap.add_argument("--force", action="store_true",
                     help="refetch comments even when the count has not changed")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--backfill-only", action="store_true",
+                    help="only link hand-logged questions to their video, no API calls")
     args = ap.parse_args()
 
     VAULT = Path(args.vault)
+
+    if args.backfill_only:
+        if not VAULT.is_dir():
+            print(f"ERROR: vault not found at {VAULT}")
+            return 1
+        print(f"questions linked to a video: {backfill_provenance(args.dry_run)}")
+        return 0
 
     if not os.getenv("YOUTUBE_API_KEY", "").strip():
         print("ERROR: YOUTUBE_API_KEY is not set.")
