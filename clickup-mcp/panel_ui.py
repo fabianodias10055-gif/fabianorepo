@@ -1049,6 +1049,17 @@ FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' "
 
 JS = """
 var EPOCH = __EPOCH__, LIVE = __LIVE__, PAGE = __PAGE__;
+var PANEL_TOKEN = "__TOKEN__";
+/* Every mutating call carries the launch token. A cross-site page can send
+   a request but cannot read this file, so it cannot forge one. */
+var _fetch = window.fetch.bind(window);
+window.fetch = function (url, opts) {
+  opts = opts || {};
+  if (typeof url === "string" && url.charAt(0) === "/") {
+    opts.headers = Object.assign({}, opts.headers, { "X-Panel-Token": PANEL_TOKEN });
+  }
+  return _fetch(url, opts);
+};
 var AI_CACHE = __AI_CACHE__;
 var QDATA = __QDATA__;
 function $(s, r) { return (r || document).querySelector(s); }
@@ -2841,7 +2852,8 @@ def _header(d: dict, live: bool) -> str:
     )
 
 
-def render_html(d: dict, live: bool, facets: list, instrumentation: list) -> str:
+def render_html(d: dict, live: bool, facets: list, instrumentation: list,
+                token: str = "") -> str:
     import json as _json
 
     def embed(obj) -> str:
@@ -2856,6 +2868,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list) -> str
     js = (JS.replace("__EPOCH__", str(d["epoch"]))
             .replace("__LIVE__", "true" if live else "false")
             .replace("__PAGE__", str(PAGE))
+            .replace("__TOKEN__", token)
             .replace("__AI_CACHE__", embed(d.get("ai_cache") or {}))
             .replace("__QDATA__", embed(_question_payload(d["questions"]))))
 

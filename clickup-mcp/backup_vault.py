@@ -50,7 +50,7 @@ def sanity(src: Path) -> tuple[bool, str]:
     return True, f"{n:,} files"
 
 
-def mirror(src: Path, dest: Path, dry: bool) -> tuple[int, str]:
+def mirror(src: Path, dest: Path, dry: bool, media: bool = False) -> tuple[int, str]:
     """robocopy, because it is incremental, restartable and handles the
     long paths and odd characters this vault is full of."""
     args = [
@@ -60,6 +60,12 @@ def mirror(src: Path, dest: Path, dry: bool) -> tuple[int, str]:
         "/XD", "Panel",          # generated output, rebuilt in seconds
         "/XF", "*.tmp", "~$*",
     ]
+    if not media:
+        # The Discord screenshots are 1.1 GB of the vault's 1.11 GB. Leaving
+        # them out turns the backup into a few megabytes of text that can run
+        # every hour; the images stay on disk and can be re-fetched from
+        # Discord by the archiver if that copy is ever lost.
+        args += ["/XD", "media"]
     if dry:
         args.append("/L")
     proc = subprocess.run(args, capture_output=True, text=True,
@@ -105,6 +111,11 @@ def write_stamp(dest: Path, src: Path, stats: dict, seconds: float, dry: bool) -
                          f"{s['copied']} copied, {s['skipped']} unchanged")
     lines += [
         "",
+        ("The Discord screenshots under `media/` are deliberately left out: "
+         "they are 1.1 GB against a few megabytes of text, and the archiver "
+         "can fetch them again from Discord. Run with `--media` to include "
+         "them."),
+        "",
         "This is a mirror, not an archive: anything deleted in the vault is "
         "deleted here on the next run. Google Drive keeps its own 30 day "
         "version history and trash, which is what protects against an "
@@ -130,6 +141,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--vault", default=str(VAULT))
     ap.add_argument("--dest", default=str(DEST))
+    ap.add_argument("--media", action="store_true",
+                    help="include the downloaded Discord images (adds ~1.1 GB)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -147,7 +160,7 @@ def main() -> int:
     print(f"destination: {dest}")
 
     t0 = time.time()
-    code, out = mirror(src, dest, args.dry_run)
+    code, out = mirror(src, dest, args.dry_run, args.media)
     stats = parse_summary(out)
     took = time.time() - t0
 

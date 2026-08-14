@@ -21,6 +21,7 @@ import http.server
 import json
 import os
 import re
+import secrets
 import socketserver
 import sys
 import threading
@@ -875,6 +876,31 @@ AI_SEARCH_SCHEMA = {
     "required": ["found", "passage", "sources", "confidence", "why"],
 }
 
+# A per-call budget is not a budget: nothing stopped a loop from starting
+# hundreds of jobs, each individually within its dollar cap.
+AI_MAX_CONCURRENT = int(os.getenv("PANEL_AI_MAX_CONCURRENT", "2"))
+AI_DAILY_USD = float(os.getenv("PANEL_AI_DAILY_USD", "10"))
+_ai_spend = {"day": "", "usd": 0.0}
+
+
+def _spend_room(cost: float = 0.0) -> tuple[bool, str]:
+    """Whether another job fits today's ceiling, and book it if it does."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _ai_lock:
+        if _ai_spend["day"] != today:
+            _ai_spend.update(day=today, usd=0.0)
+        if cost:
+            _ai_spend["usd"] += cost
+            return True, ""
+        if _ai_spend["usd"] >= AI_DAILY_USD:
+            return False, (f"daily AI ceiling reached "
+                           f"(${_ai_spend['usd']:.2f} of ${AI_DAILY_USD:.2f})")
+        running = sum(1 for j in _ai_jobs.values() if j.get("state") == "running")
+        if running >= AI_MAX_CONCURRENT:
+            return False, f"{running} AI jobs already running"
+    return True, ""
+
+
 _ai_jobs: dict[str, dict] = {}
 _ai_lock = threading.Lock()
 
@@ -1134,6 +1160,26 @@ def _normalize(mode: str, data: dict) -> dict:
     }
 
 
+def _child_env() -> dict:
+    """What the AI subprocess is allowed to see.
+
+    panel.py loads the whole .env, so the child inherited the ClickUp token,
+    the Discord bot token, the YouTube refresh token and the shortener admin
+    secret. It needs none of them: a prompt-injected model that talks its way
+    into printing its own environment should find nothing worth stealing.
+    """
+    keep = ("PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP",
+            "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "HOME", "APPDATA",
+            "LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMDATA",
+            "PATHEXT", "NUMBER_OF_PROCESSORS", "OS", "LANG", "LC_ALL")
+    env = {k: v for k, v in os.environ.items() if k.upper() in keep}
+    # The CLI's own authentication and settings, nothing else.
+    for k, v in os.environ.items():
+        if k.upper().startswith(("CLAUDE_", "ANTHROPIC_")):
+            env[k] = v
+    return env
+
+
 def _run_ai(job_id: str, question: dict, mode: str = "draft") -> None:
     import subprocess
     started = time.time()
@@ -1166,6 +1212,7 @@ def _run_ai(job_id: str, question: dict, mode: str = "draft") -> None:
         proc = subprocess.run(
             cmd, cwd=str(VAULT), capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=AI_TIMEOUT,
+            env=_child_env(),
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except FileNotFoundError:
@@ -1193,7 +1240,10 @@ def _run_ai(job_id: str, question: dict, mode: str = "draft") -> None:
         return finish(state="error", error="Model did not return the requested JSON.",
                       cost=env.get("total_cost_usd"))
 
-    finish(state="done", cost=env.get("total_cost_usd"), **_normalize(mode, data))
+    cost = env.get("total_cost_usd")
+    if isinstance(cost, (int, float)):
+        _spend_room(float(cost))       # book it against today's ceiling
+    finish(state="done", cost=cost, **_normalize(mode, data))
 
 
 def start_ai_job(question: dict, mode: str = "draft") -> str:
@@ -1889,12 +1939,19 @@ def render_html(d: dict, live: bool) -> str:
     together with the static config the layout needs; splitting them keeps
     the data pipeline (scan/suggest/reply/serve) apart from presentation."""
     import panel_ui
-    return panel_ui.render_html(d, live, FACETS, INSTRUMENTATION)
+    return panel_ui.render_html(d, live, FACETS, INSTRUMENTATION, SESSION_TOKEN)
 
 
 # --------------------------------------------------------------------------
 # Build + watch
 # --------------------------------------------------------------------------
+
+# One secret per launch. A malicious page in the operator's browser can
+# POST to 127.0.0.1 without reading the response, so requiring a value it
+# cannot read is what closes cross-site request forgery against /reply,
+# /rebuild and the paid AI routes.
+SESSION_TOKEN = secrets.token_urlsafe(24)
+ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 
 _state = {"epoch": 0, "building": False}
 
@@ -2020,6 +2077,27 @@ def fingerprint() -> tuple:
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    def _host_ok(self) -> bool:
+        """Reject anything but loopback names.
+
+        A hostname the attacker controls can be pointed at 127.0.0.1 after
+        the page loads, which would make their script same-origin with this
+        server. Checking Host is what stops that rebinding.
+        """
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip()
+        return host in ALLOWED_HOSTS
+
+    def _origin_ok(self) -> bool:
+        origin = self.headers.get("Origin") or ""
+        if not origin:
+            return True                      # same-origin fetches send none
+        return any(origin == f"{scheme}://{h}:{self.server.server_address[1]}"
+                   for scheme in ("http", "https") for h in ALLOWED_HOSTS)
+
+    def _authorised(self) -> bool:
+        return (self._host_ok() and self._origin_ok()
+                and self.headers.get("X-Panel-Token") == SESSION_TOKEN)
+
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=str(VAULT / "Panel"), **kw)
 
@@ -2030,6 +2108,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_GET(self):  # noqa: N802
+        if not self._host_ok():
+            return self.send_error(421, "host not allowed")
         # self.path includes the query string; the page keeps its filter
         # state there ("/?st=no-source"), and that must still serve the
         # panel, never a directory listing of the Panel folder.
@@ -2048,6 +2128,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(body)
             return
         if self.path.startswith("/links.json"):
+            if self.headers.get("X-Panel-Token") != SESSION_TOKEN:
+                return self.send_error(403, "not authorised")
             body = json.dumps(fetch_link_telemetry()).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -2074,6 +2156,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):  # noqa: N802
+        # Every POST mutates the vault, spends money or posts publicly.
+        if not self._authorised():
+            return self._send_json({"ok": False, "error": "not authorised"}, 403)
+
         if self.path == "/rebuild":
             build(live=True)
             return self._send_json({"ok": True})
@@ -2091,6 +2177,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             })
 
         if self.path == "/suggest_ai":
+            room, why = _spend_room()
+            if not room:
+                return self._send_json({"ok": False, "error": why}, 429)
             payload = self._json_body()
             question = find_question_by_id(str(payload.get("id", "")))
             if not question:
@@ -2168,6 +2257,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             question = find_question_by_id(qid)
             if not question:
                 return self._send_json({"ok": False, "error": "question not found"}, 404)
+            # A repeated or concurrent request used to post the same reply
+            # again. A question already closed is not delivered twice.
+            if question["status"] == "answered" and not payload.get("force"):
+                return self._send_json({
+                    "ok": False,
+                    "error": "already answered; reopen it first to reply again",
+                }, 409)
 
             # Vault side always happens: this is the rigid part of the rule.
             # Posting to the platform is best-effort on top of it, never a
