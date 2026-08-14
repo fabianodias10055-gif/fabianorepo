@@ -2240,7 +2240,11 @@ def main() -> int:
             webbrowser.open(url)
         return 0
 
-    data = build(live=args.watch)
+    # A plain `python panel.py` next to a running watcher used to rewrite
+    # the page as a static file, so the live one lost its buttons until the
+    # next vault change. If something is already serving, build for it.
+    serving = args.watch or server_alive(args.port)
+    data = build(live=serving)
     out = VAULT / "Panel"
     print(f"panel built: {out / 'panel.html'}")
     print(f"note built:  {out / '00 - Operations Center.md'}")

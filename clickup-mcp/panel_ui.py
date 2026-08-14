@@ -1132,6 +1132,22 @@ function tickAgo() {
 tickAgo();
 setInterval(tickAgo, 30000);
 
+/* The LIVE flag records how the page was built, which is not the same as
+   how it is being served: a one-off rebuild while the watcher runs used to
+   leave a live page insisting it was a static file. One probe settles it. */
+if (!LIVE) {
+  fetch("/status.json", { cache: "no-store" })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (s) {
+      if (!s || !s.epoch) return;
+      LIVE = true;
+      EPOCH = s.epoch;
+      setChip("live", null);
+      loadLinks();
+    })
+    .catch(function () {});
+}
+
 var holdUntil = 0;
 var lastTouch = Date.now();
 var pending = false;     /* a newer build exists but now is a bad moment */
