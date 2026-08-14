@@ -1671,6 +1671,43 @@ def _update_history(out: Path, d: dict) -> list:
     return hist
 
 
+def _check_js(html: str) -> None:
+    """Syntax-check the page's script before it ships.
+
+    The behaviour layer is a Python string, so one collapsed escape breaks
+    the whole script and the page silently loses every interaction while
+    still looking correct. That happened; a parse check catches it at build
+    time instead of in the browser. Skipped silently when node is absent:
+    this is a safety net, never a build dependency.
+    """
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        return
+    i, j = html.rfind("<script>"), html.rfind("</script>")
+    if i < 0 or j < i:
+        return
+    js = html[i + len("<script>"):j]
+    tmp = Path(os.environ.get("TEMP", ".")) / "locodev_panel_check.js"
+    try:
+        tmp.write_text(js, encoding="utf-8")
+        proc = subprocess.run([node, "--check", str(tmp)], capture_output=True,
+                              text=True, timeout=30,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if proc.returncode != 0:
+            first = (proc.stderr or "").strip().splitlines()
+            print("WARNING: generated JS has a syntax error: "
+                  + " | ".join(first[:3]))
+    except Exception:  # noqa: BLE001 - a broken checker must not block a build
+        pass
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
 _build_lock = threading.Lock()
 
 
@@ -1690,7 +1727,9 @@ def build(live: bool) -> dict:
             out.mkdir(parents=True, exist_ok=True)
             data["history"] = _update_history(out, data)
             (out / "00 - Operations Center.md").write_text(render_markdown(data), encoding="utf-8")
-            (out / "panel.html").write_text(render_html(data, live), encoding="utf-8")
+            html = render_html(data, live)
+            _check_js(html)
+            (out / "panel.html").write_text(html, encoding="utf-8")
             (out / "status.json").write_text(
                 json.dumps({"epoch": data["epoch"], "generated_at": data["generated_at"],
                             "building": False}),

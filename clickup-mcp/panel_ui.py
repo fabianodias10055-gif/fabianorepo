@@ -455,7 +455,7 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
   border-radius:var(--r-lg); padding:var(--s4); box-shadow:var(--e1); overflow:hidden;
   transition:box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease),
     border-color var(--dur) var(--ease); }
-.tile:hover { box-shadow:var(--e2); transform:translateY(-1px); }
+
 .tile .h { display:flex; gap:var(--s2); align-items:center; color:var(--ink2);
   font-size:var(--t-sm); font-weight:600; letter-spacing:-.005em; }
 .tile .tic { width:28px; height:28px; border-radius:var(--r-sm); display:grid;
@@ -487,8 +487,10 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
 .c-amber { background:var(--warn-bg); color:var(--warn); }
 
 /* ================= layout + cards ================= */
-.cols { display:grid; grid-template-columns:minmax(0,1fr) 336px; gap:var(--s4);
-  align-items:start; }
+.cols2 { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:var(--s4); align-items:start; }
+.cols2 .card { margin-bottom:var(--s4); }
+@media (max-width:1050px) { .cols2 { grid-template-columns:minmax(0,1fr); } }
 .card { background:color-mix(in srgb, var(--surface) var(--glass), transparent);
   backdrop-filter:blur(var(--glass-blur)) saturate(1.25);
   -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(1.25);
@@ -637,7 +639,21 @@ tr.qdet.open > td { box-shadow:inset 3px 0 0 var(--accent); }
 .d-easy { background:var(--ok-bg); color:var(--ok); border-color:var(--ok-line); }
 .d-medium { background:var(--mute-bg); color:var(--ink2); border-color:var(--line); }
 .d-hard { background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line); }
-.snip { color:var(--ink2); max-width:440px; display:-webkit-box; -webkit-line-clamp:2;
+/* Question first and widest: it is what the operator reads to decide. */
+.qcol { width:46%; }
+.qtext { min-width:0; }
+.qmeta { display:flex; gap:var(--s2); align-items:center; flex-wrap:wrap;
+  margin-top:3px; font-size:var(--t-2xs); color:var(--ink3); }
+.qmeta .mch { display:inline-flex; align-items:center; }
+.qmeta .mvid { max-width:230px; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; font-family:var(--mono); }
+.hasai { color:var(--info); font-weight:700; }
+.syscell { color:var(--ink2); font-size:var(--t-sm); }
+.zero { color:var(--ink3); }
+.nextfacet { color:var(--ink2); font-size:var(--t-sm); }
+.deliver { color:var(--ink3); font-size:var(--t-xs); }
+.answerbtn { font-weight:650; }
+.snip { color:var(--ink2); max-width:none; display:-webkit-box; -webkit-line-clamp:2;
   -webkit-box-orient:vertical; overflow:hidden; line-height:1.45; }
 /* The video still leads the expanded card: recognising which tutorial the
    comment is about is most of the work of answering it. */
@@ -894,7 +910,7 @@ footer { margin-top:var(--s6); padding-top:var(--s4); border-top:1px solid var(-
   color:var(--ink3); font-size:var(--t-xs); font-family:var(--mono); }
 
 /* ================= responsive ================= */
-@media (min-width:1500px) {
+@media (min-width:1100px) {
   /* the questions table fits: drop the scroll container so the sticky
      header can anchor to the viewport instead of a short scroll box */
   #questions .scroll { overflow:visible; margin:0; padding:0; }
@@ -973,6 +989,7 @@ FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' "
 JS = """
 var EPOCH = __EPOCH__, LIVE = __LIVE__, PAGE = __PAGE__;
 var AI_CACHE = __AI_CACHE__;
+var QDATA = __QDATA__;
 function $(s, r) { return (r || document).querySelector(s); }
 function $$(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
 function esc(s) {
@@ -1122,9 +1139,7 @@ function syncUrl() {
   try { history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash); } catch (e) {}
 }
 
-var PAIRS = $$("#qtbody tr.qrow").map(function (r) {
-  return { r: r, det: r.nextElementSibling };
-});
+var PAIRS = $$("#qtbody tr.qrow").map(function (r) { return { r: r }; });
 /* Triage order, the default: whatever was escalated first, then the ones
    the vault can already answer, then oldest first. Sorting by date alone
    put freshly answered questions above four-year-old open ones. */
@@ -1152,7 +1167,8 @@ function sortRows() {
     return 0;
   });
   var tbody = $("#qtbody");
-  sorted.forEach(function (p) { tbody.appendChild(p.r); tbody.appendChild(p.det); });
+  closeDet();   /* reordering would strand the inspector away from its row */
+  sorted.forEach(function (p) { tbody.appendChild(p.r); });
   $$("th[data-sort]").forEach(function (th) {
     th.setAttribute("aria-sort", th.dataset.sort === key
       ? (dir === 1 ? "ascending" : "descending") : "none");
@@ -1162,7 +1178,13 @@ $$("th[data-sort]").forEach(function (th) {
   th.tabIndex = 0;
   th.addEventListener("click", function () {
     if (state.sort === th.dataset.sort) state.dir = state.dir === "asc" ? "desc" : "asc";
-    else { state.sort = th.dataset.sort; state.dir = th.dataset.sort === "date" ? "desc" : "asc"; }
+    else {
+      state.sort = th.dataset.sort;
+      /* first click sorts the way the column is actually useful: newest
+         dates, and the most answerable questions, not the least */
+      state.dir = (th.dataset.sort === "date" || th.dataset.sort === "cov")
+        ? "desc" : "asc";
+    }
     sortRows();
     apply();
     syncUrl();
@@ -1194,13 +1216,11 @@ function apply() {
   visRows = matchRows.slice(from, to);
   var onPage = new Set(visRows);
 
-  rows.forEach(function (r) {
-    var vis = onPage.has(r);
-    r.classList.toggle("hide", !vis);
-    var det = r.nextElementSibling;
-    if (det && det.classList.contains("qdet"))
-      det.classList.toggle("hide", !vis || !det.classList.contains("open"));
-  });
+  rows.forEach(function (r) { r.classList.toggle("hide", !onPage.has(r)); });
+  if (openId) {
+    var openRow = rowById(openId);
+    if (!openRow || openRow.classList.contains("hide")) closeDet();
+  }
 
   var total = matchRows.length;
   $("#qcount").textContent = total
@@ -1275,34 +1295,138 @@ $("#pgsize").addEventListener("change", function () {
 });
 
 /* ---- expandable rows + suggest/reply, with continuity across reloads ---- */
-function toggleDet(row, focus) {
-  var det = row.nextElementSibling;
-  if (!det || !det.classList.contains("qdet")) return;
-  var open = !det.classList.contains("open");
-  clearTimeout(det._t);   /* a pending close must never hide a reopened row */
-  if (open) det.classList.remove("hide");
-  /* Force layout instead of waiting for a frame: requestAnimationFrame does
-     not fire in a background or non-compositing tab, which left restored
-     rows stuck closed after an auto-reload. Reading offsetHeight flushes
-     the start value so the transition still runs when frames do arrive. */
-  void det.offsetHeight;
-  det.classList.toggle("open", open);
-  if (!open) det._t = setTimeout(function () {
-    if (!det.classList.contains("open")) det.classList.add("hide");
-  }, reduceMotion ? 0 : 180);
-  row.setAttribute("aria-expanded", open ? "true" : "false");
-  ss("lp-open:" + det.dataset.id, open ? "1" : null);
-  if (open && focus === "box") det.querySelector(".qbox").focus();
+/* ---- one inspector, built on demand ----
+   The composer used to be rendered for every question, open or not, which
+   was most of a 5.85 MB page. Now a single detail row is created from QDATA
+   when a question is opened and removed when it closes, so the DOM holds one
+   textarea instead of 866. Draft text, open state and AI results are keyed
+   by question id exactly as before, so nothing is lost across a rebuild. */
+var openId = null;
+
+function detailFor(qid) {
+  var q = QDATA[qid];
+  if (!q) return null;
+  var tr = document.createElement("tr");
+  tr.className = "qdet open";
+  tr.dataset.id = qid;
+  var td = document.createElement("td");
+  td.colSpan = 7;
+  var wrap = document.createElement("div");
+  wrap.className = "detwrap";
+  var det = document.createElement("div");
+  det.className = "det";
+
+  var parts = [];
+  if (q.thumb && q.video) {
+    /* No inline onerror here: this string lives inside a Python literal,
+       which collapses the escaped quotes and produced a page-wide JS syntax
+       error. The handler is attached after the markup is built instead. */
+    var inner = '<img loading="lazy" alt="" width="168" height="94" '
+      + 'referrerpolicy="no-referrer" src="' + esc(q.thumb) + '">'
+      + '<span class="vmeta"><b>' + esc(q.video) + "</b><span>"
+      + "watch this moment on YouTube</span></span>";
+    parts.push(q.video_url
+      ? '<a class="vidcard" href="' + esc(q.video_url) + '" target="_blank" rel="noopener">'
+        + inner + "</a>"
+      : '<div class="vidcard">' + inner + "</div>");
+  } else if (q.channel === "youtube") {
+    parts.push('<div class="vidcard novid"><span class="vmeta"><b>No video linked</b>'
+      + "<span>logged by hand: add video_id: to this block in the vault</span></span></div>");
+  }
+  parts.push('<div class="full">' + esc(q.text) + "</div>");
+  if (q.reply) {
+    parts.push('<div class="yourreply"><b>Your reply on ' + esc(q.channel) + "</b>"
+      + esc(q.reply) + "</div>");
+  }
+  parts.push('<div class="prov"><span class="qid" data-copy="' + esc(q.code) + '">'
+    + esc(q.code) + "</span><span>" + esc(q.channel) + '</span><span class="num">'
+    + esc(q.date) + "</span>" + (q.source ? '<span class="num">' + esc(q.source) + "</span>" : "")
+    + "</div>");
+  parts.push('<div class="detbtns">'
+    + '<button class="btn tiny" data-ai="search">Find existing answer</button>'
+    + '<button class="btn tiny ai" data-ai="draft">Draft with Claude</button>'
+    + (q.video_url ? '<button class="btn tiny" data-copy="' + esc(q.video_url)
+        + '">Copy link</button>' : "")
+    + "</div>");
+  parts.push('<div class="aiout" data-mode="search"></div>');
+  parts.push('<div class="aiout" data-mode="draft"></div>');
+  parts.push('<textarea class="qbox" aria-label="Reply text" '
+    + 'placeholder="Write a reply..."></textarea>');
+  parts.push('<div class="detbtns"><button class="btn tiny primary replybtn" data-reply>'
+    + (q.postable ? "Post to YouTube" : "Save answer to vault")
+    + '</button><span class="msg" aria-live="polite"></span>'
+    + '<span class="deliver">' + (q.postable
+        ? "posts the comment reply and files it in the vault"
+        : "files it in the vault; this channel cannot be posted to from here")
+    + "</span></div>");
+
+  det.innerHTML = parts.join("");
+  wrap.appendChild(det);
+  td.appendChild(wrap);
+  tr.appendChild(td);
+
+  var vimg = det.querySelector(".vidcard img");
+  if (vimg) vimg.addEventListener("error", function () { vimg.classList.add("hide"); });
+
+  var box = det.querySelector(".qbox");
+  box.value = ssGet("lp-draft:" + qid) || "";
+  box.addEventListener("input", function () {
+    ss("lp-draft:" + qid, box.value || null);
+  });
+  box.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runReply(tr); }
+  });
+  $$("[data-ai]", det).forEach(function (b) {
+    b.addEventListener("click", function () { runAi(tr, b.dataset.ai, false); });
+  });
+  det.querySelector("[data-reply]").addEventListener("click", function () { runReply(tr); });
+  return tr;
 }
+
+function closeDet() {
+  if (!openId) return;
+  var det = $('tr.qdet[data-id="' + CSS.escape(openId) + '"]');
+  var row = rowById(openId);
+  if (det) det.remove();
+  if (row) row.setAttribute("aria-expanded", "false");
+  ss("lp-open", null);
+  openId = null;
+}
+
+function rowById(qid) {
+  var hit = null;
+  $$("#qtbody tr.qrow").forEach(function (r) { if (r.dataset.id === qid) hit = r; });
+  return hit;
+}
+
+function toggleDet(row, focus) {
+  if (!row) return;
+  var qid = row.dataset.id;
+  if (openId === qid) { closeDet(); return; }
+  closeDet();
+  var det = detailFor(qid);
+  if (!det) return;
+  row.parentNode.insertBefore(det, row.nextSibling);
+  row.setAttribute("aria-expanded", "true");
+  openId = qid;
+  ss("lp-open", qid);
+  /* replay whatever the model already produced for this question */
+  ["search", "draft"].forEach(function (mode) {
+    var hit = AI_CACHE[mode + ":" + qid];
+    if (hit) aiRender(det, mode, hit, aiBtn(det, mode));
+  });
+  if (focus === "box") det.querySelector(".qbox").focus();
+}
+
 $$("#qtbody tr.qrow").forEach(function (r) {
   r.tabIndex = 0;
-  r.setAttribute("role", "button");
   r.setAttribute("aria-expanded", "false");
   r.addEventListener("click", function (e) {
-    if (e.target.closest("a, button, textarea, .alink")) return;
+    if (e.target.closest("a, button, textarea")) return;
     toggleDet(r);
   });
 });
+
 function runReply(det) {
   var box = det.querySelector(".qbox");
   var msg = det.querySelector(".msg");
@@ -1333,7 +1457,7 @@ function runReply(det) {
           ? "Reply posted and filed as knowledge."
           : "Filed in the vault. Nothing was posted to the platform.",
           s.posted_to_platform ? "good" : "bad");
-        var row = det.previousElementSibling;
+        var row = rowById(det.dataset.id);
         var pill = row.querySelector(".pill");
         pill.className = "pill st-answered";
         pill.innerHTML = '<i class="pe">✅</i>answered';
@@ -1342,7 +1466,9 @@ function runReply(det) {
            the next one is ready. Leaving it open with stale counts made
            every reply end in manual cleanup. */
         var wasAt = matchRows.indexOf(row);
-        toggleDet(row);
+        var answerBtn = row.querySelector(".answerbtn");
+        if (answerBtn) answerBtn.textContent = "View";
+        closeDet();
         var badge = $("#bellbtn .badge"), nav = $(".navcount");
         var left = Math.max(0, (parseInt((badge.textContent || "0").replace(/,/g, ""), 10) || 0) - 1);
         badge.textContent = fmt(left);
@@ -1371,11 +1497,9 @@ $$("[data-act]").forEach(function (el) {
   el.addEventListener("click", function (e) {
     e.stopPropagation();
     var row = el.closest("tr.qrow");
-    var det = row ? row.nextElementSibling : null;
-    if (!det) return;
-    if (!det.classList.contains("open")) toggleDet(row);
-    if (el.dataset.act === "suggest") runAi(det, "search", false);
-    else det.querySelector(".qbox").focus();
+    if (!row) return;
+    if (openId !== row.dataset.id) toggleDet(row, "box");
+    else { var b = $("tr.qdet .qbox"); if (b) b.focus(); }
   });
 });
 
@@ -1513,27 +1637,18 @@ function runAi(det, mode, force) {
       aiRender(det, mode, { state: "error", error: String(e.message || e) }, btn);
     });
 }
-$$("[data-ai]").forEach(function (b) {
-  b.addEventListener("click", function () {
-    runAi(b.closest("tr.qdet"), b.dataset.ai, false);
-  });
-});
-
-/* replay everything already generated, so a reload costs nothing */
+/* A row whose answer was already generated says so, so cached work is
+   findable without opening every card. */
 Object.keys(AI_CACHE).forEach(function (key) {
-  var sep = key.indexOf(":");
-  var mode = key.slice(0, sep), qid = key.slice(sep + 1);
-  var det;
-  try { det = $('tr.qdet[data-id="' + CSS.escape(qid) + '"]'); } catch (e) { return; }
-  if (det) aiRender(det, mode, AI_CACHE[key], aiBtn(det, mode));
-});
-$$("[data-reply]").forEach(function (b) {
-  b.addEventListener("click", function () { runReply(b.closest("tr.qdet")); });
-});
-$("#qtbody").addEventListener("input", function (e) {
-  if (e.target.classList.contains("qbox")) {
-    var det = e.target.closest("tr.qdet");
-    ss("lp-draft:" + det.dataset.id, e.target.value || null);
+  var qid = key.slice(key.indexOf(":") + 1);
+  var row = rowById(qid);
+  if (row && !row.querySelector(".hasai")) {
+    var mark = document.createElement("span");
+    mark.className = "hasai";
+    mark.title = "An AI result is cached for this question";
+    mark.textContent = "✦ ready";
+    var meta = row.querySelector(".qmeta");
+    if (meta) meta.appendChild(mark);
   }
 });
 
@@ -1627,14 +1742,14 @@ document.addEventListener("keydown", function (e) {
   else if (e.key === "k") kFocus(kIdx - 1);
   else if (e.key === "Enter" && kIdx >= 0 && visRows[kIdx]) toggleDet(visRows[kIdx]);
   else if (e.key === "Escape") {
-    $$("tr.qdet.open").forEach(function (det) { toggleDet(det.previousElementSibling); });
+    closeDet();
   } else if (e.key === "n") {
     var start = kIdx + 1;
     for (var i = 0; i < visRows.length; i++) {
       var r = visRows[(start + i) % visRows.length];
       if (r.dataset.st === "no-source" || r.dataset.st === "escalated") {
         kFocus(visRows.indexOf(r));
-        if (!r.nextElementSibling.classList.contains("open")) toggleDet(r);
+        if (openId !== r.dataset.id) toggleDet(r);
         break;
       }
     }
@@ -1649,11 +1764,16 @@ document.addEventListener("keydown", function (e) {
 /* ---- question age markers ---- */
 (function () {
   var now = Date.now();
-  $$("#qtbody tr.qrow").forEach(function (r) {
-    var t = Date.parse(r.dataset.date);
+  $$("#qtbody .agecell").forEach(function (cell) {
+    var t = Date.parse(cell.dataset.date);
     if (isNaN(t)) return;
-    var days = (now - t) / 86400000;
-    var cell = r.querySelector("td.num");
+    var days = Math.floor((now - t) / 86400000);
+    cell.title = cell.dataset.date;
+    /* "4y" says backlog; "2022-10-29" makes you do the arithmetic */
+    cell.textContent = days < 1 ? "today"
+      : days < 30 ? days + "d"
+      : days < 365 ? Math.round(days / 30) + "mo"
+      : (days / 365).toFixed(days < 730 ? 1 : 0) + "y";
     if (days > 30) cell.classList.add("agec");
     else if (days > 7) cell.classList.add("agew");
   });
@@ -1853,15 +1973,10 @@ apply();
 try {
   for (var i = 0; i < sessionStorage.length; i++) {
     var key = sessionStorage.key(i);
-    if (key && key.indexOf("lp-open:") === 0) {
-      var det = $('tr.qdet[data-id="' + CSS.escape(key.slice(8)) + '"]');
-      if (det && !det.previousElementSibling.classList.contains("hide")
-          && !det.classList.contains("open"))
-        toggleDet(det.previousElementSibling);
-    }
-    if (key && key.indexOf("lp-draft:") === 0) {
-      var det2 = $('tr.qdet[data-id="' + CSS.escape(key.slice(9)) + '"]');
-      if (det2) det2.querySelector(".qbox").value = sessionStorage.getItem(key) || "";
+    if (key === "lp-open") {
+      var wasOpen = sessionStorage.getItem(key);
+      var r = wasOpen && rowById(wasOpen);
+      if (r && !r.classList.contains("hide")) toggleDet(r);
     }
   }
 } catch (e) {}
@@ -1880,51 +1995,55 @@ try {
 # --------------------------------------------------------------------------
 
 def _tiles(d: dict, n_systems: int) -> str:
+    """A queue summary, not a KPI gallery.
+
+    Three of the old five tiles measured documentation health, which is not
+    what the operator decides on when opening the panel. Those numbers moved
+    into the System pressure card, where they sit next to the systems they
+    describe. What is left answers: how much is waiting, how much of it is
+    ready to answer, and how old the oldest one is.
+    """
     hist = d.get("history") or []
+    qs = d["questions"]
+    open_qs = [q for q in qs if q["status"] in ("no-source", "escalated")]
+    escalated = sum(1 for q in open_qs if q["status"] == "escalated")
+    ready = sum(1 for q in open_qs if q.get("difficulty") == "easy")
+    oldest = min((q["date"] for q in open_qs), default="")
 
     def series(key):
         return [p.get(key, 0) for p in hist][-60:]
 
-    def delta(key, good_when_up: bool) -> str:
+    def delta(key, good_when_up: bool, unit: str = "") -> str:
         dv = _delta24(hist, key)
         if not dv:
             return ""
-        cls = ("good" if good_when_up else "bad") if dv > 0 else \
-              ("bad" if good_when_up else "good")
+        cls = ("good" if good_when_up else "bad") if dv > 0 else               ("bad" if good_when_up else "good")
+        sign = "+" if dv > 0 else "−"
         arrow = _icon("up", 10) if dv > 0 else _icon("down", 10)
-        return (f'<span class="dlt {cls}">{arrow}{_fmt(abs(dv))}</span>'
+        return (f'<span class="dlt {cls}">{arrow}{sign}{_fmt(abs(dv))}{unit}</span>'
                 f'<span>vs 24h ago</span>')
 
-    pct = d["written"] * 100 // d["total_facets"] if d["total_facets"] else 0
     tiles = [
-        ("hero", "chat", "c-blue", "Open questions",
-         f'<span class="cu" data-n="{d["open_q"]}">{_fmt(d["open_q"])}</span>',
-         "waiting on you", delta("open", good_when_up=False),
-         _spark(series("open"), "a", "var(--accent)")),
-        ("", "check", "c-green", "Answered",
-         f'<span class="cu" data-n="{d["answer_rate"]}">{d["answer_rate"]}</span>%',
-         f"of {_fmt(len(d['questions']))} logged", delta("rate", good_when_up=True),
-         _spark(series("rate"), "b", "var(--ok)")),
-        ("", "book", "c-violet", "Catalog coverage",
-         f'<span class="cu" data-n="{pct}">{pct}</span>%',
-         f"{_fmt(d['written'])} of {_fmt(d['total_facets'])} notes", "",
-         _spark(series("cov"), "c", "var(--info)")),
-        ("", "alert", "c-red", "Critical systems",
-         f'<span class="cu" data-n="{d["critical"]}">{_fmt(d["critical"])}</span>',
-         f"{_fmt(d['urgent'])} more urgent", "",
-         _spark(series("crit"), "d", "var(--crit)")),
-        ("", "flag", "c-amber", "Complete",
-         f'<span class="cu" data-n="{d["complete"]}">{_fmt(d["complete"])}</span>'
-         f' <small>/ {n_systems}</small>',
-         f"{_fmt(d['empty'])} still empty", "",
-         _spark(series("complete"), "e", "var(--warn)")),
+        ("hero", "chat", "c-blue", "Open questions", _fmt(len(open_qs)),
+         "waiting on you", delta("open", False), _spark(series("open"), "a", "var(--accent)")),
+        ("", "alert", "c-red", "Escalated", _fmt(escalated),
+         "asked for you by name", "", ""),
+        ("", "sparkle", "c-green", "Ready to answer", _fmt(ready),
+         "the vault already covers these", "", ""),
+        ("", "flame", "c-amber", "Oldest open", escape(oldest or "-"),
+         "nobody has replied since", "", ""),
+        ("", "check", "c-violet", "Answer rate", f"{d['answer_rate']}%",
+         f"{_fmt(sum(1 for q in qs if q['status'] == 'answered'))} answered of "
+         f"{_fmt(len(qs))}", delta("rate", True, " pp"),
+         _spark(series("rate"), "b", "var(--info)")),
     ]
     cells = []
     for extra, icon, color, label, value, sub, dlt, spark in tiles:
         cls = f"tile {extra}".strip()
         cells.append(
-            f'<div class="{cls}"><div class="h"><span class="tic {color}">{_icon(icon, 15)}</span>'
-            f'{label}</div><div class="row"><div class="v">{value}</div>{spark}</div>'
+            f'<div class="{cls}"><div class="h"><span class="tic {color}">'
+            f'{_icon(icon, 14)}</span>{label}</div>'
+            f'<div class="row"><div class="v">{value}</div>{spark}</div>'
             f'<div class="s"><span>{sub}</span>{dlt}</div></div>'
         )
     return f'<section id="overview"><div class="tiles">{"".join(cells)}</div></section>'
@@ -1993,123 +2112,88 @@ def _filters(questions: list) -> str:
 
 
 def _question_rows(questions: list) -> str:
+    """Summary rows only.
+
+    The detail card used to be rendered for all 866 questions, textarea and
+    buttons included, which is most of a 5.85 MB page for markup nobody had
+    opened. The composer is now built once, on demand, from the payload in
+    _question_payload().
+    """
     rows = []
     for i, q in enumerate(questions):
         hid = "" if i < PAGE else " hide"   # apply() re-pages on load
         sys_label = q["system_name"] if q["system"] != "-" else "catalog wide"
-        sub = '<span class="m">subscriber</span>' if q["subscriber"] == "yes" else ""
         txt = escape(
             " ".join((q["code"], q["who"], q["text"], sys_label,
                       q["channel"], q["status"])).lower(),
             quote=True)
         qid = escape(q["id"], quote=True)
 
+        meta = [f'<span class="qid" data-copy="{escape(q["code"], quote=True)}">'
+                f'{escape(q["code"])}</span>']
+        brand = _brand_icon(q["channel"], 12)
+        if brand:
+            meta.append(f'<span class="mch" title="{escape(q["channel"], quote=True)}">'
+                        f'{brand}</span>')
+        else:
+            meta.append(f'<span class="mch">{escape(q["channel"])}</span>')
+        if q.get("video"):
+            meta.append(f'<span class="mvid" title="{escape(q["video"], quote=True)}">'
+                        f'{escape(q["video"][11:] or q["video"])}</span>')
+        if q["subscriber"] == "yes":
+            meta.append('<span class="tag sub">subscriber</span>')
+
+        action = ('<button class="btn tiny answerbtn" data-act="answer">Answer</button>'
+                  if q["status"] != "answered" else
+                  '<button class="btn tiny answerbtn" data-act="answer">View</button>')
+
         rows.append(
             f'<tr class="qrow{hid}" data-id="{qid}" data-ch="{escape(q["channel"], quote=True)}"'
             f' data-st="{escape(q["status"], quote=True)}"'
             f' data-sys="{escape(q["system"], quote=True)}"'
             f' data-date="{escape(q["date"], quote=True)}"'
-            f' data-who="{escape(q["who"].lower(), quote=True)}" data-df="{escape(q.get("difficulty", ""), quote=True)}" data-cov="{q.get("coverage", 0)}" data-txt="{txt}">'
-            f'<td class="idcell"><span class="qid" '
-            f'data-copy="{escape(q["code"], quote=True)}" '
-            f'title="Question code, stable across rebuilds. Click to copy.">'
-            f'{escape(q["code"])}</span></td>'
-            f'<td><span class="uc">{_avatar(q["who"])}'
-            f'<span><span class="n">{escape(q["who"])}</span><br>{sub}</span></span></td>'
-            f'<td class="stcell">{_pill(q["status"])}{_diff_pill(q)}</td>'
-            f'<td><div class="qcell">{_mini_thumb(q)}'
-            f'<div class="snip">{escape(q["text"][:230])}</div></div></td>'
-            f'<td><span class="cval">{escape(sys_label)}</span></td>'
-            f'<td>{_chn(q["channel"])}</td>'
-            f'<td class="num"><span class="cval">{q["date"]}</span></td>'
-            f'<td class="acts"><span class="rowacts">'
-            f'<span class="alink" data-act="suggest" title="Search your notes and past answers">'
-            f'{_icon("sparkle", 12)}Suggest answer</span>'
-            f'<span class="alink" data-act="reply" title="Write a reply">'
-            f'{_icon("replyic", 12)}Reply</span>'
-            f'</span></td></tr>'
-        )
-
-        prov = [f'<span class="qid" data-copy="{escape(q["code"], quote=True)}">'
-                f'{escape(q["code"])}</span>',
-                f'{_chn(q["channel"])}', f'<span class="num">{q["date"]}</span>']
-        copy_target = _safe_url(q.get("video_url", ""))
-        if q.get("source"):
-            prov.append(f'<span class="num">{escape(q["source"])}</span>')
-
-        # The expanded card leads with the video still: recognising the
-        # tutorial is most of the work of answering a comment about it.
-        big = _thumb_url(q.get("video_id", ""), "mqdefault")
-        vidcard = ""
-        if big and q.get("video"):
-            inner = (
-                f'<img loading="lazy" alt="" width="168" height="94" '
-                f'referrerpolicy="no-referrer" src="{big}" '
-                f'onerror="this.classList.add(\'hide\')">'
-                f'<span class="vmeta"><b>{escape(q["video"])}</b>'
-                f'<span>{_icon("video", 12)}watch this moment on YouTube'
-                f'{_icon("external", 11)}</span></span>')
-            vidcard = (
-                f'<a class="vidcard" href="{escape(copy_target, quote=True)}" '
-                f'target="_blank" rel="noopener">{inner}</a>'
-                if copy_target else f'<div class="vidcard">{inner}</div>')
-        elif q.get("video"):
-            vidcard = (f'<div class="vidcard novid"><span class="vmeta">'
-                       f'<b>{escape(q["video"])}</b></span></div>')
-        elif q["channel"] == "youtube":
-            # Hand-logged questions carry no video. Absence has to be legible
-            # and actionable, not an empty space that reads as a bug.
-            vidcard = (f'<div class="vidcard novid"><span class="vmeta">'
-                       f'<b>No video linked</b><span>logged by hand: add '
-                       f'video_id: to this block in the vault to link it'
-                       f'</span></span></div>')
-        copy_btn = (f'<button class="btn tiny" data-copy="{escape(copy_target, quote=True)}">'
-                    f'{_icon("copy", 12)}Copy link</button>') if copy_target else ""
-        # Naming the destination: only a YouTube comment can be posted
-        # back, so promising "Send reply" everywhere was a lie by default.
-        postable = q["channel"] == "youtube" and q.get("source", "").startswith("yt:")
-        send_label = "Post to YouTube" if postable else "Save answer to vault"
-        send_title = ("Posts the reply to the comment and files it in the vault"
-                      if postable
-                      else "Files the answer in the vault; this channel cannot be "
-                           "posted to from here")
-        your_reply = ""
-        if q.get("reply"):
-            your_reply = (f'<div class="yourreply"><b>{_icon("check", 12)}Your reply on '
-                          f'{escape(q["channel"])}</b>{escape(q["reply"])}</div>')
-
-        rows.append(
-            f'<tr class="qdet hide" data-id="{qid}"><td colspan="8">'
-            f'<div class="detwrap"><div class="detinner"><div class="det">'
-            f'{vidcard}'
-            f'<div class="full">{escape(q["text"])}</div>'
-            f'{your_reply}'
-            f'<div class="prov">{" ".join(prov)}</div>'
-            f'<div class="detbtns">'
-            f'<button class="btn tiny" data-ai="search" '
-            f'title="Fast retrieval: quotes an existing passage, never composes">'
-            f'{_icon("sparkle", 13)}Search my notes</button>'
-            f'<button class="btn tiny ai" data-ai="draft" '
-            f'title="Writes a full reply from everything in the vault">'
-            f'{_icon("brain", 13)}Ask Claude</button>'
-            f'{copy_btn}</div>'
-            f'<div class="aiout" data-mode="search"></div>'
-            f'<div class="aiout" data-mode="draft"></div>'
-            f'<textarea class="qbox" aria-label="Reply text" placeholder="Type the reply. '
-            f'Reply always updates the vault and files the answer as searchable knowledge; '
-            f'posting to YouTube for real needs the one-time OAuth setup."></textarea>'
-            f'<div class="detbtns"><button class="btn tiny primary replybtn" data-reply '
-            f'title="{escape(send_title, quote=True)}">'
-            f'{_icon("replyic", 13)}{escape(send_label)}</button>'
-            f'<span class="msg" aria-live="polite"></span></div>'
-            f'</div></div></div></td></tr>'
+            f' data-who="{escape(q["who"].lower(), quote=True)}"'
+            f' data-df="{escape(q.get("difficulty", ""), quote=True)}"'
+            f' data-cov="{q.get("coverage", 0)}" data-txt="{txt}">'
+            f'<td class="qcol"><div class="qcell">{_mini_thumb(q)}'
+            f'<div class="qtext"><div class="snip">{escape(q["text"][:230])}</div>'
+            f'<div class="qmeta">{"".join(meta)}</div></div></div></td>'
+            f'<td class="stcell">{_pill(q["status"])}</td>'
+            f'<td>{_diff_pill(q)}</td>'
+            f'<td><span class="uc">{_avatar(q["who"], "sm")}'
+            f'<span class="n">{escape(q["who"])}</span></span></td>'
+            f'<td class="syscell">{escape(sys_label)}</td>'
+            f'<td class="num agecell" data-date="{escape(q["date"], quote=True)}">'
+            f'{q["date"]}</td>'
+            f'<td class="acts">{action}</td></tr>'
         )
     return "".join(rows)
 
 
+def _question_payload(questions: list) -> dict:
+    """Everything the on-demand composer needs, keyed by question id."""
+    out = {}
+    for q in questions:
+        url = _safe_url(q.get("video_url", ""))
+        out[q["id"]] = {
+            "code": q["code"], "who": q["who"], "channel": q["channel"],
+            "date": q["date"], "status": q["status"],
+            "system": q["system_name"] if q["system"] != "-" else "catalog wide",
+            "text": q["text"], "reply": q.get("reply", ""),
+            "video": q.get("video", ""), "video_id": q.get("video_id", ""),
+            "video_url": url, "source": q.get("source", ""),
+            "thumb": _thumb_url(q.get("video_id", "")),
+            # Only a YouTube comment can be answered in place; everything
+            # else is filed in the vault and the button must say so.
+            "postable": bool(q["channel"] == "youtube"
+                             and q.get("source", "").startswith("yt:")),
+        }
+    return out
+
+
 def _questions_card(d: dict) -> str:
     empty = (
-        f'<tr><td colspan="8"><div class="emptybox">'
+        f'<tr><td colspan="7"><div class="emptybox">'
         f'<span class="eic">{_icon("inbox", 20)}</span>'
         f'<b>No questions logged yet</b>'
         f'<p>They arrive automatically from collect_youtube.py, or by hand in '
@@ -2120,16 +2204,15 @@ def _questions_card(d: dict) -> str:
         f'<section class="card" id="questions">'
         f'<h2><span class="he">💬</span>Incoming questions'
         f'<span class="cnt">showing <span id="qcount"></span> &middot; '
-        f'j/k navigate &middot; n next open</span></h2>'
+        f'j/k navigate &middot; n next open &middot; Enter to answer</span></h2>'
         f'{_filters(d["questions"])}'
         f'<div class="scroll"><table aria-label="Incoming questions"><thead><tr>'
-        f'<th scope="col">ID</th>'
-        f'<th scope="col" data-sort="who" aria-sort="none">User{arrow}</th>'
+        f'<th scope="col" class="qcol">Question</th>'
         f'<th scope="col" data-sort="status" aria-sort="none">Status{arrow}</th>'
-        f'<th scope="col">Question</th>'
+        f'<th scope="col" data-sort="cov" aria-sort="none">Vault match{arrow}</th>'
+        f'<th scope="col" data-sort="who" aria-sort="none">Customer{arrow}</th>'
         f'<th scope="col" data-sort="system" aria-sort="none">System{arrow}</th>'
-        f'<th scope="col">Channel</th>'
-        f'<th scope="col" data-sort="date" aria-sort="descending">Date{arrow}</th>'
+        f'<th scope="col" data-sort="date" aria-sort="none">Age{arrow}</th>'
         f'<th scope="col"></th>'
         f'</tr></thead><tbody id="qtbody">{body}</tbody></table></div>'
         f'<div class="emptybox hide" id="qempty">'
@@ -2200,74 +2283,65 @@ def _answers_card(d: dict) -> str:
     )
 
 
-def _gaps_card(d: dict) -> str:
-    rows = []
-    for i, g in enumerate(d["gaps"]):
-        hid = "" if i < 8 else " xtra hide"
-        sys_val = "-" if g["key"] == "general" else g["key"]
-        last = max((q["date"] for q in g["questions"]), default="")
-        last_html = f'<small>last asked {last}</small>' if last else ""
-        rows.append(
-            f'<div class="grow{hid}" data-sys="{escape(sys_val, quote=True)}" '
-            f'title="Filter the question list to this gap">'
-            f'<span>{escape(g["label"])}{last_html}</span>'
-            f'<span class="gcnt">{g["count"]}</span></div>'
-        )
-    more = (f'<button class="linkbtn" data-viewall>View all {len(d["gaps"])} gaps</button>'
-            if len(d["gaps"]) > 8 else "")
-    body = "".join(rows) if rows else (
-        f'<div class="emptybox"><span class="eic">{_icon("check", 20)}</span>'
-        f'<b>No open gaps</b><p>Nothing is marked no-source right now.</p></div>')
-    return (f'<section class="card" id="gaps"><h2><span class="he">🎯</span>Gaps to close'
-            f'<span class="cnt">click to filter</span></h2>{body}{more}</section>')
+def _system_pressure_card(d: dict, facets: list) -> str:
+    """One table where three cards used to disagree.
 
-
-def _priority_card(d: dict, n_facets: int) -> str:
-    queue = [s for s in d["systems"] if s["demand"] > 0 and s["done"] < n_facets]
-    rows = []
-    for i, s in enumerate(queue):
-        hid = "" if i < 8 else " xtra hide"
-        rows.append(
-            f'<div class="prow{hid}"><span class="i">{i + 1}</span>'
-            f'<span class="n" title="{escape(s["name"], quote=True)}">{escape(s["name"])}</span>'
-            f'<span class="pbar"><i style="width:{s["pct"]}%"></i></span>'
-            f'<span class="pct">{s["pct"]}%</span></div>'
-        )
-    more = (f'<button class="linkbtn" data-viewall>View all {len(queue)}</button>'
-            if len(queue) > 8 else "")
-    body = "".join(rows) if rows else '<div class="empty">No gaps with recorded demand.</div>'
-    return (f'<section class="card" id="priority"><h2><span class="he">🔥</span>Priority queue'
-            f'<span class="cnt">demand 60% &middot; gap 40%</span></h2>{body}{more}</section>')
-
-
-def _coverage_card(d: dict, facets: list) -> str:
+    Gaps, Priority queue and Documentation coverage each listed the same
+    systems in a different grammar, so Weapon System read as 88 gaps, 100%
+    priority and 0% coverage and the reader had to reconcile them. One row
+    per system, sorted by the pressure it is under.
+    """
     n_facets = len(facets)
     labels = [lbl for (_k, lbl, _p, _w) in facets]
+    gap_by_key = {g["key"]: g for g in d["gaps"]}
+
+    rows_data = []
+    for s in d["systems"]:
+        gap = gap_by_key.get(s["slug"])
+        rows_data.append({
+            "slug": s["slug"], "name": s["name"],
+            "open": gap["count"] if gap else 0,
+            "done": s["done"], "pct": s["pct"], "urgency": s["urgency"],
+            "missing": [lbl for lbl, ok in zip(labels, s["facets"]) if not ok],
+            "last": max((q["date"] for q in gap["questions"]), default="") if gap else "",
+        })
+    rows_data.sort(key=lambda r: (-r["open"], -r["pct"]))
+
     rows = []
-    for i, s in enumerate(d["systems"]):
-        hid = "" if i < 8 else " xtra hide"
-        cov = s["done"] * 100 // n_facets
+    for i, r in enumerate(rows_data):
+        if not r["open"] and r["done"] == n_facets:
+            continue          # nothing pending and nothing missing
+        hid = "" if i < 10 else " xtra hide"
+        cov = r["done"] * 100 // n_facets
         cls = "g" if cov >= 80 else ("a" if cov >= 40 else "r")
-        missing = [lbl for lbl, ok in zip(labels, s["facets"]) if not ok]
-        tip = ("complete" if not missing else "missing: " + ", ".join(missing))
-        upill = (f' <span class="pill u-{s["urgency"]}">{s["urgency"]}</span>'
-                 if s["urgency"] in ("critical", "urgent") else "")
+        nxt = r["missing"][0] if r["missing"] else "complete"
+        upill = (f' <span class="pill u-{r["urgency"]}">{r["urgency"]}</span>'
+                 if r["urgency"] in ("critical", "urgent") else "")
+        openc = (f'<span class="gcnt">{r["open"]}</span>' if r["open"]
+                 else '<span class="zero">0</span>')
         rows.append(
             f'<tr class="{hid.strip()}"><td><span class="sysdrill" '
-            f'data-sys="{escape(s["slug"], quote=True)}" '
-            f'title="Filter questions to this system">{escape(s["name"])}</span>{upill}</td>'
-            f'<td class="num">{s["done"]}/{n_facets}</td>'
-            f'<td class="num">{_fmt(s["demand"]) if s["demand"] else "-"}</td>'
-            f'<td><span class="cbar" title="{escape(tip, quote=True)}"><span class="pbar">'
-            f'<i class="{cls}" style="width:{cov}%"></i></span><b>{cov}%</b></span></td></tr>'
+            f'data-sys="{escape(r["slug"], quote=True)}" '
+            f'title="Filter the queue to this system">{escape(r["name"])}</span>{upill}</td>'
+            f'<td class="num">{openc}</td>'
+            f'<td><span class="cbar"><span class="pbar">'
+            f'<i class="{cls}" style="width:{cov}%"></i></span>'
+            f'<b>{r["done"]}/{n_facets}</b></span></td>'
+            f'<td class="nextfacet">{escape(nxt)}</td>'
+            f'<td class="num">P{i + 1}</td></tr>'
         )
-    more = (f'<button class="linkbtn" data-viewall>View all {len(d["systems"])} systems</button>'
-            if len(d["systems"]) > 8 else "")
+    more = (f'<button class="linkbtn" data-viewall>View all {len(rows)} systems</button>'
+            if len(rows) > 10 else "")
+    pct = d["written"] * 100 // d["total_facets"] if d["total_facets"] else 0
     return (
-        f'<section class="card" id="systems"><h2><span class="he">📚</span>Documentation coverage</h2>'
-        f'<div class="scroll"><table aria-label="Documentation coverage"><thead><tr>'
-        f'<th scope="col">System</th><th scope="col">Done</th>'
-        f'<th scope="col">Asked</th><th scope="col">Coverage</th></tr></thead>'
+        f'<section class="card" id="systems">'
+        f'<h2><span class="he">🔥</span>System pressure'
+        f'<span class="cnt">{_fmt(d["written"])} of {_fmt(d["total_facets"])} notes '
+        f'written ({pct}%) &middot; {d["critical"]} critical</span></h2>'
+        f'<div class="scroll"><table aria-label="System pressure"><thead><tr>'
+        f'<th scope="col">System</th><th scope="col">Open</th>'
+        f'<th scope="col">Docs</th><th scope="col">Next to write</th>'
+        f'<th scope="col">Rank</th></tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table></div>{more}</section>'
     )
 
@@ -2378,7 +2452,7 @@ _NAV = [
     ("overview", "home", "Overview", ""),
     ("questions", "chat", "Questions", "open_q"),
     ("answers", "check", "Answers", "answers"),
-    ("systems", "grid", "Systems", ""),
+    ("systems", "flame", "Pressure", ""),
     ("people", "users", "People", ""),
     ("videos", "video", "Videos", ""),
     ("links", "link", "Links", ""),
@@ -2452,18 +2526,22 @@ def _header(d: dict, live: bool) -> str:
 
 
 def render_html(d: dict, live: bool, facets: list, instrumentation: list) -> str:
-    n_systems = len(d["systems"])
-
     import json as _json
-    # </script> inside embedded JSON would close the script tag early; the
-    # cache holds model prose, so escaping it is not optional.
-    ai_cache = (_json.dumps(d.get("ai_cache") or {})
-                .replace("</", "<\\/").replace(" ", "\\u2028")
-                .replace(" ", "\\u2029"))
+
+    def embed(obj) -> str:
+        # Escaped for embedding in a <script>: "</" would close the tag early,
+        # and U+2028/U+2029 are literal line breaks to a JS parser. These hold
+        # model prose and customer text, so this is not theoretical.
+        return (_json.dumps(obj)
+                .replace("</", "<\/")
+                .replace(" ", "\u2028")
+                .replace(" ", "\u2029"))
+
     js = (JS.replace("__EPOCH__", str(d["epoch"]))
             .replace("__LIVE__", "true" if live else "false")
             .replace("__PAGE__", str(PAGE))
-            .replace("__AI_CACHE__", ai_cache))
+            .replace("__AI_CACHE__", embed(d.get("ai_cache") or {}))
+            .replace("__QDATA__", embed(_question_payload(d["questions"]))))
 
     diag = (f'generated {escape(d["generated_at"])} &middot; scan {d.get("scan_ms", "?")} ms '
             f'&middot; {_fmt(d.get("md_files", 0))} notes &middot; '
@@ -2488,17 +2566,11 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list) -> str
 <main class="main">
 {_header(d, live)}
 {_mobile_nav()}
-{_tiles(d, n_systems)}
-<div class="cols">
-<div class="colmain">
+{_tiles(d, len(d["systems"]))}
 {_questions_card(d)}
+<div class="cols2">
 {_answers_card(d)}
-</div>
-<div class="rail">
-{_gaps_card(d)}
-{_priority_card(d, len(facets))}
-{_coverage_card(d, facets)}
-</div>
+{_system_pressure_card(d, facets)}
 </div>
 {_links_card()}
 <div class="grid3">
