@@ -411,6 +411,17 @@ tr.qdet > td { background:var(--surface2); border-bottom:1px solid var(--line);
 .yourreply { background:var(--ok-bg); border-left:3px solid var(--ok);
   border-radius:10px; padding:9px 12px; font-size:12.5px; }
 .yourreply b { color:var(--ok); }
+.conf { display:inline-flex; gap:7px; align-items:center; margin-left:8px;
+  font-size:10.5px; font-weight:700; white-space:nowrap; }
+.conf-ok { color:var(--ok); }
+.conf-warn { color:var(--warn); }
+.conf-crit { color:var(--crit); }
+.confbar { width:56px; height:5px; border-radius:3px; background:var(--line2);
+  overflow:hidden; display:inline-block; }
+.confbar i { display:block; height:100%; border-radius:3px; }
+.confbar .cb-ok { background:var(--ok); }
+.confbar .cb-warn { background:var(--warn); }
+.confbar .cb-crit { background:var(--crit); }
 
 /* ---- right rail ---- */
 .grow { display:flex; justify-content:space-between; align-items:center; gap:8px;
@@ -817,7 +828,15 @@ function runSuggest(det) {
         out.textContent = "";
         var src = document.createElement("div");
         src.className = "src";
-        src.textContent = "from " + s.source;
+        src.textContent = "from " + s.source + " ";
+        var conf = typeof s.confidence === "number" ? s.confidence : 0;
+        var cls = conf >= 60 ? "ok" : conf >= 30 ? "warn" : "crit";
+        var badge = document.createElement("span");
+        badge.className = "conf conf-" + cls;
+        badge.innerHTML = '<span class="confbar"><i class="cb-' + cls
+          + '" style="width:' + conf + '%"></i></span>' + conf + "% confidence \\u00b7 "
+          + s.matched + " of " + s.total + " question terms covered";
+        src.appendChild(badge);
         var pre = document.createElement("pre");
         pre.textContent = s.text;
         var use = document.createElement("button");

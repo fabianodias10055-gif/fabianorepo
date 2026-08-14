@@ -448,6 +448,88 @@ def parse_answers() -> list[dict]:
     return out
 
 
+ANSWERS_KB_NAME = "05 - Answered questions.md"
+GENERAL_KB_DIR = "_general"
+
+
+def build_answers_kb() -> int:
+    """Materialize every answered question and your actual reply into the
+    Systems/ knowledge base, one generated note per system, so the Suggest
+    search runs over what you already answered, not only what you documented.
+
+    Sources: answered blocks in Inbox/*.md carrying a reply: field (the
+    YouTube backfill and reconciled hand copies), plus Inbox/02 - Answered.md
+    (replies sent with the panel's Reply button). Catalog-wide answers land
+    in Systems/_general, which Suggest always searches: licensing and tier
+    questions apply to every system. Regenerated deterministically; a file is
+    only written when its content actually changed, so the watcher sees one
+    rebuild when something new lands and then settles.
+    """
+    pairs: list[dict] = []
+    for q in parse_questions():
+        if q["status"] == "answered" and q.get("reply"):
+            pairs.append({
+                "system": q["system"], "who": q["who"], "date": q["date"],
+                "channel": q["channel"], "video": q.get("video", ""),
+                "q": q["text"], "a": q["reply"],
+            })
+    for a in parse_answers():
+        if a["a"]:
+            pairs.append({
+                "system": a["system"], "who": a["who"], "date": a["when"][:10],
+                "channel": a["channel"], "video": a.get("video", ""),
+                "q": a["q"], "a": a["a"],
+            })
+
+    by_system: dict[str, list[dict]] = {}
+    for p in pairs:
+        slug = p["system"] if p["system"] in NAME_BY_SLUG else GENERAL_KB_DIR
+        by_system.setdefault(slug, []).append(p)
+
+    written = 0
+    for slug, items in by_system.items():
+        items.sort(key=lambda p: p["date"], reverse=True)
+        name = NAME_BY_SLUG.get(slug, "General / catalog wide")
+        lines = [
+            "---",
+            "tags: [locodev, kb, answered, generated]",
+            f"system: {slug}",
+            "source: panel.build_answers_kb",
+            "---",
+            "",
+            f"# Answered questions: {name}",
+            "",
+            "Generated from your real replies (YouTube backfill plus the panel's",
+            "Reply button). **Do not edit by hand**: regenerated on every collect",
+            "and every reply. The Suggest button searches this note.",
+            "",
+        ]
+        for p in items:
+            q_head = " ".join(p["q"].split())[:120]
+            ctx = f"asked by {p['who']} · {p['date']} · {p['channel']}"
+            if p["video"]:
+                ctx += f" · video: {p['video']}"
+            lines += [
+                f"## Q: {q_head}",
+                "",
+                f"*{ctx}*",
+                "",
+                f"**Q:** {p['q']}",
+                f"**A:** {p['a']}",
+                "",
+            ]
+        content = "\n".join(lines) + "\n"
+
+        folder = VAULT / "Systems" / slug
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / ANSWERS_KB_NAME
+        old = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+        if old != content:
+            path.write_text(content, encoding="utf-8")
+            written += 1
+    return written
+
+
 # --------------------------------------------------------------------------
 # Suggested answers: search your own notes, never fabricate one
 # --------------------------------------------------------------------------
@@ -480,8 +562,10 @@ def suggest_answer(question: dict) -> dict:
     is part of what gets scored.
     """
     q_words = _keywords(question["text"])
+    total = len(q_words)
+    miss = {"text": "", "source": "", "confidence": 0, "matched": 0, "total": total}
     if not q_words:
-        return {"text": "", "source": ""}
+        return miss
 
     candidates: list[Path] = []
     system = question.get("system", "-")
@@ -493,6 +577,10 @@ def suggest_answer(question: dict) -> dict:
         # Catalog-wide or unknown system: search everything rather than
         # nothing, small corpus (a few dozen files), brute force is fine.
         candidates.extend((VAULT / "Systems").glob("*/*.md"))
+    else:
+        # General answers (licensing, tiers, compatibility) apply to a
+        # system question too; the _general KB is always in scope.
+        candidates.extend(sorted((VAULT / "Systems" / GENERAL_KB_DIR).glob("*.md")))
 
     best_score, best_text, best_source = 0, "", ""
     for path in candidates:
@@ -509,8 +597,17 @@ def suggest_answer(question: dict) -> dict:
                     score, section, path.relative_to(VAULT))
 
     if best_score < 2:  # a single shared word is coincidence, not an answer
-        return {"text": "", "source": ""}
-    return {"text": best_text, "source": str(best_source).replace("\\", "/")}
+        return miss
+    # Honest confidence: the share of the question's significant words this
+    # section actually covers. Not a probability, and never pretending to be
+    # one; the page shows the fraction alongside the percentage.
+    return {
+        "text": best_text,
+        "source": str(best_source).replace("\\", "/"),
+        "confidence": round(best_score * 100 / total),
+        "matched": best_score,
+        "total": total,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -1151,6 +1248,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             hit = suggest_answer(question)
             return self._send_json({
                 "ok": True, "text": hit["text"], "source": hit["source"],
+                "confidence": hit["confidence"], "matched": hit["matched"],
+                "total": hit["total"],
             })
 
         if self.path == "/reply":
@@ -1174,6 +1273,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
             update_question_status(qid, "answered")
             append_answered_log(question, answer, posted)
+            # The reply becomes searchable knowledge immediately: the next
+            # Suggest for the same topic finds it.
+            build_answers_kb()
             build(live=True)  # vault changed: the dashboard must reflect it now
 
             return self._send_json({

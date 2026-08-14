@@ -598,6 +598,15 @@ def main() -> int:
     added = write_inbox(inbox_rows, args.dry_run)
     flipped = reconcile_answered(inbox_rows, args.dry_run)
 
+    kb_written = 0
+    if not args.dry_run:
+        try:
+            import panel
+            panel.VAULT = VAULT  # keep both modules on the same vault path
+            kb_written = panel.build_answers_kb()
+        except Exception as exc:  # noqa: BLE001 - KB is derived data, never fatal here
+            print(f"answered-questions KB build failed: {type(exc).__name__}: {exc}")
+
     verb = "would be" if args.dry_run else ""
     print(f"\nfolders {verb} created: {created} · comment files {verb} updated: {updated} "
           f"· unchanged: {skipped}")
@@ -605,6 +614,7 @@ def main() -> int:
           f"· already answered by you: {total_answered}")
     print(f"added to inbox: {added} (new ones only) · hand-logged copies "
           f"reconciled as answered: {flipped}")
+    print(f"answered-questions KB notes updated: {kb_written}")
     print(f"quota used: {_quota['units']} units of the 10,000 daily · "
           f"{time.time() - t0:.1f}s")
     return 0
