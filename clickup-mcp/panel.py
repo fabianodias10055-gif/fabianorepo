@@ -699,11 +699,13 @@ def build_people(questions: list[dict]) -> list[dict]:
         p = people.setdefault(q["who"], {
             "who": q["who"], "channel": q["channel"],
             "subscriber": q["subscriber"], "asked": 0, "open": 0,
-            "last": q["date"],
+            "esc": 0, "last": q["date"],
         })
         p["asked"] += 1
         if q["status"] in ("escalated", "no-source"):
             p["open"] += 1
+        if q["status"] == "escalated":
+            p["esc"] += 1
         if q["subscriber"] != "unknown":
             p["subscriber"] = q["subscriber"]
     ordered = sorted(people.values(), key=lambda p: (-p["open"], -p["asked"]))
@@ -791,7 +793,20 @@ def scan() -> dict:
 
     total_facets = len(CATALOG) * len(FACETS)
     written = sum(s["done"] for s in systems)
+
+    # Counted here, over exactly the folders this scan reads, because the
+    # footer labels it "notes scanned". Never fatal: it is display only.
+    try:
+        md_files = (
+            sum(1 for _ in (VAULT / "Systems").rglob("*.md"))
+            + sum(1 for _ in (VAULT / "Inbox").glob("*.md"))
+            + sum(1 for _ in (VAULT / "YouTube" / "Videos").rglob("*.md"))
+        )
+    except OSError:
+        md_files = 0
+
     return {
+        "md_files": md_files,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "epoch": int(time.time()),
         "systems": systems,
@@ -1021,29 +1036,45 @@ def _update_history(out: Path, d: dict) -> list:
     return hist
 
 
+_build_lock = threading.Lock()
+
+
 def build(live: bool) -> dict:
-    _state["building"] = True
-    data = scan()
-    out = VAULT / "Panel"
-    out.mkdir(parents=True, exist_ok=True)
-    data["history"] = _update_history(out, data)
-    (out / "00 - Operations Center.md").write_text(render_markdown(data), encoding="utf-8")
-    (out / "panel.html").write_text(render_html(data, live), encoding="utf-8")
-    (out / "status.json").write_text(
-        json.dumps({"epoch": data["epoch"], "generated_at": data["generated_at"],
-                    "building": False}),
-        encoding="utf-8")
-    _state["epoch"] = data["epoch"]
-    _state["building"] = False
+    """Serialized: the /reply handler and the watcher thread can both ask for
+    a rebuild inside the same 2s window; unserialized, their interleaved
+    writes could hand the browser a truncated panel.html and drop a history
+    point. The finally guarantees the building flag never sticks: stuck true
+    would freeze every status poll at 'rebuilding...' forever."""
+    with _build_lock:
+        _state["building"] = True
+        try:
+            t0 = time.perf_counter()
+            data = scan()
+            data["scan_ms"] = int((time.perf_counter() - t0) * 1000)
+            out = VAULT / "Panel"
+            out.mkdir(parents=True, exist_ok=True)
+            data["history"] = _update_history(out, data)
+            (out / "00 - Operations Center.md").write_text(render_markdown(data), encoding="utf-8")
+            (out / "panel.html").write_text(render_html(data, live), encoding="utf-8")
+            (out / "status.json").write_text(
+                json.dumps({"epoch": data["epoch"], "generated_at": data["generated_at"],
+                            "building": False}),
+                encoding="utf-8")
+            _state["epoch"] = data["epoch"]
+        finally:
+            _state["building"] = False
     return data
 
 
 def fingerprint() -> tuple:
     """Cheap change detector: (path, mtime, size) for every note in the vault."""
     items = []
+    skip = {".obsidian", ".trash", ".git"}
     for p in VAULT.rglob("*.md"):
         if p.parent.name == "Panel":
             continue  # the panel writes here; watching it would loop
+        if any(part in skip for part in p.parts):
+            continue  # Obsidian internals and trash: not content, no rebuilds
         try:
             st = p.stat()
         except OSError:
@@ -1056,8 +1087,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=str(VAULT / "Panel"), **kw)
 
+    def end_headers(self):  # noqa: N802
+        # A live dashboard must never be cached: a hard refresh after a
+        # rebuild has to show the rebuilt page, not a stale browser copy.
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
     def do_GET(self):  # noqa: N802
-        if self.path == "/" or self.path.startswith("/index"):
+        # self.path includes the query string; the page keeps its filter
+        # state there ("/?st=no-source"), and that must still serve the
+        # panel, never a directory listing of the Panel folder.
+        route = self.path.split("?", 1)[0]
+        if route == "/" or route.startswith("/index"):
             self.path = "/panel.html"
         if self.path.startswith("/status.json"):
             body = json.dumps({
@@ -1066,7 +1107,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             }).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -1075,7 +1115,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             body = json.dumps(fetch_link_telemetry()).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -1156,9 +1195,13 @@ def watch_loop() -> None:
             continue
         if now != last:
             last = now
-            data = build(live=True)
-            print(f"[{data['generated_at']}] change detected, panel rebuilt "
-                  f"({data['written']}/{data['total_facets']} notes written)")
+            try:
+                data = build(live=True)
+            except Exception as exc:  # noqa: BLE001 - one failed build must not end watching
+                print(f"build failed: {type(exc).__name__}: {exc}")
+                continue
+            print(f"[{data['generated_at']}] change detected, panel rebuilt in "
+                  f"{data['scan_ms']}ms ({data['written']}/{data['total_facets']} notes written)")
 
 
 def server_alive(port: int) -> bool:
