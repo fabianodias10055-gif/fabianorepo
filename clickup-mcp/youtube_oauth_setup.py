@@ -78,10 +78,20 @@ def wait_for_code() -> str:
         def log_message(self, *a):
             pass
 
+    # Wait as long as the sign-in actually takes. The old three-minute cap
+    # kept expiring while the consent screen was being sorted out, so the
+    # approval landed on a server that had already given up. Ctrl+C is the
+    # way out; the loop reports every minute so it never looks hung.
     httpd = HTTPServer(("127.0.0.1", REDIRECT_PORT), Catch)
     thread = threading.Thread(target=httpd.handle_request, daemon=True)
     thread.start()
-    thread.join(timeout=180)
+    waited = 0
+    while thread.is_alive():
+        thread.join(timeout=60)
+        if thread.is_alive():
+            waited += 1
+            print(f"still waiting for you to approve in the browser "
+                  f"({waited} min)... Ctrl+C to stop.", flush=True)
     httpd.server_close()
     if holder.get("error"):
         print(f"ERROR: Google returned an error: {holder['error']}")

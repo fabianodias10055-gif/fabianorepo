@@ -1770,10 +1770,13 @@ document.addEventListener("keydown", function (e) {
     var days = Math.floor((now - t) / 86400000);
     cell.title = cell.dataset.date;
     /* "4y" says backlog; "2022-10-29" makes you do the arithmetic */
+    var years = days / 365;
     cell.textContent = days < 1 ? "today"
       : days < 30 ? days + "d"
       : days < 365 ? Math.round(days / 30) + "mo"
-      : (days / 365).toFixed(days < 730 ? 1 : 0) + "y";
+      /* one decimal, but never a bare ".0": 2y and 2.0y side by side read
+         as two different precisions of the same thing */
+      : (Math.round(years * 10) / 10) + "y";
     if (days > 30) cell.classList.add("agec");
     else if (days > 7) cell.classList.add("agew");
   });
