@@ -178,6 +178,17 @@ def _st_class(status: str) -> str:
 # (nothing written to answer from). On screen that reads as jargon, so the
 # label is plain and the original meaning moves into the tooltip.
 _STATUS_LABEL = {"no-source": "unanswered"}
+# An emoji carries the state at a glance and, unlike the colour alone,
+# still reads for anyone who cannot separate the reds from the greens.
+_STATUS_EMOJI = {
+    "no-source": "📥",      # inbox tray
+    "escalated": "⚠️",   # warning
+    "answered": "✅",           # check
+    "out-of-scope": "⏭️",
+    "unknown": "❓",
+    "ok": "✅", "partial": "⚠️", "blind": "🚫",
+}
+_DIFF_EMOJI = {"easy": "🟢", "medium": "🟡", "hard": "🔴"}
 _STATUS_TITLE = {
     "no-source": "no-source in the vault: nothing written yet to answer from",
     "escalated": "escalated: waiting on you specifically",
@@ -189,8 +200,10 @@ _STATUS_TITLE = {
 def _pill(status: str) -> str:
     label = _STATUS_LABEL.get(status, status)
     title = _STATUS_TITLE.get(status, status)
+    emoji = _STATUS_EMOJI.get(status, "")
     return (f'<span class="pill {_st_class(status)}" '
-            f'title="{escape(title, quote=True)}">{escape(label)}</span>')
+            f'title="{escape(title, quote=True)}">'
+            f'<i class="pe">{emoji}</i>{escape(label)}</span>')
 
 
 def _diff_pill(q: dict) -> str:
@@ -204,7 +217,8 @@ def _diff_pill(q: dict) -> str:
         "hard": "hard: nothing in the vault covers this yet, it is a documentation gap",
     }
     return (f'<span class="dpill d-{d}" title="{escape(tips[d], quote=True)}">'
-            f'{d} <b>{q.get("coverage", 0)}%</b></span>')
+            f'<i class="pe">{_DIFF_EMOJI[d]}</i>{d} '
+            f'<b>{q.get("coverage", 0)}%</b></span>')
 
 
 def _chn(channel: str) -> str:
@@ -253,6 +267,7 @@ _DARK_TOKENS = """
     --e2:0 2px 10px rgba(0,0,0,.45);
     --e3:0 18px 44px rgba(0,0,0,.6);
     --skel:linear-gradient(90deg,#161d29 25%,#1e2836 37%,#161d29 63%);
+    --glow-a:rgba(108,141,255,.10); --glow-b:rgba(169,139,250,.08);
 """
 
 CSS = """
@@ -287,6 +302,8 @@ CSS = """
   --skel:linear-gradient(90deg,#eef1f5 25%,#f6f8fa 37%,#eef1f5 63%);
   /* ---- layout ---- */
   --side-w:224px; --head-h:62px; --page-max:1640px;
+  --glow-a:rgba(61,99,245,.07); --glow-b:rgba(109,60,240,.06);
+  --glass:82%; --glass-blur:14px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -299,6 +316,10 @@ CSS = """
 
 * { box-sizing:border-box; }
 html { scroll-behavior:smooth; -webkit-text-size-adjust:100%; }
+body::before { content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
+  background:
+    radial-gradient(60rem 40rem at 12% -8%, var(--glow-a), transparent 60%),
+    radial-gradient(52rem 36rem at 92% 4%, var(--glow-b), transparent 62%); }
 body { margin:0; background:var(--ground); color:var(--ink);
   font-family:var(--ui); font-size:var(--t-base); line-height:1.55;
   -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
@@ -315,7 +336,10 @@ a { color:var(--accent); text-underline-offset:2px; }
 .app { display:grid; grid-template-columns:var(--side-w) minmax(0,1fr); min-height:100vh; }
 
 /* ================= sidebar ================= */
-.side { position:sticky; top:0; height:100vh; background:var(--surface);
+.side { position:sticky; top:0; height:100vh;
+  background:color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter:blur(var(--glass-blur)) saturate(1.2);
+  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(1.2);
   border-right:1px solid var(--line); display:flex; flex-direction:column;
   padding:var(--s4) var(--s3); gap:var(--s1); }
 .brand { display:flex; gap:var(--s3); align-items:center; padding:var(--s1) var(--s2) var(--s5); }
@@ -423,7 +447,11 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
 .tiles { display:grid; gap:var(--s3); margin-bottom:var(--s5);
   grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); }
 @media (min-width:1180px) { .tiles { grid-template-columns:1.55fr 1fr 1fr 1fr 1fr; } }
-.tile { position:relative; background:var(--surface); border:1px solid var(--line);
+.tile { position:relative;
+  background:color-mix(in srgb, var(--surface) var(--glass), transparent);
+  backdrop-filter:blur(var(--glass-blur)) saturate(1.25);
+  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(1.25);
+  border:1px solid var(--line);
   border-radius:var(--r-lg); padding:var(--s4); box-shadow:var(--e1); overflow:hidden;
   transition:box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease),
     border-color var(--dur) var(--ease); }
@@ -461,7 +489,10 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
 /* ================= layout + cards ================= */
 .cols { display:grid; grid-template-columns:minmax(0,1fr) 336px; gap:var(--s4);
   align-items:start; }
-.card { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-lg);
+.card { background:color-mix(in srgb, var(--surface) var(--glass), transparent);
+  backdrop-filter:blur(var(--glass-blur)) saturate(1.25);
+  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(1.25);
+  border:1px solid var(--line); border-radius:var(--r-lg);
   padding:var(--s4) var(--s5); box-shadow:var(--e1); margin-bottom:var(--s4);
   scroll-margin-top:calc(var(--head-h) + var(--s3)); }
 .card h2 { display:flex; align-items:center; gap:var(--s2); font-size:var(--t-lg);
@@ -512,7 +543,9 @@ select.fchip { appearance:none; max-width:200px; padding-right:28px;
 /* ================= tables ================= */
 .scroll { overflow-x:auto; margin:0 calc(var(--s5) * -1); padding:0 var(--s5); }
 table { width:100%; border-collapse:collapse; font-size:var(--t-base); }
-th { text-align:left; color:var(--ink3); font-family:var(--mono); font-size:var(--t-2xs);
+th { background:color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+  text-align:left; color:var(--ink3); font-family:var(--mono); font-size:var(--t-2xs);
   font-weight:600; letter-spacing:.07em; text-transform:uppercase;
   padding:var(--s2) var(--s3) var(--s2) 0; border-bottom:1px solid var(--line);
   white-space:nowrap; background:var(--surface); }
@@ -565,7 +598,7 @@ tr.qdet.open > td { box-shadow:inset 3px 0 0 var(--accent); }
 .pill { display:inline-flex; align-items:center; gap:4px; padding:3px 9px;
   border-radius:var(--r-full); font-size:var(--t-2xs); font-weight:680;
   letter-spacing:.01em; white-space:nowrap; border:1px solid transparent; }
-.pill::before { content:""; width:5px; height:5px; border-radius:50%; background:currentColor; }
+.pill { gap:5px; }
 .st-answered { background:var(--ok-bg); color:var(--ok); border-color:var(--ok-line); }
 .st-no-source { background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line); }
 .st-escalated { background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line); }
@@ -618,17 +651,20 @@ a.vidcard:hover { border-color:var(--accent); background:var(--accent-bg); }
 .acts { text-align:right; white-space:nowrap; width:1%; }
 /* Dimmed rather than hidden: replying is the point of this table, so the
    action must stay discoverable without a hover to find it. */
-.rowacts { display:inline-flex; gap:var(--s1); justify-content:flex-end;
-  opacity:.55; transition:opacity var(--dur) var(--ease); }
+.rowacts { display:inline-flex; flex-direction:column; gap:3px; align-items:flex-end;
+  opacity:.6; transition:opacity var(--dur) var(--ease); }
 tr.qrow:hover .rowacts, tr.qrow:focus-within .rowacts,
 tr.qrow.kfocus .rowacts, tr.qrow[aria-expanded="true"] .rowacts { opacity:1; }
 @media (hover:none) { .rowacts { opacity:1; } }
 .alink { display:inline-flex; gap:5px; align-items:center; color:var(--ink2);
-  font-size:var(--t-xs); font-weight:600; cursor:pointer; padding:4px 9px;
-  border-radius:var(--r-sm); border:1px solid var(--line); background:var(--surface);
+  font-size:var(--t-xs); font-weight:600; cursor:pointer; padding:3px 8px;
+  border-radius:var(--r-sm); border:1px solid transparent; background:none;
+  white-space:nowrap;
   transition:color var(--dur) var(--ease), border-color var(--dur) var(--ease),
     background var(--dur) var(--ease); }
 .alink:hover { color:var(--accent); border-color:var(--accent-line); background:var(--accent-bg); }
+.pe { font-style:normal; font-size:11px; line-height:1; }
+.he { font-size:16px; line-height:1; }
 .alink svg { flex:none; }
 .sysdrill { cursor:pointer; border-bottom:1px dashed var(--line);
   transition:color var(--dur) var(--ease), border-color var(--dur) var(--ease); }
@@ -865,6 +901,14 @@ footer { margin-top:var(--s6); padding-top:var(--s4); border-top:1px solid var(-
   .scroll { margin:0 calc(var(--s4) * -1); padding:0 var(--s4); }
 }
 
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) {
+  .card, .tile, .side, th { background:var(--surface); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .card, .tile, .side, th { background:var(--surface); backdrop-filter:none;
+    -webkit-backdrop-filter:none; }
+  body::before { display:none; }
+}
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior:auto; }
   *, *::before, *::after { animation-duration:.001ms !important;
@@ -877,7 +921,9 @@ footer { margin-top:var(--s6); padding-top:var(--s4); border-top:1px solid var(-
   .app { display:block; }
   .top { position:static; backdrop-filter:none; }
   body { background:#fff; color:#000; font-size:10pt; }
-  .card, .tile { break-inside:avoid; border-color:#ccc; box-shadow:none; }
+  .card, .tile { break-inside:avoid; border-color:#ccc; box-shadow:none;
+    background:#fff; backdrop-filter:none; -webkit-backdrop-filter:none; }
+  body::before { display:none; }
   .cols, .grid3 { display:block; }
   .card { margin-bottom:12pt; }
   a[href^="http"]::after { content:" (" attr(href) ")"; font-size:8pt; color:#555; }
@@ -1888,9 +1934,9 @@ def _question_rows(questions: list) -> str:
             f'<td class="num"><span class="cval">{q["date"]}</span></td>'
             f'<td class="acts"><span class="rowacts">'
             f'<span class="alink" data-act="suggest" title="Search your notes and past answers">'
-            f'{_icon("sparkle", 13)}Suggest</span>'
+            f'{_icon("sparkle", 12)}Suggest answer</span>'
             f'<span class="alink" data-act="reply" title="Write a reply">'
-            f'{_icon("replyic", 13)}Reply</span>'
+            f'{_icon("replyic", 12)}Reply</span>'
             f'</span></td></tr>'
         )
 
@@ -1973,7 +2019,7 @@ def _questions_card(d: dict) -> str:
     arrow = f'<span class="sarrow">{_icon("up", 10)}</span>'
     return (
         f'<section class="card" id="questions">'
-        f'<h2>{_icon("chat")}Incoming questions'
+        f'<h2><span class="he">💬</span>Incoming questions'
         f'<span class="cnt">showing <span id="qcount"></span> &middot; '
         f'j/k navigate &middot; n next open</span></h2>'
         f'{_filters(d["questions"])}'
@@ -2025,7 +2071,7 @@ def _answers_card(d: dict) -> str:
         f'Inbox/02 - Answered.md, and in the searchable knowledge base.</p></div>')
     return (
         f'<section class="card" id="answers">'
-        f'<h2>{_icon("check")}Answers sent'
+        f'<h2><span class="he">✅</span>Answers sent'
         f'<span class="cnt">{_fmt(len(answers))} logged &middot; {week} this week</span></h2>'
         f'{body}{more}</section>'
     )
@@ -2049,7 +2095,7 @@ def _gaps_card(d: dict) -> str:
     body = "".join(rows) if rows else (
         f'<div class="emptybox"><span class="eic">{_icon("check", 20)}</span>'
         f'<b>No open gaps</b><p>Nothing is marked no-source right now.</p></div>')
-    return (f'<section class="card" id="gaps"><h2>{_icon("target")}Gaps to close'
+    return (f'<section class="card" id="gaps"><h2><span class="he">🎯</span>Gaps to close'
             f'<span class="cnt">click to filter</span></h2>{body}{more}</section>')
 
 
@@ -2067,7 +2113,7 @@ def _priority_card(d: dict, n_facets: int) -> str:
     more = (f'<button class="linkbtn" data-viewall>View all {len(queue)}</button>'
             if len(queue) > 8 else "")
     body = "".join(rows) if rows else '<div class="empty">No gaps with recorded demand.</div>'
-    return (f'<section class="card" id="priority"><h2>{_icon("flame")}Priority queue'
+    return (f'<section class="card" id="priority"><h2><span class="he">🔥</span>Priority queue'
             f'<span class="cnt">demand 60% &middot; gap 40%</span></h2>{body}{more}</section>')
 
 
@@ -2095,7 +2141,7 @@ def _coverage_card(d: dict, facets: list) -> str:
     more = (f'<button class="linkbtn" data-viewall>View all {len(d["systems"])} systems</button>'
             if len(d["systems"]) > 8 else "")
     return (
-        f'<section class="card" id="systems"><h2>{_icon("book")}Documentation coverage</h2>'
+        f'<section class="card" id="systems"><h2><span class="he">📚</span>Documentation coverage</h2>'
         f'<div class="scroll"><table aria-label="Documentation coverage"><thead><tr>'
         f'<th scope="col">System</th><th scope="col">Done</th>'
         f'<th scope="col">Asked</th><th scope="col">Coverage</th></tr></thead>'
@@ -2125,7 +2171,7 @@ def _people_card(d: dict) -> str:
     body = "".join(rows) if rows else (
         '<tr><td colspan="4"><div class="empty">Nobody logged yet.</div></td></tr>')
     return (
-        f'<section class="card" id="people"><h2>{_icon("users")}Who is asking'
+        f'<section class="card" id="people"><h2><span class="he">👥</span>Who is asking'
         f'<span class="cnt">{_fmt(len(d["people"]))} people</span></h2>'
         f'<div class="scroll"><table aria-label="People asking questions"><thead><tr>'
         f'<th scope="col">User</th><th scope="col">Asked</th>'
@@ -2165,7 +2211,7 @@ def _videos_card(d: dict) -> str:
             if len(videos) > 6 else "")
     body = "".join(rows) if rows else '<div class="empty">No videos collected yet.</div>'
     return (
-        f'<section class="card" id="videos"><h2>{_icon("video")}Videos'
+        f'<section class="card" id="videos"><h2><span class="he">🎬</span>Videos'
         f'<span class="cnt">{_fmt(len(videos))} &middot; {transcripts} transcripts '
         f'&middot; {untagged} untagged</span></h2>{body}{more}</section>'
     )
@@ -2181,7 +2227,7 @@ def _links_card() -> str:
               '<div class="skel skel-row" style="width:52%"></div>'
               '<div class="skel skel-row" style="width:61%"></div>')
     return (
-        f'<section class="card" id="links"><h2>{_icon("link")}Link telemetry'
+        f'<section class="card" id="links"><h2><span class="he">🔗</span>Link telemetry'
         f'<span class="cnt" id="lt-state" role="status" aria-live="polite">loading...</span>'
         f'<a class="admlink" href="https://locodev.dev/adminlocoILco" target="_blank" '
         f'rel="noopener">open admin {_icon("external", 12)}</a></h2>'
@@ -2200,7 +2246,7 @@ def _sources_card(instrumentation: list) -> str:
             f'<span class="pill st-{escape(state, quote=True)}">{escape(state)}</span></div>'
         )
     return (
-        f'<section class="card" id="sources"><h2>{_icon("eye")}Measured, and blind</h2>'
+        f'<section class="card" id="sources"><h2><span class="he">👀</span>Measured, and blind</h2>'
         f'{"".join(rows)}</section>'
     )
 
