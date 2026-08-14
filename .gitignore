@@ -9,6 +9,7 @@ discord-feedback-bot/data/
 clickup-mcp/alteracoes.jsonl
 clickup-mcp/.ultima_varredura.json
 clickup-mcp/.discord_state.json
+clickup-mcp/.discord_backup_state.json
 clickup-mcp/exports/
 clickup-mcp/reconciliar.log
 clickup-mcp/panel.log

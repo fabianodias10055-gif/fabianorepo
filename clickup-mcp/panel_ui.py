@@ -1406,10 +1406,10 @@ function detailFor(qid) {
   parts.push('<textarea class="qbox" aria-label="Reply text" '
     + 'placeholder="Write a reply..."></textarea>');
   parts.push('<div class="detbtns"><button class="btn tiny primary replybtn" data-reply>'
-    + (q.postable ? "Post to YouTube" : "Save answer to vault")
+    + (q.postable ? "Post to " + esc(q.dest) : "Save answer to vault")
     + '</button><span class="msg" aria-live="polite"></span>'
     + '<span class="deliver">' + (q.postable
-        ? "posts the comment reply and files it in the vault"
+        ? "replies to the original message and files it in the vault"
         : "files it in the vault; this channel cannot be posted to from here")
     + "</span></div>");
 
@@ -2320,8 +2320,11 @@ def _question_payload(questions: list) -> dict:
             "thumb": _thumb_url(q.get("video_id", "")),
             # Only a YouTube comment can be answered in place; everything
             # else is filed in the vault and the button must say so.
-            "postable": bool(q["channel"] == "youtube"
-                             and q.get("source", "").startswith("yt:")),
+            "postable": bool(
+                (q["channel"] == "youtube" and q.get("source", "").startswith("yt:"))
+                or (q["channel"] == "discord" and q.get("source", "").startswith("dc:")
+                    and "discord.com/channels/" in q.get("url", ""))),
+            "dest": ("YouTube" if q["channel"] == "youtube" else "Discord"),
         }
     return out
 
@@ -2403,7 +2406,7 @@ def _answers_card(d: dict) -> str:
         if a.get("code"):
             acts.append(f'<button class="btn tiny" data-editans '
                         f'data-code="{escape(a["code"], quote=True)}">Edit</button>')
-            if not a["posted"] and a["channel"] == "youtube":
+            if not a["posted"] and a["channel"] in ("youtube", "discord"):
                 acts.append(f'<button class="btn tiny primary" data-resend '
                             f'data-code="{escape(a["code"], quote=True)}" '
                             f'data-when="{escape(a["when"], quote=True)}">'

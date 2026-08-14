@@ -412,11 +412,14 @@ def resend_answer(code: str, when: str) -> dict:
         if not question:
             return {"ok": False, "error": "question no longer in the inbox"}
         source = question.get("source", "")
-        if question["channel"] != "youtube" or not source.startswith("yt:"):
-            return {"ok": False,
-                    "error": "this channel cannot be posted to from here"}
-
-        posted, msg = post_youtube_reply(source[len("yt:"):], answer)
+        if question["channel"] == "youtube" and source.startswith("yt:"):
+            posted, msg = post_youtube_reply(source[len("yt:"):], answer)
+        else:
+            target = discord_target(question)
+            if not target:
+                return {"ok": False,
+                        "error": "this channel cannot be posted to from here"}
+            posted, msg = post_discord_reply(*target, answer)
         if not posted:
             return {"ok": False, "error": msg}
 
@@ -947,13 +950,22 @@ def _vault_map() -> str:
     return """- Systems/<slug>/ has one folder per system: 00 Overview, 01 How it works,
   02 Setup, 03 Common issues, 04 Blueprints.
 - Systems/<slug>/05 - Answered questions.md holds real replies already given
-  to customers. Systems/_general/ holds licensing, tier and compatibility
-  answers that apply to every system.
-- YouTube/Videos/<date title>/ holds each video's description, comments and
-  02 - Transcript.md, the spoken transcript with a clickable timestamp on
-  every paragraph. When the answer is demonstrated on screen rather than
-  written down, that transcript is where it lives, and citing the timestamp
-  is more useful to the person than describing the steps."""
+  to customers, each stamped with who asked and when. Systems/_general/
+  holds licensing, tier and compatibility answers that apply to every system.
+- YouTube/Videos/<date title>/ holds each video's 00 - Overview (with the
+  chapter list), 01 - Description, 03 - Comments, and 02 - Transcript.md,
+  the spoken transcript with a clickable timestamp on every paragraph. When
+  the answer is demonstrated on screen rather than written down, that
+  transcript is where it lives, and citing the timestamp is more useful to
+  the person than describing the steps.
+- Inbox/ holds every question ever logged and is worth searching directly:
+  01 - From YouTube.md and 03 - From Discord.md carry the raw threads, with
+  a reply: line on the ones already answered, and 02 - Answered.md is the
+  log of replies sent from this panel. The Discord history in particular
+  contains long troubleshooting exchanges that exist nowhere else.
+
+Search the whole vault, not only the folder that looks relevant. Grep for
+the distinctive words of the question across every directory above."""
 
 
 def _ai_context(question: dict) -> str:
@@ -987,6 +999,20 @@ The vault is the current directory:
 Your job is RETRIEVAL, not writing. Search widely (the question may be worded
 very differently from the notes, may be a rough translation, and may be about
 a different system than the one tagged).
+
+
+Dates matter more than usual here. This catalog has been rebuilt across
+Unreal versions and across generations of the same system, so material
+written at a different time can describe a different implementation. The
+question you are answering is dated {question['date']}.
+- Check the date on anything you plan to rely on: a video folder starts with
+  its publish date, an answered question carries the date it was asked.
+- Prefer the material closest in time to the question. When the only source
+  is much older or newer, say so in the answer rather than presenting it as
+  current: "this was how it worked in the <date> version".
+- Engine and pack versions (UE 5.3 through 5.6, GASP, ALS, Motion Matching)
+  are the usual reason two sources disagree. If the person did not say which
+  version they are on and it changes the answer, ask.
 
 Rules:
 - `passage` must be text copied VERBATIM from a file you opened. Never
@@ -1032,6 +1058,20 @@ Your job: search this vault (the current directory) and draft the reply.
   to customers. Systems/_general/ holds licensing, tier and compatibility
   answers that apply to every system.
 - YouTube/Videos/<date title>/ holds each video's description and comments.
+
+
+Dates matter more than usual here. This catalog has been rebuilt across
+Unreal versions and across generations of the same system, so material
+written at a different time can describe a different implementation. The
+question you are answering is dated {question['date']}.
+- Check the date on anything you plan to rely on: a video folder starts with
+  its publish date, an answered question carries the date it was asked.
+- Prefer the material closest in time to the question. When the only source
+  is much older or newer, say so in the answer rather than presenting it as
+  current: "this was how it worked in the <date> version".
+- Engine and pack versions (UE 5.3 through 5.6, GASP, ALS, Motion Matching)
+  are the usual reason two sources disagree. If the person did not say which
+  version they are on and it changes the answer, ask.
 
 Rules:
 - Ground every claim in what you actually read. Do not invent node names,
@@ -1342,6 +1382,61 @@ def fetch_link_telemetry() -> dict:
         "countries": countries if isinstance(countries, list) else [],
         "fetched_at": int(now),
     })
+
+
+# --------------------------------------------------------------------------
+# Replying on Discord, as the bot. The collector already reads with this
+# token; posting uses the same one, so the answer arrives from the LocoAI
+# bot the members already know, as a reply to the original message.
+# --------------------------------------------------------------------------
+
+DISCORD_API = "https://discord.com/api/v10"
+_DISCORD_URL = re.compile(r"discord\.com/channels/(\d+|@me)/(\d+)/(\d+)")
+
+
+def discord_target(question: dict) -> tuple[str, str] | None:
+    """(channel_id, message_id) for a collected Discord question."""
+    source = question.get("source", "")
+    if question.get("channel") != "discord" or not source.startswith("dc:"):
+        return None
+    m = _DISCORD_URL.search(question.get("url", ""))
+    if not m:
+        return None
+    return m.group(2), source[len("dc:"):]
+
+
+def post_discord_reply(channel_id: str, message_id: str, text: str) -> tuple[bool, str]:
+    token = os.getenv("DISCORD_BOT_TOKEN", "").strip()
+    if not token:
+        return False, ("Discord posting is not set up. The vault was still "
+                       "updated. Put DISCORD_BOT_TOKEN in clickup-mcp/.env.")
+    # fail_if_not_exists false: a deleted original should still deliver the
+    # answer to the channel rather than silently dropping it.
+    body = json.dumps({
+        "content": text[:1900],
+        "message_reference": {"message_id": message_id,
+                              "fail_if_not_exists": False},
+        "allowed_mentions": {"parse": []},
+    }).encode()
+    req = urlrequest.Request(
+        f"{DISCORD_API}/channels/{channel_id}/messages",
+        data=body, method="POST",
+        headers={"Authorization": f"Bot {token}",
+                 "Content-Type": "application/json",
+                 "User-Agent": "LocoDevPanel (https://locodev.dev, 1.0)"},
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=20) as resp:
+            json.load(resp)
+        return True, "Posted to Discord as the bot."
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:200]
+        if exc.code == 403:
+            return False, ("Discord refused: the bot lacks Send Messages in "
+                           "that channel.")
+        return False, f"Discord refused the reply ({exc.code}): {detail}"
+    except urlerror.URLError as exc:
+        return False, f"Could not reach Discord: {exc.reason}"
 
 
 def build_gaps(questions: list[dict]) -> list[dict]:
@@ -1799,7 +1894,9 @@ def build(live: bool) -> dict:
 def fingerprint() -> tuple:
     """Cheap change detector: (path, mtime, size) for every note in the vault."""
     items = []
-    skip = {".obsidian", ".trash", ".git"}
+    # Discord/ is an archive the panel never parses; watching thousands
+    # of files there would rebuild the page on every backup write.
+    skip = {".obsidian", ".trash", ".git", "Discord"}
     for p in VAULT.rglob("*.md"):
         if p.parent.name == "Panel":
             continue  # the panel writes here; watching it would loop
@@ -1930,10 +2027,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # Vault side always happens: this is the rigid part of the rule.
             # Posting to the platform is best-effort on top of it, never a
             # precondition for the vault to reflect that you replied.
-            posted, platform_msg = False, "Not a YouTube question: nothing to post."
+            posted, platform_msg = False, "This channel cannot be posted to from here."
             if question["channel"] == "youtube" and question["source"].startswith("yt:"):
                 comment_id = question["source"][len("yt:"):]
                 posted, platform_msg = post_youtube_reply(comment_id, answer)
+            else:
+                target = discord_target(question)
+                if target:
+                    posted, platform_msg = post_discord_reply(*target, answer)
 
             update_question_status(qid, "answered")
             append_answered_log(question, answer, posted)
