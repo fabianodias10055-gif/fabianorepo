@@ -8,6 +8,11 @@ the vault is the only source of truth and the page only renders it. The one
 exception is UI preference and continuity state (theme, filters in the URL,
 open rows, unsent reply drafts), which lives in the browser precisely so the
 automatic reload on every rebuild never loses your place or your typing.
+
+The visual layer is a token system, not ad-hoc values: every size, space,
+radius, shadow and color resolves to a custom property defined once in
+:root. Changing the product's look means editing tokens, not hunting
+literals through a thousand lines of CSS.
 """
 
 from html import escape
@@ -44,7 +49,13 @@ _ICONS = {
     "eye": '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
     "link": '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
     "copy": '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
-    "theme": '<circle cx="12" cy="12" r="9"/><path d="M12 3v18"/><path d="M12 3a9 9 0 0 1 0 18"/>',
+    "sun": '<circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    "moon": '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+    "auto": '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/>',
+    "inbox": '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+    "menu": '<path d="M3 12h18M3 6h18M3 18h18"/>',
+    "up": '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>',
+    "down": '<path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/>',
 }
 
 # Filled brand marks (approximations, small sizes): stroke icons read poorly
@@ -61,7 +72,7 @@ _BRAND = {
 def _icon(name: str, size: int = 16) -> str:
     return (
         f'<svg width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" '
-        f'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+        f'stroke="currentColor" stroke-width="1.9" stroke-linecap="round" '
         f'stroke-linejoin="round" aria-hidden="true">{_ICONS[name]}</svg>'
     )
 
@@ -81,9 +92,12 @@ def _fmt(n) -> str:
         return str(n)
 
 
-def _spark(vals: list, color: str, w: int = 96, h: int = 30) -> str:
-    """Real trend line from history.json. With a single point it renders flat:
-    honest, it grows into a curve as history accumulates."""
+def _spark(vals: list, ident: str, color: str, w: int = 104, h: int = 34) -> str:
+    """Real trend line from history.json, drawn as a gradient-filled area.
+
+    With a single point it renders flat: honest, it grows into a curve as
+    history accumulates rather than faking a trend nobody measured.
+    """
     vals = list(vals) or [0]
     if len(vals) == 1:
         vals = vals * 2
@@ -93,14 +107,19 @@ def _spark(vals: list, color: str, w: int = 96, h: int = 30) -> str:
     pts = []
     for i, v in enumerate(vals):
         x = 2 + i * (w - 4) / (n - 1)
-        y = (h - 4) - (v - lo) * (h - 8) / span
+        y = (h - 5) - (v - lo) * (h - 11) / span
         pts.append(f"{x:.1f},{y:.1f}")
     poly = " ".join(pts)
-    area = f"2,{h - 2} {poly} {w - 2},{h - 2}"
+    area = f"2,{h - 1} {poly} {w - 2},{h - 1}"
+    gid = f"g{ident}"
     return (
         f'<svg class="spark" viewBox="0 0 {w} {h}" preserveAspectRatio="none" aria-hidden="true">'
-        f'<polygon points="{area}" fill="{color}" opacity="0.12"></polygon>'
-        f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="2" '
+        f'<defs><linearGradient id="{gid}" x1="0" y1="0" x2="0" y2="1">'
+        f'<stop offset="0%" stop-color="{color}" stop-opacity=".28"/>'
+        f'<stop offset="100%" stop-color="{color}" stop-opacity="0"/>'
+        f'</linearGradient></defs>'
+        f'<polygon points="{area}" fill="url(#{gid})"></polygon>'
+        f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="1.8" '
         f'stroke-linecap="round" stroke-linejoin="round"></polyline></svg>'
     )
 
@@ -113,14 +132,19 @@ def _safe_url(url: str) -> str:
     return u if u.lower().startswith(("http://", "https://")) else ""
 
 
-def _hue(name: str) -> int:
+# A curated hue set instead of the full circle: random hues produced muddy
+# olive and mustard avatars that fought the accent. These ten are spaced,
+# saturated and all sit comfortably beside the indigo brand color.
+_AV_HUES = (214, 245, 268, 292, 318, 344, 8, 26, 162, 190)
+
+
+def _avatar(who: str, size: str = "") -> str:
     import hashlib
-    return int(hashlib.sha1(name.encode()).hexdigest()[:6], 16) % 360
-
-
-def _avatar(who: str) -> str:
+    idx = int(hashlib.sha1(who.encode()).hexdigest()[:6], 16) % len(_AV_HUES)
+    hue = _AV_HUES[idx]
     initial = escape((who.lstrip("@")[:1] or "?").upper())
-    return f'<span class="av" style="background:hsl({_hue(who)} 60% 45%)">{initial}</span>'
+    cls = f"av {size}".strip()
+    return (f'<span class="{cls}" style="--h:{hue}" aria-hidden="true">{initial}</span>')
 
 
 def _st_class(status: str) -> str:
@@ -157,39 +181,61 @@ def _delta24(hist: list, key: str) -> int:
 
 
 # --------------------------------------------------------------------------
-# Style. Light per the mockup; the dark token block is emitted twice, once
-# under prefers-color-scheme for the "system" setting and once under
-# [data-theme="dark"] so the in-page theme toggle wins in both directions.
+# Style. A token system: sizes, spaces, radii, shadows and colors are all
+# custom properties declared once. The dark token block is emitted twice,
+# once under prefers-color-scheme for the "system" setting and once under
+# [data-theme="dark"] so the in-page toggle wins in both directions.
 # --------------------------------------------------------------------------
 
 _DARK_TOKENS = """
-    --ground:#0d1117; --surface:#151b23; --surface2:#1a222c;
-    --line:#26303d; --line2:#1f2833;
-    --ink:#e6edf3; --ink2:#96a1b2; --ink3:#68758a;
-    --accent:#4f8ef7; --accent-bg:#16283f;
-    --ok:#3fb968; --ok-bg:#12291a;
-    --warn:#e5a13b; --warn-bg:#2d2213;
-    --crit:#ef5350; --crit-bg:#331717;
-    --info:#a78bfa; --info-bg:#241b38;
-    --mute-bg:#1e2530;
-    --shadow:none;
+    --ground:#0a0c11; --surface:#111620; --surface2:#161d29; --surface3:#1c2534;
+    --line:#212a38; --line2:#1a2230;
+    --ink:#e9edf4; --ink2:#98a3b5; --ink3:#69748a;
+    --accent:#6c8dff; --accent-ink:#0a0c11; --accent-bg:#161f38; --accent-line:#2b3d68;
+    --ok:#3ecf82; --ok-bg:#0f2a1e; --ok-line:#1c4834;
+    --warn:#e9a83c; --warn-bg:#2b2113; --warn-line:#4a3a1c;
+    --crit:#f2645a; --crit-bg:#2d1618; --crit-line:#502428;
+    --info:#a98bfa; --info-bg:#221c39; --info-line:#3a2f60;
+    --mute-bg:#1a2230;
+    --av-l:58%; --av-s:52%;
+    --e1:0 1px 2px rgba(0,0,0,.4);
+    --e2:0 2px 10px rgba(0,0,0,.45);
+    --e3:0 18px 44px rgba(0,0,0,.6);
+    --skel:linear-gradient(90deg,#161d29 25%,#1e2836 37%,#161d29 63%);
 """
 
 CSS = """
 :root {
-  --ground:#f2f5f9; --surface:#ffffff; --surface2:#f6f8fb;
-  --line:#e4e9f2; --line2:#edf1f7;
-  --ink:#0f172a; --ink2:#5b6779; --ink3:#8b96a8;
-  --accent:#2563eb; --accent-bg:#e8effd;
-  --ok:#16a34a; --ok-bg:#e6f6ec;
-  --warn:#d97706; --warn-bg:#fbf1df;
-  --crit:#dc2626; --crit-bg:#fdeaea;
-  --info:#7c3aed; --info-bg:#f1eafd;
-  --indigo:#6366f1;
-  --mute-bg:#eef1f6;
-  --shadow:0 1px 2px rgba(15,23,42,.05);
-  --ui:-apple-system,"Segoe UI",system-ui,Roboto,Arial,sans-serif;
-  --mono:"Cascadia Mono",Consolas,ui-monospace,monospace;
+  /* ---- type scale ---- */
+  --t-2xs:10px; --t-xs:11px; --t-sm:12px; --t-base:13px; --t-md:14px;
+  --t-lg:15px; --t-xl:18px; --t-2xl:22px; --t-3xl:28px; --t-4xl:36px;
+  /* ---- space scale, 4px base ---- */
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:20px; --s6:24px;
+  --s7:28px; --s8:32px; --s10:40px;
+  /* ---- radii ---- */
+  --r-xs:6px; --r-sm:8px; --r-md:10px; --r-lg:14px; --r-xl:18px; --r-full:999px;
+  /* ---- motion ---- */
+  --dur:.16s; --ease:cubic-bezier(.2,.6,.3,1);
+  /* ---- type faces ---- */
+  --ui:-apple-system,"Segoe UI Variable Text","Segoe UI",system-ui,Roboto,Arial,sans-serif;
+  --mono:"Cascadia Mono","SF Mono",Consolas,ui-monospace,monospace;
+  /* ---- light palette ---- */
+  --ground:#f6f7f9; --surface:#ffffff; --surface2:#f7f8fa; --surface3:#eef1f5;
+  --line:#e5e8ee; --line2:#eef0f4;
+  --ink:#101319; --ink2:#5a6373; --ink3:#8992a3;
+  --accent:#3d63f5; --accent-ink:#ffffff; --accent-bg:#eaefff; --accent-line:#c9d6ff;
+  --ok:#15904d; --ok-bg:#e7f6ed; --ok-line:#c2e6d1;
+  --warn:#b4700c; --warn-bg:#fdf2df; --warn-line:#f2ddb4;
+  --crit:#cf3232; --crit-bg:#fdecec; --crit-line:#f6cfcf;
+  --info:#6d3cf0; --info-bg:#f0ebfe; --info-line:#dcd0fb;
+  --mute-bg:#eff1f5;
+  --av-l:44%; --av-s:56%;
+  --e1:0 1px 2px rgba(16,19,25,.05);
+  --e2:0 2px 8px rgba(16,19,25,.06),0 1px 2px rgba(16,19,25,.04);
+  --e3:0 16px 40px rgba(16,19,25,.14);
+  --skel:linear-gradient(90deg,#eef1f5 25%,#f6f8fa 37%,#eef1f5 63%);
+  /* ---- layout ---- */
+  --side-w:224px; --head-h:62px; --page-max:1640px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -199,344 +245,518 @@ CSS = """
 :root[data-theme="dark"] {
 /*DARK*/
 }
+
 * { box-sizing:border-box; }
-html { scroll-behavior:smooth; }
+html { scroll-behavior:smooth; -webkit-text-size-adjust:100%; }
 body { margin:0; background:var(--ground); color:var(--ink);
-  font-family:var(--ui); font-size:13.5px; line-height:1.5;
+  font-family:var(--ui); font-size:var(--t-base); line-height:1.55;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
   scrollbar-width:thin; scrollbar-color:var(--line) transparent; }
-a { color:var(--accent); }
-.app { display:grid; grid-template-columns:212px minmax(0,1fr); min-height:100vh; }
-::-webkit-scrollbar { width:9px; height:9px; }
-::-webkit-scrollbar-thumb { background:var(--line); border-radius:5px; }
+a { color:var(--accent); text-underline-offset:2px; }
+::selection { background:var(--accent-bg); color:var(--ink); }
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-thumb { background:var(--line); border-radius:var(--r-full);
+  border:3px solid transparent; background-clip:content-box; }
+::-webkit-scrollbar-thumb:hover { background:var(--ink3); background-clip:content-box; }
 ::-webkit-scrollbar-track { background:transparent; }
 
-.fchip:focus-visible, tr.qrow:focus-visible, .alink:focus-visible,
-.nav a:focus-visible, .grow:focus-visible, .sysdrill:focus-visible,
-th[data-sort]:focus-visible, .linkbtn:focus-visible, .retry:focus-visible {
-  outline:2px solid var(--accent); outline-offset:2px; }
+:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:var(--r-xs); }
+.app { display:grid; grid-template-columns:var(--side-w) minmax(0,1fr); min-height:100vh; }
 
-/* ---- sidebar ---- */
+/* ================= sidebar ================= */
 .side { position:sticky; top:0; height:100vh; background:var(--surface);
   border-right:1px solid var(--line); display:flex; flex-direction:column;
-  padding:14px 10px; gap:2px; }
-.brand { display:flex; gap:10px; align-items:center; padding:4px 10px 14px; }
-.brand .mark { width:32px; height:32px; border-radius:9px; flex:none;
-  background:linear-gradient(135deg,#2563eb,#7c3aed); color:#fff;
-  display:grid; place-items:center; font-weight:800; font-size:15px; }
-.brand b { display:block; font-size:14px; line-height:1.15; }
-.brand small { color:var(--ink3); font-size:10.5px; }
-.nav { display:flex; flex-direction:column; gap:2px; }
-.nav a { display:flex; gap:10px; align-items:center; padding:8px 11px;
-  border-radius:9px; color:var(--ink2); text-decoration:none;
-  font-size:13px; font-weight:570; }
-.nav a svg { flex:none; }
+  padding:var(--s4) var(--s3); gap:var(--s1); }
+.brand { display:flex; gap:var(--s3); align-items:center; padding:var(--s1) var(--s2) var(--s5); }
+.brand .mark { width:34px; height:34px; border-radius:var(--r-md); flex:none;
+  background:linear-gradient(140deg,var(--accent),var(--info)); color:#fff;
+  display:grid; place-items:center; font-weight:800; font-size:var(--t-lg);
+  letter-spacing:-.03em; box-shadow:var(--e2); }
+.brand b { display:block; font-size:var(--t-md); line-height:1.2; letter-spacing:-.01em; }
+.brand small { color:var(--ink3); font-size:var(--t-2xs); letter-spacing:.09em;
+  text-transform:uppercase; font-weight:600; }
+.navlabel { color:var(--ink3); font-size:var(--t-2xs); font-weight:700;
+  letter-spacing:.1em; text-transform:uppercase; padding:var(--s4) var(--s3) var(--s1); }
+.nav { display:flex; flex-direction:column; gap:1px; }
+.nav a { position:relative; display:flex; gap:var(--s3); align-items:center;
+  padding:var(--s2) var(--s3); border-radius:var(--r-sm); color:var(--ink2);
+  text-decoration:none; font-size:var(--t-base); font-weight:550;
+  transition:background var(--dur) var(--ease), color var(--dur) var(--ease); }
+.nav a svg { flex:none; opacity:.8; }
 .nav a:hover { background:var(--surface2); color:var(--ink); }
-.nav a.active { background:var(--accent-bg); color:var(--accent); }
+.nav a.active { background:var(--accent-bg); color:var(--accent); font-weight:620; }
+.nav a.active svg { opacity:1; }
+.nav a.active::before { content:""; position:absolute; left:-12px;
+  top:50%; transform:translateY(-50%); width:3px; height:18px;
+  background:var(--accent); border-radius:0 3px 3px 0; }
+.nav .navcount { margin-left:auto; font-family:var(--mono); font-size:var(--t-2xs);
+  color:var(--ink3); background:var(--surface3); border-radius:var(--r-full);
+  padding:1px 7px; font-weight:600; }
+.nav a.active .navcount { background:var(--surface); color:var(--accent); }
 .spacer { flex:1; }
-.me { display:flex; gap:9px; align-items:center; padding:10px;
+.me { display:flex; gap:var(--s3); align-items:center; padding:var(--s3) var(--s2) var(--s1);
   border-top:1px solid var(--line2); }
-.me b { display:block; font-size:12.5px; line-height:1.2; }
-.me small { color:var(--ink3); font-size:10.5px; }
+.me b { display:block; font-size:var(--t-sm); line-height:1.25; }
+.me small { color:var(--ink3); font-size:var(--t-2xs); font-family:var(--mono); }
 
-/* ---- main / header ---- */
-.main { padding:0 22px 46px; min-width:0; }
-.top { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
-  position:sticky; top:0; z-index:40; background:var(--ground);
-  padding:14px 0 12px; margin-bottom:12px; }
-h1 { font-size:21px; margin:0; font-weight:700; letter-spacing:-.02em; }
-.chip { display:inline-flex; align-items:center; gap:7px; font-family:var(--mono);
-  font-size:11px; color:var(--ink2); background:var(--surface);
-  border:1px solid var(--line); border-radius:999px; padding:4px 11px; }
+/* ================= main + header ================= */
+.main { padding:0 var(--s6) var(--s10); min-width:0; max-width:var(--page-max); }
+.top { display:flex; align-items:center; gap:var(--s3); flex-wrap:wrap;
+  position:sticky; top:0; z-index:40; padding:var(--s4) 0 var(--s3);
+  background:var(--ground);
+  background:color-mix(in srgb, var(--ground) 88%, transparent);
+  backdrop-filter:saturate(1.4) blur(10px);
+  -webkit-backdrop-filter:saturate(1.4) blur(10px);
+  border-bottom:1px solid transparent; margin-bottom:var(--s5);
+  transition:border-color var(--dur) var(--ease); }
+.top.stuck { border-bottom-color:var(--line); }
+h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
+.chip { display:inline-flex; align-items:center; gap:var(--s2); font-family:var(--mono);
+  font-size:var(--t-xs); color:var(--ink2); background:var(--surface);
+  border:1px solid var(--line); border-radius:var(--r-full); padding:5px 12px;
+  box-shadow:var(--e1); }
 .chip .dot { width:7px; height:7px; border-radius:50%; background:var(--ok);
   box-shadow:0 0 0 3px var(--ok-bg); }
+.chip[data-state="live"] .dot { animation:pulse 2.4s var(--ease) infinite; }
+@keyframes pulse { 0%,100% { box-shadow:0 0 0 3px var(--ok-bg); }
+  50% { box-shadow:0 0 0 5px var(--ok-bg); } }
 .chip[data-state="building"] .dot { background:var(--warn); box-shadow:0 0 0 3px var(--warn-bg); }
-.chip[data-state="off"] .dot { background:var(--crit); box-shadow:0 0 0 3px var(--crit-bg); }
-.search { flex:1; min-width:200px; max-width:430px; margin-left:auto; position:relative; }
-.search > svg { position:absolute; left:11px; top:50%; transform:translateY(-50%); color:var(--ink3); }
-.search input { width:100%; padding:8.5px 62px 8.5px 34px; border-radius:10px;
+.chip[data-state="off"] .dot { background:var(--crit); box-shadow:0 0 0 3px var(--crit-bg); animation:none; }
+.search { flex:1; min-width:190px; max-width:420px; margin-left:auto; position:relative; }
+.search > svg { position:absolute; left:12px; top:50%; transform:translateY(-50%);
+  color:var(--ink3); pointer-events:none; }
+.search input { width:100%; padding:9px 66px 9px 36px; border-radius:var(--r-md);
   border:1px solid var(--line); background:var(--surface); color:var(--ink);
-  font:inherit; font-size:13px; }
-.search input:focus { outline:2px solid var(--accent); outline-offset:-1px; }
-.search kbd { position:absolute; right:9px; top:50%; transform:translateY(-50%);
-  border:1px solid var(--line); border-radius:6px; padding:1px 6px;
-  font-family:var(--mono); font-size:10px; color:var(--ink3); background:var(--surface2); }
-.btn { display:inline-flex; gap:7px; align-items:center; padding:8px 13px;
-  border-radius:9px; border:1px solid var(--line); background:var(--surface);
-  color:var(--ink); font-family:var(--ui); font-size:12.5px; font-weight:600; cursor:pointer; }
-.btn:hover { border-color:var(--accent); }
-.btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-.btn[disabled] { opacity:.55; cursor:default; }
-.btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-.btn.primary:hover { filter:brightness(1.07); }
-.btn.tiny { padding:4px 10px; font-size:11.5px; border-radius:7px; }
-.bell { position:relative; padding:8px 10px; }
-.bell .badge { position:absolute; top:-5px; right:-5px; background:var(--accent);
-  color:#fff; font-size:9.5px; font-weight:700; border-radius:999px;
-  padding:1.5px 5px; min-width:16px; text-align:center; }
-.spin svg { animation:rot 1s linear infinite; }
+  font:inherit; font-size:var(--t-base); box-shadow:var(--e1);
+  transition:border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
+.search input::placeholder { color:var(--ink3); }
+.search input:focus { outline:none; border-color:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-bg); }
+.search kbd { position:absolute; right:10px; top:50%; transform:translateY(-50%);
+  border:1px solid var(--line); border-radius:var(--r-xs); padding:2px 6px;
+  font-family:var(--mono); font-size:var(--t-2xs); color:var(--ink3);
+  background:var(--surface2); pointer-events:none; }
+.btn { display:inline-flex; gap:var(--s2); align-items:center; padding:8px 13px;
+  border-radius:var(--r-md); border:1px solid var(--line); background:var(--surface);
+  color:var(--ink); font-family:var(--ui); font-size:var(--t-sm); font-weight:600;
+  cursor:pointer; box-shadow:var(--e1); white-space:nowrap;
+  transition:background var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
+.btn:hover { background:var(--surface2); border-color:var(--ink3); }
+.btn:active { transform:translateY(1px); box-shadow:none; }
+.btn[disabled] { opacity:.5; cursor:default; transform:none; }
+.btn.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink);
+  box-shadow:var(--e2); }
+.btn.primary:hover { filter:brightness(1.08); border-color:var(--accent); }
+.btn.tiny { padding:5px 10px; font-size:var(--t-xs); border-radius:var(--r-sm); }
+.btn.icon { padding:8px; }
+.bell { position:relative; }
+.bell .badge { position:absolute; top:-6px; right:-6px; background:var(--crit);
+  color:#fff; font-size:var(--t-2xs); font-weight:700; border-radius:var(--r-full);
+  padding:1px 6px; min-width:18px; text-align:center; font-family:var(--mono);
+  border:2px solid var(--ground); }
+.spin svg { animation:rot .9s linear infinite; }
 @keyframes rot { to { transform:rotate(360deg); } }
 
-/* ---- KPI tiles ---- */
-.tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(185px,1fr));
-  gap:12px; margin-bottom:14px; }
-.tile { background:var(--surface); border:1px solid var(--line); border-radius:12px;
-  padding:12px 14px; box-shadow:var(--shadow); }
-.tile .h { display:flex; gap:9px; align-items:center; color:var(--ink2);
-  font-size:12.5px; font-weight:600; }
-.tile .h .tic { width:26px; height:26px; border-radius:8px; display:grid;
+/* mobile nav, hidden on desktop */
+.mnav { display:none; gap:var(--s2); overflow-x:auto; padding:0 0 var(--s4);
+  scrollbar-width:none; }
+.mnav::-webkit-scrollbar { display:none; }
+.mnav a { flex:none; display:inline-flex; gap:var(--s2); align-items:center;
+  padding:7px 13px; border-radius:var(--r-full); background:var(--surface);
+  border:1px solid var(--line); color:var(--ink2); text-decoration:none;
+  font-size:var(--t-sm); font-weight:600; }
+.mnav a.active { background:var(--accent-bg); border-color:var(--accent-line); color:var(--accent); }
+
+/* ================= KPI tiles ================= */
+.tiles { display:grid; gap:var(--s3); margin-bottom:var(--s5);
+  grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); }
+@media (min-width:1180px) { .tiles { grid-template-columns:1.55fr 1fr 1fr 1fr 1fr; } }
+.tile { position:relative; background:var(--surface); border:1px solid var(--line);
+  border-radius:var(--r-lg); padding:var(--s4); box-shadow:var(--e1); overflow:hidden;
+  transition:box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease),
+    border-color var(--dur) var(--ease); }
+.tile:hover { box-shadow:var(--e2); transform:translateY(-1px); }
+.tile .h { display:flex; gap:var(--s2); align-items:center; color:var(--ink2);
+  font-size:var(--t-sm); font-weight:600; letter-spacing:-.005em; }
+.tile .tic { width:28px; height:28px; border-radius:var(--r-sm); display:grid;
   place-items:center; flex:none; }
 .tile .row { display:flex; align-items:flex-end; justify-content:space-between;
-  gap:8px; margin-top:9px; }
-.tile .v { font-size:26px; font-weight:700; letter-spacing:-.02em; line-height:1;
-  font-variant-numeric:tabular-nums; }
-.tile .v small { font-size:15px; color:var(--ink2); font-weight:600; }
-.tile .s { color:var(--ink3); font-size:11.5px; margin-top:7px; }
-.dlt { font-weight:650; }
-.dlt.good { color:var(--ok); }
-.dlt.bad { color:var(--crit); }
-.spark { width:96px; height:30px; flex:none; }
+  gap:var(--s3); margin-top:var(--s3); }
+.tile .v { font-size:var(--t-3xl); font-weight:700; letter-spacing:-.035em; line-height:1;
+  font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1; }
+.tile .v small { font-size:var(--t-lg); color:var(--ink3); font-weight:600;
+  letter-spacing:-.01em; }
+.tile .s { color:var(--ink3); font-size:var(--t-xs); margin-top:var(--s3);
+  display:flex; align-items:center; gap:var(--s2); flex-wrap:wrap; }
+.tile.hero { background:
+    radial-gradient(120% 140% at 100% 0%, var(--accent-bg) 0%, transparent 62%),
+    var(--surface); }
+.tile.hero .v { font-size:var(--t-4xl); }
+.tile.hero .h { color:var(--ink); }
+.dlt { display:inline-flex; align-items:center; gap:3px; font-weight:700;
+  font-variant-numeric:tabular-nums; padding:1px 6px; border-radius:var(--r-xs);
+  font-size:var(--t-2xs); }
+.dlt.good { color:var(--ok); background:var(--ok-bg); }
+.dlt.bad { color:var(--crit); background:var(--crit-bg); }
+.dlt svg { width:10px; height:10px; }
+.spark { width:104px; height:34px; flex:none; }
 .c-blue { background:var(--accent-bg); color:var(--accent); }
 .c-green { background:var(--ok-bg); color:var(--ok); }
 .c-violet { background:var(--info-bg); color:var(--info); }
 .c-red { background:var(--crit-bg); color:var(--crit); }
-.c-indigo { background:rgba(99,102,241,.14); color:var(--indigo); }
+.c-amber { background:var(--warn-bg); color:var(--warn); }
 
-/* ---- layout ---- */
-.cols { display:grid; grid-template-columns:minmax(0,1fr) 330px; gap:14px; align-items:start; }
-.card { background:var(--surface); border:1px solid var(--line); border-radius:12px;
-  padding:14px 16px; box-shadow:var(--shadow); margin-bottom:14px; scroll-margin-top:64px; }
-.card h2 { display:flex; align-items:center; gap:8px; font-size:14.5px;
-  font-weight:650; margin:0 0 10px; flex-wrap:wrap; }
-.card h2 svg { color:var(--ink2); }
-.card h2 .cnt { margin-left:auto; color:var(--ink3); font-weight:560;
-  font-size:11.5px; font-family:var(--mono); }
-.grid3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); gap:14px; }
+/* ================= layout + cards ================= */
+.cols { display:grid; grid-template-columns:minmax(0,1fr) 336px; gap:var(--s4);
+  align-items:start; }
+.card { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-lg);
+  padding:var(--s4) var(--s5); box-shadow:var(--e1); margin-bottom:var(--s4);
+  scroll-margin-top:calc(var(--head-h) + var(--s3)); }
+.card h2 { display:flex; align-items:center; gap:var(--s2); font-size:var(--t-lg);
+  font-weight:660; margin:0 0 var(--s3); letter-spacing:-.015em; flex-wrap:wrap;
+  padding-bottom:var(--s3); border-bottom:1px solid var(--line2); }
+.card h2 > svg { color:var(--ink3); }
+.card h2 .cnt { margin-left:auto; color:var(--ink3); font-weight:550;
+  font-size:var(--t-xs); font-family:var(--mono); letter-spacing:0; }
+.grid3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr));
+  gap:var(--s4); align-items:start; }
 .grid3 .card { margin-bottom:0; }
 .hide { display:none !important; }
 .linkbtn { display:block; width:100%; background:none; border:none; color:var(--accent);
-  font-family:var(--ui); font-weight:600; font-size:12.5px; cursor:pointer;
-  padding:9px 0 2px; text-align:center; }
-.linkbtn:hover { text-decoration:underline; }
+  font-family:var(--ui); font-weight:620; font-size:var(--t-sm); cursor:pointer;
+  padding:var(--s3) 0 var(--s1); text-align:center; border-radius:var(--r-sm);
+  transition:background var(--dur) var(--ease); }
+.linkbtn:hover { background:var(--surface2); }
 
-/* ---- filters ---- */
-.filters { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:10px; }
-.fchip { display:inline-flex; gap:6px; align-items:center; border:1px solid var(--line);
-  background:var(--surface); color:var(--ink2); border-radius:8px; padding:5px 10px;
-  font-family:var(--ui); font-size:12px; font-weight:600; cursor:pointer; }
-.fchip .cd { width:8px; height:8px; border-radius:3px; }
-.fchip .fc-n { color:var(--ink3); font-weight:600; font-size:10.5px; font-family:var(--mono); }
-.fchip.on { background:var(--accent-bg); border-color:var(--accent); color:var(--accent); }
+/* ================= filters ================= */
+.filters { display:flex; flex-wrap:wrap; gap:var(--s2); align-items:center;
+  margin-bottom:var(--s3); }
+.fchip { display:inline-flex; gap:var(--s2); align-items:center; border:1px solid var(--line);
+  background:var(--surface); color:var(--ink2); border-radius:var(--r-full);
+  padding:5px 12px; font-family:var(--ui); font-size:var(--t-sm); font-weight:600;
+  cursor:pointer; user-select:none;
+  transition:background var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    color var(--dur) var(--ease); }
+.fchip:hover { border-color:var(--ink3); color:var(--ink); }
+.fchip .cd { width:8px; height:8px; border-radius:var(--r-full); }
+.fchip .fc-n { color:var(--ink3); font-weight:650; font-size:var(--t-2xs);
+  font-family:var(--mono); font-variant-numeric:tabular-nums; }
+.fchip.on { background:var(--accent-bg); border-color:var(--accent-line); color:var(--accent); }
 .fchip.on .fc-n { color:var(--accent); }
-.fsep { width:1px; height:18px; background:var(--line); margin:0 4px; }
-select.fchip { appearance:auto; max-width:190px; }
+.fsep { width:1px; height:20px; background:var(--line); margin:0 var(--s1); }
+select.fchip { appearance:none; max-width:200px; padding-right:28px;
+  background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),
+    linear-gradient(135deg,currentColor 50%,transparent 50%);
+  background-position:calc(100% - 15px) 51%,calc(100% - 11px) 51%;
+  background-size:4px 4px,4px 4px; background-repeat:no-repeat; }
 .fclear { margin-left:auto; color:var(--ink3); background:none; border:none;
-  font-family:var(--ui); font-size:11.5px; font-weight:600; cursor:pointer; padding:4px 6px; }
-.fclear:hover { color:var(--crit); }
-.filters.flash { animation:flash 1.2s; }
-@keyframes flash { 0%,60% { outline:2px solid var(--accent); outline-offset:4px;
-  border-radius:6px; } 100% { outline:0 solid transparent; } }
+  font-family:var(--ui); font-size:var(--t-xs); font-weight:600; cursor:pointer;
+  padding:var(--s1) var(--s2); border-radius:var(--r-xs); }
+.fclear:hover { color:var(--crit); background:var(--crit-bg); }
+.filters.flash { animation:flash 1.1s var(--ease); }
+@keyframes flash { 0%,55% { box-shadow:0 0 0 3px var(--accent-bg); border-radius:var(--r-md); }
+  100% { box-shadow:0 0 0 0 transparent; } }
 
-/* ---- tables ---- */
-.scroll { overflow-x:auto; }
-table { width:100%; border-collapse:collapse; font-size:13px; }
-th { text-align:left; color:var(--ink3); font-family:var(--mono); font-size:10px;
-  font-weight:600; letter-spacing:.06em; text-transform:uppercase;
-  padding:6px 10px 8px 0; border-bottom:1px solid var(--line); white-space:nowrap; }
-th[data-sort] { cursor:pointer; user-select:none; }
+/* ================= tables ================= */
+.scroll { overflow-x:auto; margin:0 calc(var(--s5) * -1); padding:0 var(--s5); }
+table { width:100%; border-collapse:collapse; font-size:var(--t-base); }
+th { text-align:left; color:var(--ink3); font-family:var(--mono); font-size:var(--t-2xs);
+  font-weight:600; letter-spacing:.07em; text-transform:uppercase;
+  padding:var(--s2) var(--s3) var(--s2) 0; border-bottom:1px solid var(--line);
+  white-space:nowrap; background:var(--surface); }
+th[data-sort] { cursor:pointer; user-select:none; transition:color var(--dur) var(--ease); }
 th[data-sort]:hover { color:var(--accent); }
-th[aria-sort="ascending"]::after { content:" \\2191"; color:var(--accent); }
-th[aria-sort="descending"]::after { content:" \\2193"; color:var(--accent); }
-td { padding:9px 10px 9px 0; border-bottom:1px solid var(--line2); vertical-align:middle; }
+th .sarrow { opacity:0; margin-left:3px; display:inline-block; }
+th[aria-sort="ascending"] .sarrow, th[aria-sort="descending"] .sarrow { opacity:1; color:var(--accent); }
+th[aria-sort="descending"] .sarrow { transform:rotate(180deg); }
+td { padding:var(--s3) var(--s3) var(--s3) 0; border-bottom:1px solid var(--line2);
+  vertical-align:middle; }
 tbody tr:last-child > td { border-bottom:0; }
 tfoot td { font-weight:700; border-top:1px solid var(--line); border-bottom:0;
-  font-family:var(--mono); font-size:11.5px; color:var(--ink2); }
-td.num { font-family:var(--mono); font-size:12px; font-variant-numeric:tabular-nums;
+  font-family:var(--mono); font-size:var(--t-xs); color:var(--ink2); }
+td.num { font-family:var(--mono); font-size:var(--t-sm); font-variant-numeric:tabular-nums;
   color:var(--ink2); white-space:nowrap; }
-tr.qrow { cursor:pointer; }
-tr.qrow:hover td { background:var(--surface2); }
-tr.kfocus { outline:2px solid var(--accent); outline-offset:-2px; }
+tr.qrow { cursor:pointer; transition:background var(--dur) var(--ease); }
+tr.qrow > td { transition:background var(--dur) var(--ease); }
+tr.qrow:hover > td { background:var(--surface2); }
+tr.qrow.kfocus > td { background:var(--accent-bg); box-shadow:inset 3px 0 0 var(--accent); }
+tr.qrow[aria-expanded="true"] > td { background:var(--surface2); }
 .agew { color:var(--warn); }
 .agec { color:var(--crit); font-weight:650; }
-.uc { display:flex; gap:9px; align-items:center; min-width:130px; }
-.av { width:28px; height:28px; border-radius:50%; display:grid; place-items:center;
-  color:#fff; font-weight:650; font-size:12px; flex:none; }
-.uc .n { font-weight:600; font-size:12.5px; line-height:1.25; }
-.uc .m { color:var(--ink3); font-size:10.5px; }
-.pill { display:inline-block; padding:3px 9px; border-radius:7px; font-size:10.5px;
-  font-weight:650; letter-spacing:.02em; white-space:nowrap; }
-.st-answered { background:var(--ok-bg); color:var(--ok); }
-.st-no-source { background:var(--crit-bg); color:var(--crit); }
-.st-escalated { background:var(--warn-bg); color:var(--warn); }
-.st-out-of-scope, .st-unknown { background:var(--mute-bg); color:var(--ink2); }
-.st-ok { background:var(--ok-bg); color:var(--ok); }
-.st-partial { background:var(--warn-bg); color:var(--warn); }
-.st-blind { background:var(--crit-bg); color:var(--crit); }
-.u-critical { background:var(--crit-bg); color:var(--crit); }
-.u-urgent { background:var(--warn-bg); color:var(--warn); }
-.u-normal, .u-low { background:var(--mute-bg); color:var(--ink2); }
-.u-done { background:var(--ok-bg); color:var(--ok); }
-.snip { color:var(--ink2); max-width:430px; display:-webkit-box; -webkit-line-clamp:2;
-  -webkit-box-orient:vertical; overflow:hidden; }
-.chn { display:inline-flex; gap:6px; align-items:center; color:var(--ink2); font-size:12.5px; }
-.cd { width:8px; height:8px; border-radius:3px; flex:none; }
-.acts { text-align:right; white-space:nowrap; }
-.alink { display:flex; gap:6px; align-items:center; justify-content:flex-end;
-  color:var(--accent); font-size:12px; font-weight:600; cursor:pointer; padding:2px 0; }
-.alink:hover { text-decoration:underline; }
+.uc { display:flex; gap:var(--s2); align-items:center; min-width:132px; }
+.av { width:30px; height:30px; border-radius:var(--r-full); display:grid;
+  place-items:center; color:#fff; font-weight:660; font-size:var(--t-sm); flex:none;
+  background:hsl(var(--h) var(--av-s) var(--av-l)); letter-spacing:-.01em;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.14); }
+.av.sm { width:22px; height:22px; font-size:var(--t-2xs); }
+.uc .n { font-weight:600; font-size:var(--t-sm); line-height:1.3; letter-spacing:-.005em; }
+.uc .m { color:var(--ink3); font-size:var(--t-2xs); }
+.pill { display:inline-flex; align-items:center; gap:4px; padding:3px 9px;
+  border-radius:var(--r-full); font-size:var(--t-2xs); font-weight:680;
+  letter-spacing:.01em; white-space:nowrap; border:1px solid transparent; }
+.pill::before { content:""; width:5px; height:5px; border-radius:50%; background:currentColor; }
+.st-answered { background:var(--ok-bg); color:var(--ok); border-color:var(--ok-line); }
+.st-no-source { background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line); }
+.st-escalated { background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line); }
+.st-out-of-scope, .st-unknown { background:var(--mute-bg); color:var(--ink2); border-color:var(--line); }
+.st-ok { background:var(--ok-bg); color:var(--ok); border-color:var(--ok-line); }
+.st-partial { background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line); }
+.st-blind { background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line); }
+.u-critical { background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line); }
+.u-urgent { background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line); }
+.snip { color:var(--ink2); max-width:440px; display:-webkit-box; -webkit-line-clamp:2;
+  -webkit-box-orient:vertical; overflow:hidden; line-height:1.45; }
+.chn { display:inline-flex; gap:6px; align-items:center; color:var(--ink2);
+  font-size:var(--t-sm); }
+.cd { width:8px; height:8px; border-radius:var(--r-full); flex:none; }
+.acts { text-align:right; white-space:nowrap; width:1%; }
+/* Dimmed rather than hidden: replying is the point of this table, so the
+   action must stay discoverable without a hover to find it. */
+.rowacts { display:inline-flex; gap:var(--s1); justify-content:flex-end;
+  opacity:.55; transition:opacity var(--dur) var(--ease); }
+tr.qrow:hover .rowacts, tr.qrow:focus-within .rowacts,
+tr.qrow.kfocus .rowacts, tr.qrow[aria-expanded="true"] .rowacts { opacity:1; }
+@media (hover:none) { .rowacts { opacity:1; } }
+.alink { display:inline-flex; gap:5px; align-items:center; color:var(--ink2);
+  font-size:var(--t-xs); font-weight:600; cursor:pointer; padding:4px 9px;
+  border-radius:var(--r-sm); border:1px solid var(--line); background:var(--surface);
+  transition:color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    background var(--dur) var(--ease); }
+.alink:hover { color:var(--accent); border-color:var(--accent-line); background:var(--accent-bg); }
 .alink svg { flex:none; }
-.sysdrill { cursor:pointer; }
-.sysdrill:hover { color:var(--accent); text-decoration:underline; }
-.qempty { text-align:center; padding:22px 0 10px; color:var(--ink3); font-size:13px; }
+.sysdrill { cursor:pointer; border-bottom:1px dashed var(--line);
+  transition:color var(--dur) var(--ease), border-color var(--dur) var(--ease); }
+.sysdrill:hover { color:var(--accent); border-color:var(--accent); }
 
-/* ---- question detail ---- */
+/* ================= question detail ================= */
 tr.qdet > td { background:var(--surface2); border-bottom:1px solid var(--line);
-  padding:13px 14px; }
-.det { display:grid; gap:10px; }
-.det .full { font-size:13.5px; }
-.det .prov { font-size:12px; color:var(--ink2); display:flex; gap:12px;
-  flex-wrap:wrap; align-items:center; }
+  padding:0 var(--s4); }
+/* Entrance animation only, never a transition out of an invisible base
+   state: an fr-track animation resolves to 0px inside a table cell, and an
+   opacity:0 base leaves the panel permanently blank whenever frames do not
+   run (background tab). Visible is the default; the keyframes are pure
+   decoration on top of it. */
+tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
+/* Transform only, never opacity: while an animation is pending its first
+   frame the browser already applies the from-state, so an opacity:0 keyframe
+   renders the panel blank in a tab that is not painting. Worst case here is
+   a 5px offset, never invisible content. */
+@keyframes detIn { from { transform:translateY(-5px); } to { transform:none; } }
+.det { display:grid; gap:var(--s3); padding:var(--s4) 0; max-width:78ch; }
+.det .full { font-size:var(--t-md); line-height:1.6; color:var(--ink); }
+.det .prov { font-size:var(--t-sm); color:var(--ink2); display:flex; gap:var(--s4);
+  flex-wrap:wrap; align-items:center; padding:var(--s2) 0; border-top:1px solid var(--line2);
+  border-bottom:1px solid var(--line2); }
 .det .prov a { color:var(--accent); text-decoration:none; display:inline-flex;
-  gap:5px; align-items:center; }
+  gap:5px; align-items:center; font-weight:560; }
 .det .prov a:hover { text-decoration:underline; }
-.sugout { border:1px dashed var(--line); border-radius:10px; padding:10px 12px;
-  font-size:12.5px; background:var(--surface); display:none; }
-.sugout .src { color:var(--ink3); font-size:11px; margin-bottom:6px; font-family:var(--mono); }
-.sugout pre { margin:0 0 8px; white-space:pre-wrap; font-family:inherit; }
-.qbox { width:100%; min-height:72px; border:1px solid var(--line); border-radius:10px;
-  background:var(--surface); color:var(--ink); padding:9px 11px; font:inherit;
-  font-size:13px; resize:vertical; }
-.qbox:focus { outline:2px solid var(--accent); outline-offset:-1px; }
-.detbtns { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-.msg { font-size:12px; color:var(--ink2); }
-.yourreply { background:var(--ok-bg); border-left:3px solid var(--ok);
-  border-radius:10px; padding:9px 12px; font-size:12.5px; }
-.yourreply b { color:var(--ok); }
-.conf { display:inline-flex; gap:7px; align-items:center; margin-left:8px;
-  font-size:10.5px; font-weight:700; white-space:nowrap; }
-.conf-ok { color:var(--ok); }
-.conf-warn { color:var(--warn); }
-.conf-crit { color:var(--crit); }
-.confbar { width:56px; height:5px; border-radius:3px; background:var(--line2);
+.det .prov .num { font-family:var(--mono); font-size:var(--t-xs); color:var(--ink3); }
+.yourreply { background:var(--ok-bg); border:1px solid var(--ok-line);
+  border-left:3px solid var(--ok); border-radius:var(--r-md); padding:var(--s3) var(--s4);
+  font-size:var(--t-base); line-height:1.55; }
+.yourreply b { color:var(--ok); display:flex; align-items:center; gap:6px;
+  font-size:var(--t-xs); text-transform:uppercase; letter-spacing:.06em;
+  margin-bottom:var(--s1); }
+.sugout { border:1px solid var(--line); border-radius:var(--r-md); padding:var(--s3) var(--s4);
+  font-size:var(--t-base); background:var(--surface); display:none; }
+.sugout .src { color:var(--ink3); font-size:var(--t-xs); margin-bottom:var(--s2);
+  font-family:var(--mono); display:flex; align-items:center; gap:var(--s2); flex-wrap:wrap; }
+.sugout pre { margin:0 0 var(--s3); white-space:pre-wrap; font-family:inherit;
+  line-height:1.55; max-height:280px; overflow:auto; }
+.conf { display:inline-flex; gap:7px; align-items:center; font-size:var(--t-2xs);
+  font-weight:700; white-space:nowrap; padding:2px 8px; border-radius:var(--r-full);
+  border:1px solid currentColor; }
+.conf-ok { color:var(--ok); background:var(--ok-bg); }
+.conf-warn { color:var(--warn); background:var(--warn-bg); }
+.conf-crit { color:var(--crit); background:var(--crit-bg); }
+.confbar { width:52px; height:5px; border-radius:var(--r-full); background:rgba(127,127,127,.25);
   overflow:hidden; display:inline-block; }
-.confbar i { display:block; height:100%; border-radius:3px; }
-.confbar .cb-ok { background:var(--ok); }
-.confbar .cb-warn { background:var(--warn); }
-.confbar .cb-crit { background:var(--crit); }
+.confbar i { display:block; height:100%; border-radius:var(--r-full); background:currentColor; }
+.qbox { width:100%; min-height:84px; border:1px solid var(--line); border-radius:var(--r-md);
+  background:var(--surface); color:var(--ink); padding:var(--s3) var(--s4); font:inherit;
+  font-size:var(--t-base); line-height:1.55; resize:vertical;
+  transition:border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
+.qbox::placeholder { color:var(--ink3); }
+.qbox:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-bg); }
+.detbtns { display:flex; gap:var(--s2); align-items:center; flex-wrap:wrap; }
+.msg { font-size:var(--t-sm); color:var(--ink2); }
+.msg.good { color:var(--ok); font-weight:600; }
+.msg.bad { color:var(--crit); font-weight:600; }
 
-/* ---- right rail ---- */
-.grow { display:flex; justify-content:space-between; align-items:center; gap:8px;
-  padding:7px 0; border-bottom:1px solid var(--line2); cursor:pointer; font-size:13px; }
-.grow:hover { color:var(--accent); }
-.grow:last-of-type { border-bottom:0; }
-.grow small { color:var(--ink3); font-size:10.5px; font-family:var(--mono); display:block; }
-.grow .gcnt { background:var(--crit-bg); color:var(--crit); border-radius:7px;
-  padding:2px 8px; font-size:11px; font-weight:650; font-family:var(--mono); flex:none; }
-.prow { display:grid; grid-template-columns:16px minmax(0,1.15fr) 1fr 38px;
-  gap:8px; align-items:center; padding:6px 0; font-size:12.5px; }
-.prow .i { color:var(--ink3); font-family:var(--mono); font-size:11px; }
+/* ================= right rail ================= */
+.grow { display:flex; justify-content:space-between; align-items:center; gap:var(--s2);
+  padding:var(--s2) var(--s2); margin:0 calc(var(--s2) * -1);
+  border-radius:var(--r-sm); cursor:pointer; font-size:var(--t-base);
+  transition:background var(--dur) var(--ease); }
+.grow + .grow { border-top:1px solid var(--line2); }
+.grow:hover { background:var(--surface2); color:var(--accent); }
+.grow small { color:var(--ink3); font-size:var(--t-2xs); font-family:var(--mono);
+  display:block; font-weight:500; }
+.grow .gcnt { background:var(--crit-bg); color:var(--crit); border:1px solid var(--crit-line);
+  border-radius:var(--r-full); padding:2px 9px; font-size:var(--t-xs); font-weight:700;
+  font-family:var(--mono); flex:none; font-variant-numeric:tabular-nums; }
+.prow { display:grid; grid-template-columns:18px minmax(0,1.1fr) 1fr 40px;
+  gap:var(--s2); align-items:center; padding:var(--s2) 0; font-size:var(--t-sm); }
+.prow .i { color:var(--ink3); font-family:var(--mono); font-size:var(--t-xs);
+  font-variant-numeric:tabular-nums; }
 .prow .n { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:570; }
-.pbar { height:6px; border-radius:4px; background:var(--line2); overflow:hidden; }
-.pbar i { display:block; height:100%; border-radius:4px; background:var(--accent); }
-.prow .pct { text-align:right; font-family:var(--mono); font-size:11px; color:var(--ink2); }
-.cbar { display:inline-flex; align-items:center; gap:7px; }
-.cbar .pbar { width:64px; }
+.pbar { height:6px; border-radius:var(--r-full); background:var(--surface3); overflow:hidden; }
+.pbar i { display:block; height:100%; border-radius:var(--r-full); background:var(--accent);
+  transition:width .5s var(--ease); }
+.prow .pct { text-align:right; font-family:var(--mono); font-size:var(--t-xs);
+  color:var(--ink2); font-variant-numeric:tabular-nums; }
+.cbar { display:inline-flex; align-items:center; gap:var(--s2); }
+.cbar .pbar { width:62px; }
 .cbar .pbar i.g { background:var(--ok); }
 .cbar .pbar i.a { background:var(--warn); }
 .cbar .pbar i.r { background:var(--crit); }
-.cbar b { font-family:var(--mono); font-size:11px; font-weight:600; color:var(--ink2); }
+.cbar b { font-family:var(--mono); font-size:var(--t-xs); font-weight:600;
+  color:var(--ink2); font-variant-numeric:tabular-nums; }
 
-/* ---- videos / sources / answers ---- */
-.vrow { display:flex; gap:10px; align-items:center; padding:7px 0;
+/* ================= videos / sources / answers ================= */
+.vrow { display:flex; gap:var(--s3); align-items:center; padding:var(--s2) 0;
   border-bottom:1px solid var(--line2); }
 .vrow:last-of-type { border-bottom:0; }
-.vrow img { width:64px; height:36px; object-fit:cover; border-radius:6px;
-  background:var(--mute-bg); flex:none; }
-.vrow .ph { width:64px; height:36px; border-radius:6px; background:var(--mute-bg);
-  display:grid; place-items:center; color:var(--ink3); flex:none; }
-.vrow .t { font-size:12.5px; font-weight:570; flex:1; min-width:0; overflow:hidden;
+.vthumb { position:relative; width:68px; height:38px; border-radius:var(--r-xs);
+  background:var(--surface3); flex:none; overflow:hidden; }
+.vthumb img { width:100%; height:100%; object-fit:cover; display:block; }
+.vthumb .ph { position:absolute; inset:0; display:grid; place-items:center; color:var(--ink3); }
+.vrow .t { font-size:var(--t-sm); font-weight:560; flex:1; min-width:0; overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap; }
 .vrow .t a { color:var(--ink); text-decoration:none; }
 .vrow .t a:hover { color:var(--accent); }
-.vrow .d { color:var(--ink3); font-size:11px; font-family:var(--mono); flex:none; }
-.vtag { background:var(--mute-bg); color:var(--ink2); border-radius:5px;
-  padding:1px 6px; font-size:10px; font-family:var(--mono); flex:none; }
-.srow { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:10px;
-  align-items:center; padding:7px 0; border-bottom:1px solid var(--line2); font-size:12.5px; }
+.vrow .d { color:var(--ink3); font-size:var(--t-xs); font-family:var(--mono); flex:none;
+  font-variant-numeric:tabular-nums; }
+.vtag { background:var(--mute-bg); color:var(--ink2); border-radius:var(--r-xs);
+  padding:2px 7px; font-size:var(--t-2xs); font-family:var(--mono); flex:none; }
+.srow { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:var(--s3);
+  align-items:center; padding:var(--s2) 0; border-bottom:1px solid var(--line2);
+  font-size:var(--t-sm); }
 .srow:last-of-type { border-bottom:0; }
-.srow .nm { font-weight:600; }
-.srow .note { color:var(--ink3); font-size:11px; overflow:hidden;
+.srow .nm { font-weight:600; font-size:var(--t-base); }
+.srow .note { color:var(--ink3); font-size:var(--t-xs); overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap; }
-.srow .vol { color:var(--ink2); font-family:var(--mono); font-size:11px; text-align:right; }
-.arow { padding:9px 0; border-bottom:1px solid var(--line2); font-size:13px; }
+.srow .vol { color:var(--ink2); font-family:var(--mono); font-size:var(--t-xs);
+  text-align:right; font-variant-numeric:tabular-nums; }
+.arow { padding:var(--s3) 0; border-bottom:1px solid var(--line2); font-size:var(--t-base); }
 .arow:last-of-type { border-bottom:0; }
-.arow .hd { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:3px; }
-.arow .hd .w { color:var(--ink3); font-family:var(--mono); font-size:11px; }
-.arow .q { color:var(--ink2); font-size:12.5px; display:-webkit-box;
+.arow .hd { display:flex; gap:var(--s2); align-items:center; flex-wrap:wrap;
+  margin-bottom:var(--s1); }
+.arow .hd b { font-size:var(--t-sm); }
+.arow .hd .w { color:var(--ink3); font-family:var(--mono); font-size:var(--t-2xs);
+  margin-left:auto; }
+.arow .q { color:var(--ink3); font-size:var(--t-sm); display:-webkit-box;
   -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden; }
-.arow .a { margin-top:3px; }
+.arow .a { margin-top:2px; display:-webkit-box; -webkit-line-clamp:3;
+  -webkit-box-orient:vertical; overflow:hidden; line-height:1.5; }
 .tag { display:inline-block; background:var(--mute-bg); color:var(--ink2);
-  border-radius:6px; padding:2px 7px; font-size:10px; font-weight:650; }
+  border-radius:var(--r-xs); padding:1px 7px; font-size:var(--t-2xs); font-weight:680; }
 .tag.lead { background:var(--warn-bg); color:var(--warn); }
 .tag.sub { background:var(--accent-bg); color:var(--accent); }
 .tag.esc { background:var(--warn-bg); color:var(--warn); }
-.empty { color:var(--ink3); font-size:12.5px; padding:8px 0; }
 
-/* ---- link telemetry ---- */
-.admlink { display:inline-flex; gap:5px; align-items:center; margin-left:10px;
-  font-size:11.5px; font-weight:600; text-decoration:none; }
+/* ================= empty states ================= */
+.empty { color:var(--ink3); font-size:var(--t-sm); padding:var(--s3) 0; }
+.emptybox { display:grid; justify-items:center; gap:var(--s2); text-align:center;
+  padding:var(--s7) var(--s4); color:var(--ink3); }
+.emptybox .eic { width:44px; height:44px; border-radius:var(--r-md);
+  background:var(--surface3); display:grid; place-items:center; color:var(--ink3); }
+.emptybox b { color:var(--ink); font-size:var(--t-md); font-weight:620; }
+.emptybox p { margin:0; font-size:var(--t-sm); max-width:46ch; line-height:1.5; }
+
+/* ================= skeletons ================= */
+.skel { background:var(--skel); background-size:400% 100%;
+  animation:shimmer 1.4s ease-in-out infinite; border-radius:var(--r-sm); }
+@keyframes shimmer { 0% { background-position:100% 50%; } 100% { background-position:0 50%; } }
+.skel-row { height:14px; margin:var(--s2) 0; }
+.skel-tile { height:58px; border-radius:var(--r-md); }
+
+/* ================= link telemetry ================= */
+.admlink { display:inline-flex; gap:5px; align-items:center; margin-left:var(--s3);
+  font-size:var(--t-xs); font-weight:600; text-decoration:none; }
 .admlink:hover { text-decoration:underline; }
-.ltk { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
-.mk { background:var(--surface2); border:1px solid var(--line2); border-radius:10px;
-  padding:8px 14px; min-width:92px; }
-.mk .v { font-size:18px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1.2; }
-.mk .l { color:var(--ink3); font-size:10.5px; }
-.ltgrid { display:grid; grid-template-columns:minmax(0,1fr) 280px; gap:18px; align-items:start; }
-@media (max-width:900px) { .ltgrid { grid-template-columns:1fr; } }
-.lchart { width:100%; height:72px; margin-bottom:12px; }
-.lchart rect { fill:var(--accent); opacity:.75; }
-.lsub { color:var(--ink3); font-family:var(--mono); font-size:10px; letter-spacing:.06em;
-  text-transform:uppercase; margin:0 0 6px; }
-.crow { display:flex; justify-content:space-between; gap:8px; padding:5px 0;
-  border-bottom:1px solid var(--line2); font-size:12.5px; }
+.ltk { display:grid; grid-template-columns:repeat(auto-fit,minmax(116px,1fr));
+  gap:var(--s2); margin-bottom:var(--s4); }
+.mk { background:var(--surface2); border:1px solid var(--line2); border-radius:var(--r-md);
+  padding:var(--s3) var(--s4); }
+.mk .v { font-size:var(--t-2xl); font-weight:700; font-variant-numeric:tabular-nums;
+  line-height:1.15; letter-spacing:-.03em; }
+.mk .l { color:var(--ink3); font-size:var(--t-2xs); text-transform:uppercase;
+  letter-spacing:.07em; font-weight:600; margin-top:2px; }
+.ltgrid { display:grid; grid-template-columns:minmax(0,1fr) 296px; gap:var(--s6);
+  align-items:start; }
+@media (max-width:940px) { .ltgrid { grid-template-columns:1fr; } }
+.lchart { width:100%; height:84px; margin-bottom:var(--s4); overflow:visible; }
+.lchart rect { fill:var(--accent); opacity:.8; transition:opacity var(--dur) var(--ease); }
+.lchart rect:hover { opacity:1; }
+.lsub { color:var(--ink3); font-family:var(--mono); font-size:var(--t-2xs);
+  letter-spacing:.08em; text-transform:uppercase; margin:0 0 var(--s2); font-weight:600; }
+.crow { display:flex; justify-content:space-between; gap:var(--s2); padding:var(--s2) 0;
+  border-bottom:1px solid var(--line2); font-size:var(--t-sm); align-items:center; }
 .crow:last-child { border-bottom:0; }
-.crow .n { font-family:var(--mono); font-size:11px; color:var(--ink2); text-align:right; }
-.slug { font-family:var(--mono); font-size:12px; }
-.host { color:var(--ink3); font-size:11px; }
-.retry { color:var(--accent); cursor:pointer; text-decoration:underline; }
-.cpy { opacity:.75; }
-.cpy:hover { opacity:1; }
+.crow .n { font-family:var(--mono); font-size:var(--t-xs); color:var(--ink3);
+  text-align:right; font-variant-numeric:tabular-nums; }
+.slug { font-family:var(--mono); font-size:var(--t-sm); color:var(--ink); }
+.host { color:var(--ink3); font-size:var(--t-xs); }
+.retry { color:var(--accent); cursor:pointer; text-decoration:underline; font-weight:600; }
 
-/* ---- toast ---- */
-#toast { position:fixed; right:18px; bottom:18px; background:var(--surface);
-  border:1px solid var(--line); border-left:3px solid var(--accent);
-  border-radius:10px; padding:10px 14px; font-size:12.5px; z-index:60;
-  box-shadow:0 6px 18px rgba(0,0,0,.18); opacity:0; transform:translateY(8px);
-  transition:opacity .25s, transform .25s; pointer-events:none; max-width:320px; }
+/* ================= toast ================= */
+#toast { position:fixed; right:var(--s5); bottom:var(--s5); background:var(--surface);
+  border:1px solid var(--line); border-radius:var(--r-md); padding:var(--s3) var(--s4);
+  font-size:var(--t-sm); z-index:60; box-shadow:var(--e3); opacity:0;
+  transform:translateY(10px) scale(.98); pointer-events:none; max-width:340px;
+  display:flex; align-items:center; gap:var(--s3); font-weight:550;
+  transition:opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
 #toast.show { opacity:1; transform:none; }
+#toast .ti { width:26px; height:26px; border-radius:var(--r-sm); flex:none;
+  display:grid; place-items:center; background:var(--accent-bg); color:var(--accent); }
+#toast[data-kind="good"] .ti { background:var(--ok-bg); color:var(--ok); }
+#toast[data-kind="bad"] .ti { background:var(--crit-bg); color:var(--crit); }
 
-footer { margin-top:20px; color:var(--ink3); font-size:11.5px; font-family:var(--mono); }
+footer { margin-top:var(--s6); padding-top:var(--s4); border-top:1px solid var(--line);
+  color:var(--ink3); font-size:var(--t-xs); font-family:var(--mono); }
 
+/* ================= responsive ================= */
+@media (min-width:900px) {
+  /* the questions table fits: drop the scroll container so the sticky
+     header can anchor to the viewport instead of a short scroll box */
+  #questions .scroll { overflow:visible; margin:0; padding:0; }
+  #questions thead th { position:sticky; top:var(--head-h); z-index:5; }
+}
 @media (max-width:1180px) {
   .app { grid-template-columns:1fr; }
   .side { display:none; }
+  .mnav { display:flex; }
   .cols { grid-template-columns:1fr; }
+  .main { padding:0 var(--s4) var(--s8); }
+  h1 { font-size:var(--t-lg); }
+  .tile.hero .v { font-size:var(--t-3xl); }
+}
+@media (max-width:680px) {
+  .search { order:5; max-width:none; margin-left:0; }
+  .top { gap:var(--s2); }
+  .snip { max-width:none; }
+  .card { padding:var(--s4); }
+  .scroll { margin:0 calc(var(--s4) * -1); padding:0 var(--s4); }
 }
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior:auto; }
-  .spin svg { animation:none; }
-  .filters.flash { animation:none; }
-  #toast { transition:none; }
+  *, *::before, *::after { animation-duration:.001ms !important;
+    animation-iteration-count:1 !important; transition-duration:.001ms !important; }
 }
 
 @media print {
-  .side, .search, .btn, .bell, .filters, .linkbtn, .acts, .chip kbd,
-  #toast, .qdet { display:none !important; }
+  .side, .mnav, .search, .btn, .bell, .filters, .linkbtn, .acts, .chip kbd,
+  #toast, .qdet, .spark { display:none !important; }
   .app { display:block; }
-  .top { position:static; }
-  body { background:#fff; color:#000; }
+  .top { position:static; backdrop-filter:none; }
+  body { background:#fff; color:#000; font-size:10pt; }
   .card, .tile { break-inside:avoid; border-color:#ccc; box-shadow:none; }
   .cols, .grid3 { display:block; }
+  .card { margin-bottom:12pt; }
+  a[href^="http"]::after { content:" (" attr(href) ")"; font-size:8pt; color:#555; }
 }
 """.replace("/*DARK*/", _DARK_TOKENS)
 
@@ -550,10 +770,12 @@ try {
 """
 
 FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' "
-           "viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' "
-           "fill='%232563eb'/%3E%3Ctext x='32' y='45' font-size='38' "
-           "font-family='Arial' font-weight='bold' fill='white' "
-           "text-anchor='middle'%3EL%3C/text%3E%3C/svg%3E")
+           "viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' "
+           "x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%233d63f5'/%3E"
+           "%3Cstop offset='100%25' stop-color='%236d3cf0'/%3E%3C/linearGradient%3E"
+           "%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='url(%23g)'/%3E"
+           "%3Ctext x='32' y='45' font-size='36' font-family='Arial' "
+           "font-weight='bold' fill='white' text-anchor='middle'%3EL%3C/text%3E%3C/svg%3E")
 
 # --------------------------------------------------------------------------
 # Behavior. Placeholders __EPOCH__ / __LIVE__ / __PAGE__ are substituted at
@@ -587,12 +809,17 @@ function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
 
 /* ---- theme toggle: system -> dark -> light ---- */
+var THEME_ICON = { system: "auto", dark: "moon", light: "sun" };
 function applyTheme(mode) {
   if (mode === "dark" || mode === "light") document.documentElement.dataset.theme = mode;
   else delete document.documentElement.dataset.theme;
   var b = $("#themebtn");
-  if (b) b.querySelector("span").textContent =
+  if (!b) return;
+  b.querySelector("span").textContent =
     mode === "dark" ? "Dark" : mode === "light" ? "Light" : "Auto";
+  $$(".ticon", b).forEach(function (i) {
+    i.classList.toggle("hide", i.dataset.icon !== THEME_ICON[mode]);
+  });
 }
 var themeMode = lsGet("lp-theme") || "system";
 applyTheme(themeMode);
@@ -604,13 +831,20 @@ $("#themebtn").addEventListener("click", function () {
 });
 
 /* ---- toast ---- */
-function toast(text) {
+function toast(text, kind) {
   var t = $("#toast");
-  t.textContent = text;
+  t.dataset.kind = kind || "info";
+  $("#toasttxt").textContent = text;
   t.classList.add("show");
   clearTimeout(t._h);
   t._h = setTimeout(function () { t.classList.remove("show"); }, 5000);
 }
+
+/* ---- sticky header shadow ---- */
+var topBar = $(".top");
+addEventListener("scroll", function () {
+  topBar.classList.toggle("stuck", scrollY > 8);
+}, { passive: true });
 
 /* ---- live status ---- */
 function agoText() {
@@ -660,9 +894,9 @@ $("#updbtn").addEventListener("click", function () {
   b.disabled = true;
   b.classList.add("spin");
   fetch("/rebuild", { method: "POST" })
-    .then(function () { toast("Rebuild requested; the page refreshes when it lands."); })
+    .then(function () { toast("Rebuild requested; the page refreshes when it lands.", "info"); })
     .catch(function () {
-      toast("Could not reach the panel server.");
+      toast("Could not reach the panel server.", "bad");
       b.disabled = false;
       b.classList.remove("spin");
     });
@@ -749,12 +983,16 @@ function apply() {
   $("#morebtn").classList.toggle("hide", kept >= total);
   /* only when filters hid existing rows; an empty vault has its own message */
   $("#qempty").classList.toggle("hide", total !== 0 || PAIRS.length === 0);
+  /* the sidebar badge stays the open-question count on purpose: it must
+     agree with the bell, not drift into "rows currently matching" */
   ss("lp-shown", String(shown));
 }
 function setGroup(k, v) {
   state[k] = v;
   $$('.fchip[data-k="' + k + '"]').forEach(function (c) {
-    c.classList.toggle("on", c.dataset.v === v);
+    var on = c.dataset.v === v;
+    c.classList.toggle("on", on);
+    c.setAttribute("aria-pressed", on ? "true" : "false");
   });
 }
 $$(".fchip[data-k]").forEach(function (c) {
@@ -800,8 +1038,17 @@ function toggleDet(row, focus) {
   var det = row.nextElementSibling;
   if (!det || !det.classList.contains("qdet")) return;
   var open = !det.classList.contains("open");
+  clearTimeout(det._t);   /* a pending close must never hide a reopened row */
+  det.classList.remove("hide");
+  /* Force layout instead of waiting for a frame: requestAnimationFrame does
+     not fire in a background or non-compositing tab, which left restored
+     rows stuck closed after an auto-reload. Reading offsetHeight flushes
+     the start value so the transition still runs when frames do arrive. */
+  void det.offsetHeight;
   det.classList.toggle("open", open);
-  det.classList.toggle("hide", !open);
+  if (!open) det._t = setTimeout(function () {
+    if (!det.classList.contains("open")) det.classList.add("hide");
+  }, reduceMotion ? 0 : 180);
   row.setAttribute("aria-expanded", open ? "true" : "false");
   ss("lp-open:" + det.dataset.id, open ? "1" : null);
   if (open && focus === "box") det.querySelector(".qbox").focus();
@@ -815,27 +1062,35 @@ $$("#qtbody tr.qrow").forEach(function (r) {
     toggleDet(r);
   });
 });
-function runSuggest(det) {
+function runSuggest(det, btn) {
   var out = det.querySelector(".sugout");
   out.style.display = "block";
-  out.textContent = "Searching your notes...";
-  if (!LIVE) { out.textContent = "Static file: suggestions need the live server (panel.py --watch)."; return; }
+  out.textContent = "Searching your notes and past answers...";
+  if (btn) { btn.disabled = true; btn.classList.add("spin"); }
+  function done() { if (btn) { btn.disabled = false; btn.classList.remove("spin"); } }
+  if (!LIVE) {
+    out.textContent = "Static file: suggestions need the live server (panel.py --watch).";
+    done();
+    return;
+  }
   fetch("/suggest", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: det.dataset.id }) })
     .then(function (r) { return r.json(); })
     .then(function (s) {
+      done();
       if (s.ok && s.text) {
         out.textContent = "";
         var src = document.createElement("div");
         src.className = "src";
-        src.textContent = "from " + s.source + " ";
+        var where = document.createElement("span");
+        where.textContent = "from " + s.source;
+        src.appendChild(where);
         var conf = typeof s.confidence === "number" ? s.confidence : 0;
         var cls = conf >= 60 ? "ok" : conf >= 30 ? "warn" : "crit";
         var badge = document.createElement("span");
         badge.className = "conf conf-" + cls;
-        badge.innerHTML = '<span class="confbar"><i class="cb-' + cls
-          + '" style="width:' + conf + '%"></i></span>' + conf + "% confidence \\u00b7 "
-          + s.matched + " of " + s.total + " question terms covered";
+        badge.innerHTML = '<span class="confbar"><i style="width:' + conf + '%"></i></span>'
+          + conf + "% confidence \\u00b7 " + s.matched + " of " + s.total + " terms";
         src.appendChild(badge);
         var pre = document.createElement("pre");
         pre.textContent = s.text;
@@ -850,29 +1105,35 @@ function runSuggest(det) {
         });
         out.appendChild(src); out.appendChild(pre); out.appendChild(use);
       } else {
-        out.textContent = "Nothing in your notes matches this yet. Real gap: type the "
-          + "answer below, then paste it into the system's notes so the next one is automatic.";
+        out.textContent = "Nothing in your notes or past answers matches this yet. "
+          + "Real gap: type the answer below; replying files it as searchable knowledge "
+          + "so the next identical question suggests itself.";
       }
     })
-    .catch(function () { out.textContent = "Could not reach the panel server."; });
+    .catch(function () { done(); out.textContent = "Could not reach the panel server."; });
 }
 function runReply(det) {
   var box = det.querySelector(".qbox");
   var msg = det.querySelector(".msg");
   var btn = det.querySelector(".replybtn");
   var text = box.value.trim();
-  if (!text) { msg.textContent = "Type the reply first."; return; }
+  msg.className = "msg";
+  if (!text) { msg.textContent = "Type the reply first."; msg.classList.add("bad"); return; }
   if (!LIVE) { msg.textContent = "Static file: replying needs the live server (panel.py --watch)."; return; }
   btn.disabled = true;
+  btn.classList.add("spin");
   msg.textContent = "Updating the vault...";
   fetch("/reply", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: det.dataset.id, text: text }) })
     .then(function (r) { return r.json(); })
     .then(function (s) {
+      btn.classList.remove("spin");
       if (s.ok) {
         holdUntil = Date.now() + 6000;
         ss("lp-draft:" + det.dataset.id, null);
         msg.textContent = "Vault updated. " + (s.platform_message || "");
+        msg.classList.add("good");
+        toast("Reply saved to the vault and filed as knowledge.", "good");
         var row = det.previousElementSibling;
         var pill = row.querySelector(".pill");
         pill.className = "pill st-answered";
@@ -880,12 +1141,15 @@ function runReply(det) {
         row.dataset.st = "answered";
       } else {
         msg.textContent = "Failed: " + (s.error || "unknown error");
+        msg.classList.add("bad");
         btn.disabled = false;
       }
     })
     .catch(function () {
       msg.textContent = "Could not reach the panel server.";
+      msg.classList.add("bad");
       btn.disabled = false;
+      btn.classList.remove("spin");
     });
 }
 $$("[data-act]").forEach(function (el) {
@@ -895,12 +1159,12 @@ $$("[data-act]").forEach(function (el) {
     var det = row ? row.nextElementSibling : null;
     if (!det) return;
     if (!det.classList.contains("open")) toggleDet(row);
-    if (el.dataset.act === "suggest") runSuggest(det);
+    if (el.dataset.act === "suggest") runSuggest(det, det.querySelector("[data-suggest]"));
     else det.querySelector(".qbox").focus();
   });
 });
 $$("[data-suggest]").forEach(function (b) {
-  b.addEventListener("click", function () { runSuggest(b.closest("tr.qdet")); });
+  b.addEventListener("click", function () { runSuggest(b.closest("tr.qdet"), b); });
 });
 $$("[data-reply]").forEach(function (b) {
   b.addEventListener("click", function () { runReply(b.closest("tr.qdet")); });
@@ -947,10 +1211,12 @@ $$("[data-viewall]").forEach(function (b) {
 /* ---- clipboard ---- */
 function copyText(text, el) {
   function done() {
+    toast("Copied to clipboard.", "good");
     if (!el) return;
-    var old = el.textContent;
+    var old = el.dataset.label || el.textContent;
+    el.dataset.label = old;
     el.textContent = "copied";
-    setTimeout(function () { el.textContent = old; }, 1200);
+    setTimeout(function () { el.textContent = old; }, 1400);
   }
   if (navigator.clipboard && navigator.clipboard.writeText)
     navigator.clipboard.writeText(text).then(done, done);
@@ -1038,8 +1304,9 @@ document.addEventListener("keydown", function (e) {
     if (isNaN(target) || target === 0) return;
     var t0 = performance.now();
     function step(t) {
-      var p = Math.min(1, (t - t0) / 350);
-      el.textContent = fmt(Math.round(target * (0.2 + 0.8 * p)));
+      var p = Math.min(1, (t - t0) / 420);
+      var eased = 1 - Math.pow(1 - p, 3);
+      el.textContent = fmt(Math.round(target * (0.15 + 0.85 * eased)));
       if (p < 1) requestAnimationFrame(step);
     }
     requestAnimationFrame(step);
@@ -1055,7 +1322,7 @@ document.addEventListener("keydown", function (e) {
   try {
     var prev = JSON.parse(prevRaw);
     var d = cur.open - prev.open;
-    if (d > 0) toast("+" + d + " new open question" + (d > 1 ? "s" : "") + " since your last view");
+    if (d > 0) toast("+" + d + " new open question" + (d > 1 ? "s" : "") + " since your last view", "info");
   } catch (e) {}
 })();
 
@@ -1098,7 +1365,11 @@ function renderLinks(d) {
     };
     var txt = m[d.error] || ("error: " + d.error);
     st.innerHTML = esc(txt) + ' \\u00b7 <span class="retry" id="ltretry" role="button" tabindex="0">retry now</span>';
-    body.innerHTML = '<div class="empty">' + esc(txt) + "</div>";
+    body.innerHTML = '<div class="emptybox"><span class="eic">'
+      + '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+      + 'stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="10"/>'
+      + '<path d="M12 8v4"/><path d="M12 16h.01"/></svg></span>'
+      + "<b>Link telemetry unavailable</b><p>" + esc(txt) + "</p></div>";
     var rt = $("#ltretry");
     if (rt) rt.addEventListener("click", function () { ltFails = 0; loadLinks(); });
     return;
@@ -1124,7 +1395,7 @@ function renderLinks(d) {
     h += '<tr><td><span class="slug">/' + esc(l.prefix) + "/" + esc(l.slug)
       + '</span><br><span class="host">' + esc(host) + '</span></td><td class="num">'
       + fmt(l.clicks_1h) + '</td><td class="num">' + fmt(l.clicks_7d) + '</td><td class="num">'
-      + fmt(l.total_clicks) + '</td><td class="num"><button class="btn tiny cpy" data-copy="'
+      + fmt(l.total_clicks) + '</td><td class="num"><button class="btn tiny" data-copy="'
       + esc(shortUrl(l.prefix, l.slug)) + '">copy</button></td></tr>';
   });
   h += "</tbody>";
@@ -1151,12 +1422,12 @@ function renderLinks(d) {
   var refList = Object.keys(refs).map(function (k) { return [k, refs[k]]; })
     .sort(function (a, b) { return b[1] - a[1]; }).slice(0, 5);
   if (refList.length) {
-    h += '<p class="lsub" style="margin-top:14px">Referrers, last 30 clicks</p>';
+    h += '<p class="lsub" style="margin-top:20px">Referrers, last 30 clicks</p>';
     refList.forEach(function (r) {
       h += '<div class="crow"><span>' + esc(r[0]) + '</span><span class="n">' + r[1] + "</span></div>";
     });
   }
-  h += '<p class="lsub" style="margin-top:14px">Countries, 7 days</p>';
+  h += '<p class="lsub" style="margin-top:20px">Countries, 7 days</p>';
   var cc = (d.countries || []).slice(0, 6);
   if (!cc.length) h += '<div class="empty">none yet \\u00b7 geo backfill returns after the Railway redeploy</div>';
   cc.forEach(function (c) {
@@ -1186,15 +1457,17 @@ function loadLinks() {
 }
 loadLinks();
 
-/* ---- sidebar active state ---- */
-var links = {};
-$$(".nav a").forEach(function (a) { links[a.getAttribute("href").slice(1)] = a; });
+/* ---- section highlighting in both navs ---- */
+var navLinks = {};
+$$(".nav a, .mnav a").forEach(function (a) {
+  var id = a.getAttribute("href").slice(1);
+  (navLinks[id] = navLinks[id] || []).push(a);
+});
 var io = new IntersectionObserver(function (es) {
   es.forEach(function (en) {
     if (!en.isIntersecting) return;
-    $$(".nav a").forEach(function (a) { a.classList.remove("active"); });
-    var l = links[en.target.id];
-    if (l) l.classList.add("active");
+    $$(".nav a, .mnav a").forEach(function (a) { a.classList.remove("active"); });
+    (navLinks[en.target.id] || []).forEach(function (a) { a.classList.add("active"); });
   });
 }, { rootMargin: "-20% 0px -70% 0px" });
 $$("section[id]").forEach(function (s) { io.observe(s); });
@@ -1254,39 +1527,41 @@ def _tiles(d: dict, n_systems: int) -> str:
             return ""
         cls = ("good" if good_when_up else "bad") if dv > 0 else \
               ("bad" if good_when_up else "good")
-        sign = "+" if dv > 0 else ""
-        return f' &middot; <span class="dlt {cls}">{sign}{_fmt(dv)}</span> in 24h'
+        arrow = _icon("up", 10) if dv > 0 else _icon("down", 10)
+        return (f'<span class="dlt {cls}">{arrow}{_fmt(abs(dv))}</span>'
+                f'<span>vs 24h ago</span>')
 
     pct = d["written"] * 100 // d["total_facets"] if d["total_facets"] else 0
     tiles = [
-        ("chat", "c-blue", "Open questions",
+        ("hero", "chat", "c-blue", "Open questions",
          f'<span class="cu" data-n="{d["open_q"]}">{_fmt(d["open_q"])}</span>',
-         "waiting on you" + delta("open", good_when_up=False),
-         _spark(series("open"), "#2563eb")),
-        ("check", "c-green", "Answered",
+         "waiting on you", delta("open", good_when_up=False),
+         _spark(series("open"), "a", "#3d63f5")),
+        ("", "check", "c-green", "Answered",
          f'<span class="cu" data-n="{d["answer_rate"]}">{d["answer_rate"]}</span>%',
-         f"of {_fmt(len(d['questions']))} logged" + delta("rate", good_when_up=True),
-         _spark(series("rate"), "#16a34a")),
-        ("book", "c-violet", "Catalog coverage",
+         f"of {_fmt(len(d['questions']))} logged", delta("rate", good_when_up=True),
+         _spark(series("rate"), "b", "#15904d")),
+        ("", "book", "c-violet", "Catalog coverage",
          f'<span class="cu" data-n="{pct}">{pct}</span>%',
-         f"{_fmt(d['written'])} of {_fmt(d['total_facets'])} notes",
-         _spark(series("cov"), "#7c3aed")),
-        ("alert", "c-red", "Critical systems",
+         f"{_fmt(d['written'])} of {_fmt(d['total_facets'])} notes", "",
+         _spark(series("cov"), "c", "#6d3cf0")),
+        ("", "alert", "c-red", "Critical systems",
          f'<span class="cu" data-n="{d["critical"]}">{_fmt(d["critical"])}</span>',
-         f"{_fmt(d['urgent'])} more urgent",
-         _spark(series("crit"), "#dc2626")),
-        ("flag", "c-indigo", "Complete",
+         f"{_fmt(d['urgent'])} more urgent", "",
+         _spark(series("crit"), "d", "#cf3232")),
+        ("", "flag", "c-amber", "Complete",
          f'<span class="cu" data-n="{d["complete"]}">{_fmt(d["complete"])}</span>'
-         f' <small>of {n_systems}</small>',
-         f"{_fmt(d['empty'])} systems still empty",
-         _spark(series("complete"), "#6366f1")),
+         f' <small>/ {n_systems}</small>',
+         f"{_fmt(d['empty'])} still empty", "",
+         _spark(series("complete"), "e", "#b4700c")),
     ]
     cells = []
-    for icon, color, label, value, sub, spark in tiles:
+    for extra, icon, color, label, value, sub, dlt, spark in tiles:
+        cls = f"tile {extra}".strip()
         cells.append(
-            f'<div class="tile"><div class="h"><span class="tic {color}">{_icon(icon, 14)}</span>'
+            f'<div class="{cls}"><div class="h"><span class="tic {color}">{_icon(icon, 15)}</span>'
             f'{label}</div><div class="row"><div class="v">{value}</div>{spark}</div>'
-            f'<div class="s">{sub}</div></div>'
+            f'<div class="s"><span>{sub}</span>{dlt}</div></div>'
         )
     return f'<section id="overview"><div class="tiles">{"".join(cells)}</div></section>'
 
@@ -1297,7 +1572,7 @@ def _filters(questions: list) -> str:
     for q in questions:
         ch_counts[q["channel"]] = ch_counts.get(q["channel"], 0) + 1
         st_counts[q["status"]] = st_counts.get(q["status"], 0) + 1
-    statuses = [s for s in ("answered", "escalated", "no-source", "out-of-scope", "unknown")
+    statuses = [s for s in ("no-source", "escalated", "answered", "out-of-scope", "unknown")
                 if s in st_counts]
 
     sys_counts: dict[str, int] = {}
@@ -1309,20 +1584,22 @@ def _filters(questions: list) -> str:
         sys_names[q["system"]] = q["system_name"]
 
     total = len(questions)
-    parts = ['<div class="filters" id="filters">',
-             f'<span class="fchip on" data-k="ch" data-v="all">All channels '
+    parts = ['<div class="filters" id="filters" role="group" aria-label="Question filters">',
+             f'<span class="fchip on" data-k="ch" data-v="all" aria-pressed="true">All channels '
              f'<span class="fc-n">{_fmt(total)}</span></span>']
     for ch in sorted(ch_counts):
         brand = _brand_icon(ch, 13)
         if not brand and ch in CH_COLORS:
             brand = f'<span class="cd" style="background:{CH_COLORS[ch]}"></span>'
-        parts.append(f'<span class="fchip" data-k="ch" data-v="{escape(ch, quote=True)}">'
-                     f'{brand}{escape(ch)} <span class="fc-n">{_fmt(ch_counts[ch])}</span></span>')
+        parts.append(f'<span class="fchip" data-k="ch" data-v="{escape(ch, quote=True)}" '
+                     f'aria-pressed="false">{brand}{escape(ch)} '
+                     f'<span class="fc-n">{_fmt(ch_counts[ch])}</span></span>')
     parts.append('<span class="fsep"></span>')
-    parts.append('<span class="fchip on" data-k="st" data-v="all">All statuses</span>')
+    parts.append('<span class="fchip on" data-k="st" data-v="all" aria-pressed="true">All statuses</span>')
     for st in statuses:
-        parts.append(f'<span class="fchip" data-k="st" data-v="{escape(st, quote=True)}">'
-                     f'{escape(st)} <span class="fc-n">{_fmt(st_counts[st])}</span></span>')
+        parts.append(f'<span class="fchip" data-k="st" data-v="{escape(st, quote=True)}" '
+                     f'aria-pressed="false">{escape(st)} '
+                     f'<span class="fc-n">{_fmt(st_counts[st])}</span></span>')
     parts.append('<span class="fsep"></span>')
     parts.append('<select id="sysSel" class="fchip" aria-label="Filter by system">'
                  '<option value="all">All systems</option>'
@@ -1360,10 +1637,12 @@ def _question_rows(questions: list) -> str:
             f'<td>{escape(sys_label)}</td>'
             f'<td>{_chn(q["channel"])}</td>'
             f'<td class="num">{q["date"]}</td>'
-            f'<td class="acts">'
-            f'<span class="alink" data-act="suggest">{_icon("sparkle", 13)}Suggest answer</span>'
-            f'<span class="alink" data-act="reply">{_icon("replyic", 13)}Reply</span>'
-            f'</td></tr>'
+            f'<td class="acts"><span class="rowacts">'
+            f'<span class="alink" data-act="suggest" title="Search your notes and past answers">'
+            f'{_icon("sparkle", 13)}Suggest</span>'
+            f'<span class="alink" data-act="reply" title="Write a reply">'
+            f'{_icon("replyic", 13)}Reply</span>'
+            f'</span></td></tr>'
         )
 
         prov = [f'{_chn(q["channel"])}', f'<span class="num">{q["date"]}</span>']
@@ -1371,7 +1650,7 @@ def _question_rows(questions: list) -> str:
         if q.get("video") and copy_target:
             prov.append(
                 f'<a href="{escape(copy_target, quote=True)}" target="_blank" rel="noopener">'
-                f'from: {escape(q["video"])} {_icon("external", 12)}</a>')
+                f'{_icon("video", 12)}{escape(q["video"])}{_icon("external", 11)}</a>')
         elif q.get("video"):
             prov.append(f'<span>from: {escape(q["video"])}</span>')
         if q.get("source"):
@@ -1380,11 +1659,12 @@ def _question_rows(questions: list) -> str:
                     f'{_icon("copy", 12)}Copy link</button>') if copy_target else ""
         your_reply = ""
         if q.get("reply"):
-            your_reply = (f'<div class="yourreply"><b>Your reply on '
-                          f'{escape(q["channel"])}:</b> {escape(q["reply"])}</div>')
+            your_reply = (f'<div class="yourreply"><b>{_icon("check", 12)}Your reply on '
+                          f'{escape(q["channel"])}</b>{escape(q["reply"])}</div>')
 
         rows.append(
-            f'<tr class="qdet hide" data-id="{qid}"><td colspan="7"><div class="det">'
+            f'<tr class="qdet hide" data-id="{qid}"><td colspan="7">'
+            f'<div class="detwrap"><div class="detinner"><div class="det">'
             f'<div class="full">{escape(q["text"])}</div>'
             f'{your_reply}'
             f'<div class="prov">{" ".join(prov)}</div>'
@@ -1392,20 +1672,25 @@ def _question_rows(questions: list) -> str:
             f'{_icon("sparkle", 13)}Suggest answer</button>{copy_btn}</div>'
             f'<div class="sugout"></div>'
             f'<textarea class="qbox" aria-label="Reply text" placeholder="Type the reply. '
-            f'Reply always updates the vault; posting to YouTube for real needs the one-time '
-            f'OAuth setup."></textarea>'
+            f'Reply always updates the vault and files the answer as searchable knowledge; '
+            f'posting to YouTube for real needs the one-time OAuth setup."></textarea>'
             f'<div class="detbtns"><button class="btn tiny primary replybtn" data-reply>'
-            f'{_icon("replyic", 13)}Reply</button>'
+            f'{_icon("replyic", 13)}Send reply</button>'
             f'<span class="msg" aria-live="polite"></span></div>'
-            f'</div></td></tr>'
+            f'</div></div></div></td></tr>'
         )
     return "".join(rows)
 
 
 def _questions_card(d: dict) -> str:
-    body = _question_rows(d["questions"]) if d["questions"] else (
-        '<tr><td colspan="7"><div class="empty">No questions logged yet. '
-        'They arrive via collect_youtube.py or by hand in Inbox/00 - Questions.md.</div></td></tr>')
+    empty = (
+        f'<tr><td colspan="7"><div class="emptybox">'
+        f'<span class="eic">{_icon("inbox", 20)}</span>'
+        f'<b>No questions logged yet</b>'
+        f'<p>They arrive automatically from collect_youtube.py, or by hand in '
+        f'Inbox/00 - Questions.md.</p></div></td></tr>')
+    body = _question_rows(d["questions"]) if d["questions"] else empty
+    arrow = f'<span class="sarrow">{_icon("up", 10)}</span>'
     return (
         f'<section class="card" id="questions">'
         f'<h2>{_icon("chat")}Incoming questions'
@@ -1413,17 +1698,19 @@ def _questions_card(d: dict) -> str:
         f'j/k navigate &middot; n next open</span></h2>'
         f'{_filters(d["questions"])}'
         f'<div class="scroll"><table aria-label="Incoming questions"><thead><tr>'
-        f'<th scope="col" data-sort="who" aria-sort="none">User</th>'
-        f'<th scope="col" data-sort="status" aria-sort="none">Status</th>'
-        f'<th scope="col">Snippet</th>'
-        f'<th scope="col" data-sort="system" aria-sort="none">System</th>'
+        f'<th scope="col" data-sort="who" aria-sort="none">User{arrow}</th>'
+        f'<th scope="col" data-sort="status" aria-sort="none">Status{arrow}</th>'
+        f'<th scope="col">Question</th>'
+        f'<th scope="col" data-sort="system" aria-sort="none">System{arrow}</th>'
         f'<th scope="col">Channel</th>'
-        f'<th scope="col" data-sort="date" aria-sort="descending">Date</th>'
-        f'<th scope="col"><span class="visually-hidden"></span></th>'
+        f'<th scope="col" data-sort="date" aria-sort="descending">Date{arrow}</th>'
+        f'<th scope="col"></th>'
         f'</tr></thead><tbody id="qtbody">{body}</tbody></table></div>'
-        f'<div class="qempty hide" id="qempty">Nothing matches these filters. '
-        f'<button class="linkbtn" id="qemptyclear" style="width:auto;display:inline">'
-        f'Clear filters</button></div>'
+        f'<div class="emptybox hide" id="qempty">'
+        f'<span class="eic">{_icon("filter", 20)}</span>'
+        f'<b>Nothing matches these filters</b>'
+        f'<p>Try widening the channel, status or system filter.</p>'
+        f'<button class="btn tiny" id="qemptyclear">Clear filters</button></div>'
         f'<button class="linkbtn" id="morebtn">View all questions &rarr;</button>'
         f'</section>'
     )
@@ -1442,21 +1729,23 @@ def _answers_card(d: dict) -> str:
         posted = ('<span class="pill st-ok">posted to youtube</span>' if a["posted"]
                   else '<span class="pill st-unknown">vault only</span>')
         rows.append(
-            f'<div class="arow{hid}"><div class="hd">{_avatar(a["who"])}'
+            f'<div class="arow{hid}"><div class="hd">{_avatar(a["who"], "sm")}'
             f'<b>{escape(a["who"])}</b>{_chn(a["channel"])}{posted}'
             f'<span class="w">{escape(a["when"])}</span></div>'
-            f'<div class="q">Q: {escape(a["q"])}</div>'
+            f'<div class="q">{escape(a["q"])}</div>'
             f'<div class="a">{escape(a["a"])}</div></div>'
         )
     more = (f'<button class="linkbtn" data-viewall>View all {len(answers)} replies</button>'
             if len(answers) > 5 else "")
     body = "".join(rows) if rows else (
-        '<div class="empty">No replies sent from the panel yet. Expand a question, '
-        'type an answer and hit Reply: it lands here and in Inbox/02 - Answered.md.</div>')
+        f'<div class="emptybox"><span class="eic">{_icon("replyic", 20)}</span>'
+        f'<b>No replies sent from the panel yet</b>'
+        f'<p>Expand a question, type an answer and hit Send reply: it lands here, in '
+        f'Inbox/02 - Answered.md, and in the searchable knowledge base.</p></div>')
     return (
         f'<section class="card" id="answers">'
         f'<h2>{_icon("check")}Answers sent'
-        f'<span class="cnt">{len(answers)} logged &middot; {week} this week</span></h2>'
+        f'<span class="cnt">{_fmt(len(answers))} logged &middot; {week} this week</span></h2>'
         f'{body}{more}</section>'
     )
 
@@ -1469,15 +1758,18 @@ def _gaps_card(d: dict) -> str:
         last = max((q["date"] for q in g["questions"]), default="")
         last_html = f'<small>last asked {last}</small>' if last else ""
         rows.append(
-            f'<div class="grow{hid}" data-sys="{escape(sys_val, quote=True)}">'
+            f'<div class="grow{hid}" data-sys="{escape(sys_val, quote=True)}" '
+            f'title="Filter the question list to this gap">'
             f'<span>{escape(g["label"])}{last_html}</span>'
-            f'<span class="gcnt">{g["count"]}x</span></div>'
+            f'<span class="gcnt">{g["count"]}</span></div>'
         )
     more = (f'<button class="linkbtn" data-viewall>View all {len(d["gaps"])} gaps</button>'
             if len(d["gaps"]) > 8 else "")
-    body = "".join(rows) if rows else '<div class="empty">Nothing marked no-source.</div>'
-    return (f'<section class="card" id="gaps"><h2>{_icon("target")}Gaps to close</h2>'
-            f'{body}{more}</section>')
+    body = "".join(rows) if rows else (
+        f'<div class="emptybox"><span class="eic">{_icon("check", 20)}</span>'
+        f'<b>No open gaps</b><p>Nothing is marked no-source right now.</p></div>')
+    return (f'<section class="card" id="gaps"><h2>{_icon("target")}Gaps to close'
+            f'<span class="cnt">click to filter</span></h2>{body}{more}</section>')
 
 
 def _priority_card(d: dict, n_facets: int) -> str:
@@ -1487,15 +1779,15 @@ def _priority_card(d: dict, n_facets: int) -> str:
         hid = "" if i < 8 else " xtra hide"
         rows.append(
             f'<div class="prow{hid}"><span class="i">{i + 1}</span>'
-            f'<span class="n">{escape(s["name"])}</span>'
+            f'<span class="n" title="{escape(s["name"], quote=True)}">{escape(s["name"])}</span>'
             f'<span class="pbar"><i style="width:{s["pct"]}%"></i></span>'
             f'<span class="pct">{s["pct"]}%</span></div>'
         )
     more = (f'<button class="linkbtn" data-viewall>View all {len(queue)}</button>'
             if len(queue) > 8 else "")
     body = "".join(rows) if rows else '<div class="empty">No gaps with recorded demand.</div>'
-    return (f'<section class="card" id="priority"><h2>{_icon("flame")}Priority queue</h2>'
-            f'{body}{more}</section>')
+    return (f'<section class="card" id="priority"><h2>{_icon("flame")}Priority queue'
+            f'<span class="cnt">demand 60% &middot; gap 40%</span></h2>{body}{more}</section>')
 
 
 def _coverage_card(d: dict, facets: list) -> str:
@@ -1513,8 +1805,8 @@ def _coverage_card(d: dict, facets: list) -> str:
         rows.append(
             f'<tr class="{hid.strip()}"><td><span class="sysdrill" '
             f'data-sys="{escape(s["slug"], quote=True)}" '
-            f'title="filter questions to this system">{escape(s["name"])}</span>{upill}</td>'
-            f'<td class="num">{s["done"]} / {n_facets}</td>'
+            f'title="Filter questions to this system">{escape(s["name"])}</span>{upill}</td>'
+            f'<td class="num">{s["done"]}/{n_facets}</td>'
             f'<td class="num">{_fmt(s["demand"]) if s["demand"] else "-"}</td>'
             f'<td><span class="cbar" title="{escape(tip, quote=True)}"><span class="pbar">'
             f'<i class="{cls}" style="width:{cov}%"></i></span><b>{cov}%</b></span></td></tr>'
@@ -1542,7 +1834,7 @@ def _people_card(d: dict) -> str:
         if p["subscriber"] == "yes":
             tags += ' <span class="tag sub">sub</span>'
         rows.append(
-            f'<tr class="{hid.strip()}"><td><span class="uc">{_avatar(p["who"])}'
+            f'<tr class="{hid.strip()}"><td><span class="uc">{_avatar(p["who"], "sm")}'
             f'<span class="n">{escape(p["who"])}{tags}</span></span></td>'
             f'<td class="num">{p["asked"]}</td><td class="num">{p["open"]}</td>'
             f'<td class="num">{p["last"]}</td></tr>'
@@ -1552,7 +1844,8 @@ def _people_card(d: dict) -> str:
     body = "".join(rows) if rows else (
         '<tr><td colspan="4"><div class="empty">Nobody logged yet.</div></td></tr>')
     return (
-        f'<section class="card" id="people"><h2>{_icon("users")}Who is asking</h2>'
+        f'<section class="card" id="people"><h2>{_icon("users")}Who is asking'
+        f'<span class="cnt">{_fmt(len(d["people"]))} people</span></h2>'
         f'<div class="scroll"><table aria-label="People asking questions"><thead><tr>'
         f'<th scope="col">User</th><th scope="col">Asked</th>'
         f'<th scope="col">Open</th><th scope="col">Last</th></tr></thead>'
@@ -1573,14 +1866,13 @@ def _videos_card(d: dict) -> str:
             title = (f'<a href="{escape(vurl, quote=True)}" target="_blank" '
                      f'rel="noopener">{title}</a>')
         if v.get("video_id"):
-            thumb = (f'<img loading="lazy" alt="" width="64" height="36" '
+            thumb = (f'<span class="vthumb"><img loading="lazy" alt="" width="68" height="38" '
                      f'referrerpolicy="no-referrer" '
                      f'src="https://i.ytimg.com/vi/{escape(v["video_id"], quote=True)}/mqdefault.jpg" '
-                     f'onerror="this.classList.add(\'hide\');'
-                     f'this.nextElementSibling.classList.remove(\'hide\')">'
-                     f'<span class="ph hide">{_icon("video", 14)}</span>')
+                     f'onerror="this.classList.add(\'hide\')">'
+                     f'<span class="ph">{_icon("video", 14)}</span></span>')
         else:
-            thumb = f'<span class="ph">{_icon("video", 14)}</span>'
+            thumb = f'<span class="vthumb"><span class="ph">{_icon("video", 14)}</span></span>'
         tag = ""
         if v.get("system") and v["system"] != "-":
             tag = f'<span class="vtag">{escape(v["system"])}</span>'
@@ -1593,7 +1885,7 @@ def _videos_card(d: dict) -> str:
     body = "".join(rows) if rows else '<div class="empty">No videos collected yet.</div>'
     return (
         f'<section class="card" id="videos"><h2>{_icon("video")}Videos'
-        f'<span class="cnt">{len(videos)} collected &middot; {transcripts} with transcript '
+        f'<span class="cnt">{_fmt(len(videos))} &middot; {transcripts} transcripts '
         f'&middot; {untagged} untagged</span></h2>{body}{more}</section>'
     )
 
@@ -1602,12 +1894,17 @@ def _links_card() -> str:
     """Skeleton only: the data comes client-side from the local /links.json,
     which the panel server fills by calling the locodev.dev admin API
     server-to-server. The page never sees the secret or the token."""
+    skel = ('<div class="ltk">'
+            + '<div class="mk skel skel-tile"></div>' * 4
+            + '</div><div class="skel skel-row" style="width:70%"></div>'
+              '<div class="skel skel-row" style="width:52%"></div>'
+              '<div class="skel skel-row" style="width:61%"></div>')
     return (
         f'<section class="card" id="links"><h2>{_icon("link")}Link telemetry'
         f'<span class="cnt" id="lt-state" role="status" aria-live="polite">loading...</span>'
         f'<a class="admlink" href="https://locodev.dev/adminlocoILco" target="_blank" '
         f'rel="noopener">open admin {_icon("external", 12)}</a></h2>'
-        f'<div id="lt-body"><div class="empty">Waiting for the live server...</div></div>'
+        f'<div id="lt-body">{skel}</div>'
         f'</section>'
     )
 
@@ -1622,37 +1919,55 @@ def _sources_card(instrumentation: list) -> str:
             f'<span class="pill st-{escape(state, quote=True)}">{escape(state)}</span></div>'
         )
     return (
-        f'<section class="card" id="sources"><h2>{_icon("eye")}What is measured, '
-        f'and what is blind</h2>{"".join(rows)}</section>'
+        f'<section class="card" id="sources"><h2>{_icon("eye")}Measured, and blind</h2>'
+        f'{"".join(rows)}</section>'
     )
 
 
-def _sidebar() -> str:
-    items = [
-        ("overview", "home", "Overview"),
-        ("questions", "chat", "Questions"),
-        ("answers", "check", "Answers"),
-        ("systems", "grid", "Systems"),
-        ("people", "users", "People"),
-        ("videos", "video", "Videos"),
-        ("links", "link", "Links"),
-        ("sources", "database", "Sources"),
-    ]
+_NAV = [
+    ("overview", "home", "Overview", ""),
+    ("questions", "chat", "Questions", "open_q"),
+    ("answers", "check", "Answers", "answers"),
+    ("systems", "grid", "Systems", ""),
+    ("people", "users", "People", ""),
+    ("videos", "video", "Videos", ""),
+    ("links", "link", "Links", ""),
+    ("sources", "database", "Sources", ""),
+]
+
+
+def _nav_counts(d: dict) -> dict:
+    return {"open_q": d["open_q"], "answers": len(d.get("answers") or [])}
+
+
+def _sidebar(d: dict) -> str:
+    counts = _nav_counts(d)
     parts = []
-    for sid, icon, label in items:
+    for sid, icon, label, ckey in _NAV:
         cls = ' class="active"' if sid == "overview" else ""
-        parts.append(f'<a href="#{sid}"{cls}>{_icon(icon)}{label}</a>')
-    nav = "".join(parts)
+        badge = ""
+        if ckey and counts.get(ckey):
+            badge = f'<span class="navcount">{_fmt(counts[ckey])}</span>'
+        parts.append(f'<a href="#{sid}"{cls}>{_icon(icon)}{label}{badge}</a>')
     return (
         '<aside class="side">'
         '<div class="brand"><span class="mark">L</span>'
         '<div><b>LocoDev</b><small>Operations</small></div></div>'
-        f'<nav class="nav" aria-label="Sections">{nav}</nav>'
+        '<div class="navlabel">Workspace</div>'
+        f'<nav class="nav" aria-label="Sections">{"".join(parts)}</nav>'
         '<div class="spacer"></div>'
-        '<div class="me"><span class="av" style="background:#2563eb">LD</span>'
-        '<div><b>LocoDev</b><small>local vault</small></div></div>'
+        '<div class="me"><span class="av sm" style="--h:214">L</span>'
+        f'<div><b>Local vault</b><small>F:\\LocoDev Vault</small></div></div>'
         '</aside>'
     )
+
+
+def _mobile_nav() -> str:
+    parts = []
+    for sid, icon, label, _c in _NAV:
+        cls = ' class="active"' if sid == "overview" else ""
+        parts.append(f'<a href="#{sid}"{cls}>{_icon(icon, 14)}{label}</a>')
+    return f'<nav class="mnav" aria-label="Sections">{"".join(parts)}</nav>'
 
 
 def _header(d: dict, live: bool) -> str:
@@ -1664,19 +1979,25 @@ def _header(d: dict, live: bool) -> str:
         chip = (f'<span class="chip" id="chip" data-state="off" role="status" '
                 f'aria-live="polite"><span class="dot"></span>'
                 f'<span id="chiptxt">static build {escape(d["generated_at"])}</span></span>')
+    theme_icons = "".join(
+        f'<span class="ticon{" hide" if name != "auto" else ""}" data-icon="{name}">'
+        f'{_icon(name, 14)}</span>'
+        for name in ("auto", "moon", "sun")
+    )
     return (
-        f'<div class="top"><h1>LocoDev Operations Panel</h1>{chip}'
+        f'<div class="top"><h1>Operations</h1>{chip}'
         f'<div class="search">{_icon("search", 15)}'
         f'<input id="q" type="search" placeholder="Search questions, users, systems..." '
         f'autocomplete="off" aria-label="Search questions"><kbd>Ctrl K</kbd></div>'
         f'<button class="btn primary" id="updbtn" aria-label="Rebuild the panel now">'
-        f'{_icon("refresh", 14)}Update now</button>'
-        f'<button class="btn" id="filtbtn" aria-label="Jump to filters">'
-        f'{_icon("filter", 14)}Filters</button>'
+        f'{_icon("refresh", 14)}Update</button>'
+        f'<button class="btn icon" id="filtbtn" aria-label="Jump to filters" title="Filters">'
+        f'{_icon("filter", 15)}</button>'
         f'<button class="btn" id="themebtn" aria-label="Switch color theme">'
-        f'{_icon("theme", 14)}<span>Auto</span></button>'
-        f'<button class="btn bell" id="bellbtn" aria-label="Open questions">'
-        f'{_icon("bell", 15)}<span class="badge">{_fmt(d["open_q"])}</span></button></div>'
+        f'{theme_icons}<span>Auto</span></button>'
+        f'<button class="btn icon bell" id="bellbtn" aria-label="Open questions" '
+        f'title="Open questions">{_icon("bell", 15)}'
+        f'<span class="badge">{_fmt(d["open_q"])}</span></button></div>'
     )
 
 
@@ -1688,7 +2009,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list) -> str
             .replace("__PAGE__", str(PAGE)))
 
     diag = (f'generated {escape(d["generated_at"])} &middot; scan {d.get("scan_ms", "?")} ms '
-            f'&middot; {_fmt(d.get("md_files", 0))} notes scanned &middot; '
+            f'&middot; {_fmt(d.get("md_files", 0))} notes &middot; '
             f'{len(d.get("history") or [])} history points &middot; '
             f'the vault is the source of truth, the page keeps no data of its own')
 
@@ -1697,17 +2018,19 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list) -> str
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="theme-color" content="#2563eb" />
-<title>LocoDev Operations Panel</title>
+<meta name="theme-color" content="#3d63f5" />
+<meta name="color-scheme" content="light dark" />
+<title>LocoDev Operations</title>
 <link rel="icon" href="{FAVICON}" />
 <script>{HEAD_JS}</script>
 <style>{CSS}</style>
 </head>
 <body>
 <div class="app">
-{_sidebar()}
+{_sidebar(d)}
 <main class="main">
 {_header(d, live)}
+{_mobile_nav()}
 {_tiles(d, n_systems)}
 <div class="cols">
 <div class="colmain">
@@ -1729,7 +2052,8 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list) -> str
 <footer>{diag}</footer>
 </main>
 </div>
-<div id="toast" role="status" aria-live="polite"></div>
+<div id="toast" role="status" aria-live="polite" data-kind="info">
+<span class="ti">{_icon("sparkle", 14)}</span><span id="toasttxt"></span></div>
 <script>{js}</script>
 </body>
 </html>
