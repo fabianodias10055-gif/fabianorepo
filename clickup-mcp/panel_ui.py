@@ -56,6 +56,7 @@ _ICONS = {
     "menu": '<path d="M3 12h18M3 6h18M3 18h18"/>',
     "up": '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>',
     "down": '<path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/>',
+    "brain": '<path d="M9.5 3a3 3 0 0 0-3 3 3 3 0 0 0-1.5 5.6A3 3 0 0 0 6 17a3 3 0 0 0 3.5 2.9V3z"/><path d="M14.5 3a3 3 0 0 1 3 3 3 3 0 0 1 1.5 5.6A3 3 0 0 1 18 17a3 3 0 0 1-3.5 2.9V3z"/>',
 }
 
 # Filled brand marks (approximations, small sizes): stroke icons read poorly
@@ -564,6 +565,19 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
   font-family:var(--mono); display:flex; align-items:center; gap:var(--s2); flex-wrap:wrap; }
 .sugout pre { margin:0 0 var(--s3); white-space:pre-wrap; font-family:inherit;
   line-height:1.55; max-height:280px; overflow:auto; }
+.aiout { border:1px solid var(--info-line); border-left:3px solid var(--info);
+  border-radius:var(--r-md); padding:var(--s3) var(--s4); font-size:var(--t-base);
+  background:var(--surface); display:none; }
+.aiout .src { color:var(--ink3); font-size:var(--t-xs); margin-bottom:var(--s2);
+  font-family:var(--mono); display:flex; align-items:center; gap:var(--s2); flex-wrap:wrap; }
+.aiout pre { margin:0 0 var(--s3); white-space:pre-wrap; font-family:inherit;
+  line-height:1.55; }
+.aimiss { background:var(--warn-bg); color:var(--warn); border-radius:var(--r-sm);
+  padding:var(--s2) var(--s3); font-size:var(--t-sm); margin-bottom:var(--s2); }
+.aisrc { color:var(--ink3); font-family:var(--mono); font-size:var(--t-2xs);
+  margin-bottom:var(--s3); word-break:break-all; }
+.btn.ai { border-color:var(--info-line); color:var(--info); }
+.btn.ai:hover { background:var(--info-bg); border-color:var(--info); }
 .conf { display:inline-flex; gap:7px; align-items:center; font-size:var(--t-2xs);
   font-weight:700; white-space:nowrap; padding:2px 8px; border-radius:var(--r-full);
   border:1px solid currentColor; }
@@ -1166,6 +1180,103 @@ $$("[data-act]").forEach(function (el) {
 $$("[data-suggest]").forEach(function (b) {
   b.addEventListener("click", function () { runSuggest(b.closest("tr.qdet"), b); });
 });
+
+/* ---- AI draft: the Claude CLI reads the vault, we poll the job ---- */
+function aiRender(det, s, btn) {
+  var out = det.querySelector(".aiout");
+  out.style.display = "block";
+  btn.disabled = false;
+  btn.classList.remove("spin");
+  if (s.state === "error") {
+    out.innerHTML = '<div class="src">Claude could not draft this</div>'
+      + "<pre>" + esc(s.error || "unknown error") + "</pre>";
+    return;
+  }
+  var conf = typeof s.confidence === "number" ? s.confidence : 0;
+  var cls = conf >= 60 ? "ok" : conf >= 30 ? "warn" : "crit";
+  var meta = "drafted by " + esc(s.model || "claude") + " \\u00b7 effort "
+    + esc(s.effort || "") + " \\u00b7 " + (s.elapsed || 0) + "s";
+  if (typeof s.cost === "number") meta += " \\u00b7 $" + s.cost.toFixed(2);
+  out.innerHTML = "";
+  var src = document.createElement("div");
+  src.className = "src";
+  src.innerHTML = esc(meta) + ' <span class="conf conf-' + cls + '">'
+    + '<span class="confbar"><i style="width:' + conf + '%"></i></span>'
+    + conf + "% confidence</span>";
+  out.appendChild(src);
+  var pre = document.createElement("pre");
+  pre.textContent = s.answer || "(empty answer)";
+  out.appendChild(pre);
+  if (s.missing) {
+    var miss = document.createElement("div");
+    miss.className = "aimiss";
+    miss.textContent = "Not in the vault: " + s.missing;
+    out.appendChild(miss);
+  }
+  if (s.sources && s.sources.length) {
+    var srcs = document.createElement("div");
+    srcs.className = "aisrc";
+    srcs.textContent = "read: " + s.sources.join(" \\u00b7 ");
+    out.appendChild(srcs);
+  }
+  var use = document.createElement("button");
+  use.className = "btn tiny";
+  use.textContent = "Use as draft";
+  use.addEventListener("click", function () {
+    var box = det.querySelector(".qbox");
+    box.value = s.answer || "";
+    ss("lp-draft:" + det.dataset.id, box.value);
+    box.focus();
+  });
+  out.appendChild(use);
+}
+function runAi(det, btn) {
+  var out = det.querySelector(".aiout");
+  out.style.display = "block";
+  if (!LIVE) {
+    out.textContent = "Static file: the AI draft needs the live server (panel.py --watch).";
+    return;
+  }
+  btn.disabled = true;
+  btn.classList.add("spin");
+  var t0 = Date.now();
+  out.innerHTML = '<div class="src" id="aitick-' + esc(det.dataset.id) + '">'
+    + "Claude is reading your vault...</div>";
+  var tick = out.querySelector(".src");
+  var timer = setInterval(function () {
+    tick.textContent = "Claude is reading your vault... "
+      + Math.round((Date.now() - t0) / 1000) + "s";
+  }, 1000);
+  function stop() { clearInterval(timer); }
+  fetch("/suggest_ai", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: det.dataset.id }) })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (!j.ok) throw new Error(j.error || "could not start");
+      (function poll() {
+        fetch("/suggest_ai_status", { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ job: j.job }) })
+          .then(function (r) { return r.json(); })
+          .then(function (s) {
+            if (s.state === "running") { setTimeout(poll, 2000); return; }
+            stop();
+            aiRender(det, s, btn);
+          })
+          .catch(function () {
+            stop();
+            aiRender(det, { state: "error", error: "lost contact with the panel server" }, btn);
+          });
+      })();
+    })
+    .catch(function (e) {
+      stop();
+      aiRender(det, { state: "error", error: String(e.message || e) }, btn);
+    });
+}
+$$("[data-ai]").forEach(function (b) {
+  b.addEventListener("click", function () { runAi(b.closest("tr.qdet"), b); });
+});
 $$("[data-reply]").forEach(function (b) {
   b.addEventListener("click", function () { runReply(b.closest("tr.qdet")); });
 });
@@ -1669,8 +1780,11 @@ def _question_rows(questions: list) -> str:
             f'{your_reply}'
             f'<div class="prov">{" ".join(prov)}</div>'
             f'<div class="detbtns"><button class="btn tiny" data-suggest>'
-            f'{_icon("sparkle", 13)}Suggest answer</button>{copy_btn}</div>'
+            f'{_icon("sparkle", 13)}Search my notes</button>'
+            f'<button class="btn tiny ai" data-ai>{_icon("brain", 13)}Ask Claude</button>'
+            f'{copy_btn}</div>'
             f'<div class="sugout"></div>'
+            f'<div class="aiout"></div>'
             f'<textarea class="qbox" aria-label="Reply text" placeholder="Type the reply. '
             f'Reply always updates the vault and files the answer as searchable knowledge; '
             f'posting to YouTube for real needs the one-time OAuth setup."></textarea>'
