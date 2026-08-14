@@ -397,6 +397,8 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
   50% { box-shadow:0 0 0 5px var(--ok-bg); } }
 .chip[data-state="building"] .dot { background:var(--warn); box-shadow:0 0 0 3px var(--warn-bg); }
 .chip[data-state="off"] .dot { background:var(--crit); box-shadow:0 0 0 3px var(--crit-bg); animation:none; }
+.chip[data-state="stale"] { border-color:var(--accent); color:var(--accent); }
+.chip[data-state="stale"] .dot { background:var(--accent); box-shadow:0 0 0 3px var(--accent-bg); }
 .search { flex:1; min-width:190px; max-width:420px; margin-left:auto; position:relative; }
 .search > svg { position:absolute; left:12px; top:50%; transform:translateY(-50%);
   color:var(--ink3); pointer-events:none; }
@@ -1074,6 +1076,20 @@ tickAgo();
 setInterval(tickAgo, 30000);
 
 var holdUntil = 0;
+var lastTouch = Date.now();
+var pending = false;     /* a newer build exists but now is a bad moment */
+["pointerdown", "keydown", "input"].forEach(function (ev) {
+  addEventListener(ev, function () { lastTouch = Date.now(); }, true);
+});
+/* Reloading while someone is reading a question or typing an answer throws
+   their work off the screen. The page waits for a quiet moment, and says
+   plainly that it is holding a newer version rather than doing it silently. */
+function busy() {
+  if (openId) return true;
+  var el = document.activeElement;
+  if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) return true;
+  return Date.now() - lastTouch < 20000;
+}
 function setChip(state, text) {
   var chip = $("#chip");
   if (!chip) return;
@@ -1090,10 +1106,16 @@ function poll() {
       if (s.building) { setChip("building", "rebuilding..."); return; }
       if (s.epoch && s.epoch !== EPOCH) {
         if (Date.now() < holdUntil) return;
-        reloadKeepingPlace();
+        if (!busy()) { reloadKeepingPlace(); return; }
+        if (!pending) {
+          pending = true;
+          setChip("stale", "new data · click to refresh");
+          $("#chip").style.cursor = "pointer";
+          $("#chip").addEventListener("click", reloadKeepingPlace, { once: true });
+        }
         return;
       }
-      setChip("live", null);
+      if (!pending) setChip("live", null);
     })
     .catch(function () { setChip("off", "server gone \\u00b7 static view"); });
 }
@@ -1188,10 +1210,32 @@ $$("th[data-sort]").forEach(function (th) {
         ? "desc" : "asc";
     }
     sortRows();
+    syncSortChips();
     apply();
     syncUrl();
   });
 });
+
+/* Sort order has two entry points, the chips and the column headers, and
+   they have to stay in agreement: the chip reflects whatever is actually
+   sorting the table, and goes blank when a column sort has no chip. */
+function setSort(v) {
+  if (v === "new") { state.sort = "date"; state.dir = "desc"; }
+  else if (v === "old") { state.sort = "date"; state.dir = "asc"; }
+  else { state.sort = "triage"; state.dir = "desc"; }
+  sortRows();
+  syncSortChips();
+}
+function syncSortChips() {
+  var active = state.sort === "triage" ? "triage"
+    : state.sort === "date" ? (state.dir === "asc" ? "old" : "new")
+    : "";
+  $$('.fchip[data-k="sort"]').forEach(function (c) {
+    var on = c.dataset.v === active;
+    c.classList.toggle("on", on);
+    c.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
 
 var visRows = [];      /* the rows on the current page */
 var matchRows = [];    /* everything matching the filters, across pages */
@@ -1255,7 +1299,8 @@ $$(".fchip[data-k]").forEach(function (c) {
   c.tabIndex = 0;
   c.setAttribute("role", "button");
   c.addEventListener("click", function () {
-    setGroup(c.dataset.k, c.dataset.v);
+    if (c.dataset.k === "sort") setSort(c.dataset.v);
+    else setGroup(c.dataset.k, c.dataset.v);
     page = 0;
     apply();
     syncUrl();
@@ -1277,6 +1322,7 @@ $("#q").addEventListener("input", function () { searchApply(this.value); });
 function clearFilters() {
   setGroup("ch", "all");
   setGroup("st", "open");   /* back to the working queue, not the archive */
+  setSort("triage");
   setGroup("df", "all");
   state.sys = "all";
   $("#sysSel").value = "all";
@@ -2034,10 +2080,8 @@ if (state.sys !== "all") {
   if (hasOpt) sel.value = state.sys; else state.sys = "all";
 }
 if (state.q) $("#q").value = state.q;
-if (state.sort !== "date" || state.dir !== "desc") sortRows();
-else $$("th[data-sort]").forEach(function (th) {
-  th.setAttribute("aria-sort", th.dataset.sort === "date" ? "descending" : "none");
-});
+sortRows();
+syncSortChips();
 apply();
 try {
   for (var i = 0; i < sessionStorage.length; i++) {
@@ -2050,11 +2094,23 @@ try {
   }
 } catch (e) {}
 (function () {
+  /* The browser's own restore fights this one, and `scroll-behavior:smooth`
+     turned the restore into a visible slide from the top of the page. Both
+     are switched off for the jump, then put back. */
+  try { history.scrollRestoration = "manual"; } catch (e) {}
   var sy = ssGet("lp-scroll");
-  if (sy !== null) {
-    ss("lp-scroll", null);
-    setTimeout(function () { scrollTo(0, parseInt(sy, 10) || 0); }, 30);
-  }
+  if (sy === null) return;
+  ss("lp-scroll", null);
+  var y = parseInt(sy, 10) || 0;
+  if (!y) return;
+  var html = document.documentElement;
+  var prev = html.style.scrollBehavior;
+  html.style.scrollBehavior = "auto";
+  scrollTo(0, y);
+  requestAnimationFrame(function () {
+    scrollTo(0, y);          /* again once layout settled, images shift it */
+    html.style.scrollBehavior = prev;
+  });
 })();
 """
 
@@ -2158,6 +2214,15 @@ def _filters(questions: list) -> str:
                      f'aria-pressed="false" title="{escape(_STATUS_TITLE.get(st, st), quote=True)}">'
                      f'{escape(_STATUS_LABEL.get(st, st))} '
                      f'<span class="fc-n">{_fmt(st_counts[st])}</span></span>')
+    parts.append('<span class="fsep"></span>')
+    parts.append('<span class="fchip on" data-k="sort" data-v="triage" aria-pressed="true" '
+                 'title="Escalated first, then what the vault can already answer, '
+                 'then oldest">Triage</span>')
+    parts.append('<span class="fchip" data-k="sort" data-v="new" aria-pressed="false" '
+                 'title="Newest question first">Newest</span>')
+    parts.append('<span class="fchip" data-k="sort" data-v="old" aria-pressed="false" '
+                 'title="Oldest question first, the longest anyone has waited">'
+                 'Oldest</span>')
     parts.append('<span class="fsep"></span>')
     parts.append('<span class="fchip on" data-k="df" data-v="all" aria-pressed="true">Any difficulty</span>')
     for df in ("easy", "medium", "hard"):
