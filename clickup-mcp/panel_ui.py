@@ -18,7 +18,7 @@ literals through a thousand lines of CSS.
 import re
 from html import escape
 
-PAGE = 8  # question rows shown before "View all questions"
+PAGE = 25  # rows per page; the pager offers 25 / 50 / 100
 
 CH_COLORS = {
     "discord": "#5865f2",
@@ -182,7 +182,7 @@ _STATUS_LABEL = {"no-source": "unanswered"}
 # still reads for anyone who cannot separate the reds from the greens.
 _STATUS_EMOJI = {
     "no-source": "📥",      # inbox tray
-    "escalated": "⚠️",   # warning
+    "escalated": "🚨",      # siren
     "answered": "✅",           # check
     "out-of-scope": "⏭️",
     "unknown": "❓",
@@ -510,6 +510,13 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
   padding:var(--s3) 0 var(--s1); text-align:center; border-radius:var(--r-sm);
   transition:background var(--dur) var(--ease); }
 .linkbtn:hover { background:var(--surface2); }
+.pager { display:flex; align-items:center; gap:var(--s3); justify-content:center;
+  padding:var(--s3) 0 var(--s1); flex-wrap:wrap; }
+.pgpos { font-size:var(--t-sm); color:var(--ink2); font-variant-numeric:tabular-nums; }
+.pgpos b { color:var(--ink); font-family:var(--mono); }
+.pgsize { display:inline-flex; align-items:center; gap:var(--s2);
+  font-size:var(--t-xs); color:var(--ink3); }
+.pgsize select { padding:4px 26px 4px 9px; font-size:var(--t-xs); }
 
 /* ================= filters ================= */
 .filters { display:flex; flex-wrap:wrap; gap:var(--s2); align-items:center;
@@ -599,9 +606,12 @@ tr.qdet.open > td { box-shadow:inset 3px 0 0 var(--accent); }
   border-radius:var(--r-full); font-size:var(--t-2xs); font-weight:680;
   letter-spacing:.01em; white-space:nowrap; border:1px solid transparent; }
 .pill { gap:5px; }
+/* 433 rows of ordinary backlog in critical red said the everyday case was
+   more urgent than the one question actually escalated. Unanswered is the
+   normal state and reads neutral; red is reserved for escalation. */
 .st-answered { background:var(--ok-bg); color:var(--ok); border-color:var(--ok-line); }
-.st-no-source { background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line); }
-.st-escalated { background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line); }
+.st-no-source { background:var(--mute-bg); color:var(--ink2); border-color:var(--line); }
+.st-escalated { background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line); }
 .st-out-of-scope, .st-unknown { background:var(--mute-bg); color:var(--ink2); border-color:var(--line); }
 .st-ok { background:var(--ok-bg); color:var(--ok); border-color:var(--ok-line); }
 .st-partial { background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line); }
@@ -623,9 +633,10 @@ tr.qdet.open > td { box-shadow:inset 3px 0 0 var(--accent); }
   padding:2px 7px; border-radius:var(--r-full); font-size:var(--t-2xs);
   font-weight:650; border:1px solid transparent; }
 .dpill b { font-family:var(--mono); font-weight:700; opacity:.75; }
+/* Amber marks the documentation gap, which is the thing worth acting on. */
 .d-easy { background:var(--ok-bg); color:var(--ok); border-color:var(--ok-line); }
-.d-medium { background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line); }
-.d-hard { background:var(--mute-bg); color:var(--ink2); border-color:var(--line); }
+.d-medium { background:var(--mute-bg); color:var(--ink2); border-color:var(--line); }
+.d-hard { background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line); }
 .snip { color:var(--ink2); max-width:440px; display:-webkit-box; -webkit-line-clamp:2;
   -webkit-box-orient:vertical; overflow:hidden; line-height:1.45; }
 /* The video still leads the expanded card: recognising which tutorial the
@@ -1085,24 +1096,28 @@ $("#updbtn").addEventListener("click", function () {
 
 /* ---- filter/sort state, persisted in the URL across auto-reloads ---- */
 var params = new URLSearchParams(location.search);
+/* The panel opens on work, not on history: "open" is a virtual status
+   covering unanswered and escalated. Seeing the 433 already-answered rows
+   by default made half the queue irrelevant to the job at hand. */
 var state = {
   ch: params.get("ch") || "all",
-  st: params.get("st") || "all",
+  st: params.get("st") || "open",
   sys: params.get("sys") || "all",
   df: params.get("df") || "all",
   q: params.get("q") || "",
-  sort: params.get("sort") || "date",
+  sort: params.get("sort") || "triage",
   dir: params.get("dir") || "desc"
 };
-var shown = parseInt(ssGet("lp-shown") || PAGE, 10) || PAGE;
+var size = parseInt(ssGet("lp-size") || PAGE, 10) || PAGE;
+var page = 0;
 function syncUrl() {
   var p = new URLSearchParams();
   if (state.ch !== "all") p.set("ch", state.ch);
-  if (state.st !== "all") p.set("st", state.st);
+  if (state.st !== "open") p.set("st", state.st);
   if (state.sys !== "all") p.set("sys", state.sys);
   if (state.df !== "all") p.set("df", state.df);
   if (state.q) p.set("q", state.q);
-  if (state.sort !== "date" || state.dir !== "desc") { p.set("sort", state.sort); p.set("dir", state.dir); }
+  if (state.sort !== "triage" || state.dir !== "desc") { p.set("sort", state.sort); p.set("dir", state.dir); }
   var qs = p.toString();
   try { history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash); } catch (e) {}
 }
@@ -1110,13 +1125,27 @@ function syncUrl() {
 var PAIRS = $$("#qtbody tr.qrow").map(function (r) {
   return { r: r, det: r.nextElementSibling };
 });
+/* Triage order, the default: whatever was escalated first, then the ones
+   the vault can already answer, then oldest first. Sorting by date alone
+   put freshly answered questions above four-year-old open ones. */
+function triageRank(r) {
+  return r.dataset.st === "escalated" ? 0 : r.dataset.st === "answered" ? 2 : 1;
+}
 function sortRows() {
   var key = state.sort, dir = state.dir === "asc" ? 1 : -1;
   var sorted = PAIRS.slice().sort(function (a, b) {
+    if (key === "triage") {
+      var ra = triageRank(a.r), rb = triageRank(b.r);
+      if (ra !== rb) return ra - rb;
+      var ca = +a.r.dataset.cov || 0, cb = +b.r.dataset.cov || 0;
+      if (ca !== cb) return cb - ca;            /* answerable first */
+      return a.r.dataset.date < b.r.dataset.date ? -1 : 1;  /* oldest first */
+    }
     var av, bv;
     if (key === "who") { av = a.r.dataset.who; bv = b.r.dataset.who; }
     else if (key === "status") { av = a.r.dataset.st; bv = b.r.dataset.st; }
     else if (key === "system") { av = a.r.dataset.sys; bv = b.r.dataset.sys; }
+    else if (key === "cov") { av = +a.r.dataset.cov || 0; bv = +b.r.dataset.cov || 0; }
     else { av = a.r.dataset.date; bv = b.r.dataset.date; }
     if (av < bv) return -dir;
     if (av > bv) return dir;
@@ -1140,36 +1169,57 @@ $$("th[data-sort]").forEach(function (th) {
   });
 });
 
-var visRows = [];
+var visRows = [];      /* the rows on the current page */
+var matchRows = [];    /* everything matching the filters, across pages */
+function isOpen(r) { return r.dataset.st === "no-source" || r.dataset.st === "escalated"; }
 function match(r) {
   if (state.ch !== "all" && r.dataset.ch !== state.ch) return false;
-  if (state.st !== "all" && r.dataset.st !== state.st) return false;
+  if (state.st === "open") { if (!isOpen(r)) return false; }
+  else if (state.st !== "all" && r.dataset.st !== state.st) return false;
   if (state.sys !== "all" && r.dataset.sys !== state.sys) return false;
-  if (state.df !== "all" && r.dataset.df !== state.df) return false;
+  /* Answerability describes work still to do. Without this, "easy 90"
+     also matched the answered rows that carry the same data-df and
+     returned far more rows than the chip promised. */
+  if (state.df !== "all" && (r.dataset.df !== state.df || r.dataset.st === "answered"))
+    return false;
   if (state.q && r.dataset.txt.indexOf(state.q) === -1) return false;
   return true;
 }
 function apply() {
   var rows = $$("#qtbody tr.qrow");
-  var kept = 0, total = 0;
-  visRows = [];
+  matchRows = rows.filter(match);
+  var pages = Math.max(1, Math.ceil(matchRows.length / size));
+  page = Math.min(Math.max(0, page), pages - 1);
+  var from = page * size, to = from + size;
+  visRows = matchRows.slice(from, to);
+  var onPage = new Set(visRows);
+
   rows.forEach(function (r) {
-    var m = match(r);
-    if (m) total++;
-    var vis = m && kept < shown;
-    if (vis) { kept++; visRows.push(r); }
+    var vis = onPage.has(r);
     r.classList.toggle("hide", !vis);
     var det = r.nextElementSibling;
     if (det && det.classList.contains("qdet"))
       det.classList.toggle("hide", !vis || !det.classList.contains("open"));
   });
-  $("#qcount").textContent = kept + " of " + total;
-  $("#morebtn").classList.toggle("hide", kept >= total);
+
+  var total = matchRows.length;
+  $("#qcount").textContent = total
+    ? (from + 1) + "-" + Math.min(to, total) + " of " + fmt(total)
+    : "0";
+  $("#pgnow").textContent = page + 1;
+  $("#pgtot").textContent = pages;
+  $("#pgprev").disabled = page === 0;
+  $("#pgnext").disabled = page >= pages - 1;
+  $("#pager").classList.toggle("hide", total === 0);
   /* only when filters hid existing rows; an empty vault has its own message */
   $("#qempty").classList.toggle("hide", total !== 0 || PAIRS.length === 0);
-  /* the sidebar badge stays the open-question count on purpose: it must
-     agree with the bell, not drift into "rows currently matching" */
-  ss("lp-shown", String(shown));
+  ss("lp-size", String(size));
+}
+function goPage(n) {
+  page = n;
+  apply();
+  var card = $("#questions");
+  if (card) card.scrollIntoView({ block: "start" });
 }
 function setGroup(k, v) {
   state[k] = v;
@@ -1184,39 +1234,45 @@ $$(".fchip[data-k]").forEach(function (c) {
   c.setAttribute("role", "button");
   c.addEventListener("click", function () {
     setGroup(c.dataset.k, c.dataset.v);
-    shown = PAGE;
+    page = 0;
     apply();
     syncUrl();
   });
 });
 $("#sysSel").addEventListener("change", function () {
   state.sys = this.value;
-  shown = PAGE;
+  page = 0;
   apply();
   syncUrl();
 });
 var searchApply = debounce(function (v) {
   state.q = v.trim().toLowerCase();
-  shown = PAGE;
+  page = 0;
   apply();
   syncUrl();
 }, 150);
 $("#q").addEventListener("input", function () { searchApply(this.value); });
 function clearFilters() {
   setGroup("ch", "all");
-  setGroup("st", "all");
+  setGroup("st", "open");   /* back to the working queue, not the archive */
   setGroup("df", "all");
   state.sys = "all";
   $("#sysSel").value = "all";
   state.q = "";
   $("#q").value = "";
-  shown = PAGE;
+  page = 0;
   apply();
   syncUrl();
 }
 $("#fclear").addEventListener("click", clearFilters);
 $("#qemptyclear").addEventListener("click", clearFilters);
-$("#morebtn").addEventListener("click", function () { shown = 1e9; apply(); });
+$("#pgprev").addEventListener("click", function () { goPage(page - 1); });
+$("#pgnext").addEventListener("click", function () { goPage(page + 1); });
+$("#pgsize").addEventListener("change", function () {
+  size = parseInt(this.value, 10) || PAGE;
+  goPage(0);
+  syncUrl();
+});
 
 /* ---- expandable rows + suggest/reply, with continuity across reloads ---- */
 function toggleDet(row, focus) {
@@ -1280,8 +1336,24 @@ function runReply(det) {
         var row = det.previousElementSibling;
         var pill = row.querySelector(".pill");
         pill.className = "pill st-answered";
-        pill.textContent = "answered";
+        pill.innerHTML = '<i class="pe">✅</i>answered';
         row.dataset.st = "answered";
+        /* Clearing a backlog means the answered item leaves the queue and
+           the next one is ready. Leaving it open with stale counts made
+           every reply end in manual cleanup. */
+        var wasAt = matchRows.indexOf(row);
+        toggleDet(row);
+        var badge = $("#bellbtn .badge"), nav = $(".navcount");
+        var left = Math.max(0, (parseInt((badge.textContent || "0").replace(/,/g, ""), 10) || 0) - 1);
+        badge.textContent = fmt(left);
+        if (nav) nav.textContent = fmt(left);
+        apply();
+        var next = matchRows[Math.min(Math.max(0, wasAt), matchRows.length - 1)];
+        if (next && visRows.indexOf(next) === -1) {
+          page = Math.floor(matchRows.indexOf(next) / size);
+          apply();
+        }
+        if (next) kFocus(visRows.indexOf(next));
       } else {
         msg.textContent = "Failed: " + (s.error || "unknown error");
         msg.classList.add("bad");
@@ -1472,7 +1544,7 @@ function drillTo(sys) {
   state.sys = has ? sys : "all";
   sel.value = state.sys;
   setGroup("st", "no-source");
-  shown = PAGE;
+  page = 0;
   apply();
   syncUrl();
   location.hash = "#questions";
@@ -1887,7 +1959,12 @@ def _filters(questions: list) -> str:
                      f'aria-pressed="false">{brand}{escape(ch)} '
                      f'<span class="fc-n">{_fmt(ch_counts[ch])}</span></span>')
     parts.append('<span class="fsep"></span>')
-    parts.append('<span class="fchip on" data-k="st" data-v="all" aria-pressed="true">All statuses</span>')
+    open_n = sum(1 for q in questions if q["status"] in ("no-source", "escalated"))
+    parts.append(f'<span class="fchip on" data-k="st" data-v="open" aria-pressed="true" '
+                 f'title="Unanswered plus escalated: everything still waiting on you">'
+                 f'<i class="pe">📥</i>Open '
+                 f'<span class="fc-n">{_fmt(open_n)}</span></span>')
+    parts.append('<span class="fchip" data-k="st" data-v="all" aria-pressed="false">Everything</span>')
     for st in statuses:
         parts.append(f'<span class="fchip" data-k="st" data-v="{escape(st, quote=True)}" '
                      f'aria-pressed="false" title="{escape(_STATUS_TITLE.get(st, st), quote=True)}">'
@@ -1918,7 +1995,7 @@ def _filters(questions: list) -> str:
 def _question_rows(questions: list) -> str:
     rows = []
     for i, q in enumerate(questions):
-        hid = "" if i < PAGE else " hide"
+        hid = "" if i < PAGE else " hide"   # apply() re-pages on load
         sys_label = q["system_name"] if q["system"] != "-" else "catalog wide"
         sub = '<span class="m">subscriber</span>' if q["subscriber"] == "yes" else ""
         txt = escape(
@@ -1932,7 +2009,7 @@ def _question_rows(questions: list) -> str:
             f' data-st="{escape(q["status"], quote=True)}"'
             f' data-sys="{escape(q["system"], quote=True)}"'
             f' data-date="{escape(q["date"], quote=True)}"'
-            f' data-who="{escape(q["who"].lower(), quote=True)}" data-df="{escape(q.get("difficulty", ""), quote=True)}" data-txt="{txt}">'
+            f' data-who="{escape(q["who"].lower(), quote=True)}" data-df="{escape(q.get("difficulty", ""), quote=True)}" data-cov="{q.get("coverage", 0)}" data-txt="{txt}">'
             f'<td class="idcell"><span class="qid" '
             f'data-copy="{escape(q["code"], quote=True)}" '
             f'title="Question code, stable across rebuilds. Click to copy.">'
@@ -1988,6 +2065,14 @@ def _question_rows(questions: list) -> str:
                        f'</span></span></div>')
         copy_btn = (f'<button class="btn tiny" data-copy="{escape(copy_target, quote=True)}">'
                     f'{_icon("copy", 12)}Copy link</button>') if copy_target else ""
+        # Naming the destination: only a YouTube comment can be posted
+        # back, so promising "Send reply" everywhere was a lie by default.
+        postable = q["channel"] == "youtube" and q.get("source", "").startswith("yt:")
+        send_label = "Post to YouTube" if postable else "Save answer to vault"
+        send_title = ("Posts the reply to the comment and files it in the vault"
+                      if postable
+                      else "Files the answer in the vault; this channel cannot be "
+                           "posted to from here")
         your_reply = ""
         if q.get("reply"):
             your_reply = (f'<div class="yourreply"><b>{_icon("check", 12)}Your reply on '
@@ -2013,8 +2098,9 @@ def _question_rows(questions: list) -> str:
             f'<textarea class="qbox" aria-label="Reply text" placeholder="Type the reply. '
             f'Reply always updates the vault and files the answer as searchable knowledge; '
             f'posting to YouTube for real needs the one-time OAuth setup."></textarea>'
-            f'<div class="detbtns"><button class="btn tiny primary replybtn" data-reply>'
-            f'{_icon("replyic", 13)}Send reply</button>'
+            f'<div class="detbtns"><button class="btn tiny primary replybtn" data-reply '
+            f'title="{escape(send_title, quote=True)}">'
+            f'{_icon("replyic", 13)}{escape(send_label)}</button>'
             f'<span class="msg" aria-live="polite"></span></div>'
             f'</div></div></div></td></tr>'
         )
@@ -2051,7 +2137,14 @@ def _questions_card(d: dict) -> str:
         f'<b>Nothing matches these filters</b>'
         f'<p>Try widening the channel, status or system filter.</p>'
         f'<button class="btn tiny" id="qemptyclear">Clear filters</button></div>'
-        f'<button class="linkbtn" id="morebtn">View all questions &rarr;</button>'
+        f'<div class="pager" id="pager">'
+        f'<button class="btn tiny" id="pgprev">&larr; Previous</button>'
+        f'<span class="pgpos">page <b id="pgnow">1</b> of <b id="pgtot">1</b></span>'
+        f'<button class="btn tiny" id="pgnext">Next &rarr;</button>'
+        f'<label class="pgsize">rows'
+        f'<select id="pgsize" class="fchip" aria-label="Rows per page">'
+        f'<option value="25">25</option><option value="50">50</option>'
+        f'<option value="100">100</option></select></label></div>'
         f'</section>'
     )
 
