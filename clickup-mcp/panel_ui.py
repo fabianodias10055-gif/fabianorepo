@@ -1331,6 +1331,11 @@ function detailFor(qid) {
       ? '<a class="vidcard" href="' + esc(q.video_url) + '" target="_blank" rel="noopener">'
         + inner + "</a>"
       : '<div class="vidcard">' + inner + "</div>");
+  } else if (q.link) {
+    parts.push('<a class="vidcard novid" href="' + esc(q.link) + '" target="_blank" '
+      + 'rel="noopener"><span class="vmeta"><b>'
+      + esc(q.thread || ("#" + q.channel)) + "</b><span>open the original message"
+      + "</span></span></a>");
   } else if (q.channel === "youtube") {
     parts.push('<div class="vidcard novid"><span class="vmeta"><b>No video linked</b>'
       + "<span>logged by hand: add video_id: to this block in the vault</span></span></div>");
@@ -2246,6 +2251,7 @@ def _question_payload(questions: list) -> dict:
             "text": q["text"], "reply": q.get("reply", ""),
             "video": q.get("video", ""), "video_id": q.get("video_id", ""),
             "video_url": url, "source": q.get("source", ""),
+            "link": _safe_url(q.get("url", "")), "thread": q.get("thread", ""),
             "thumb": _thumb_url(q.get("video_id", "")),
             # Only a YouTube comment can be answered in place; everything
             # else is filed in the vault and the button must say so.
