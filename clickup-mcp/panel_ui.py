@@ -15,6 +15,7 @@ radius, shadow and color resolves to a custom property defined once in
 literals through a thousand lines of CSS.
 """
 
+import re
 from html import escape
 
 PAGE = 8  # question rows shown before "View all questions"
@@ -148,13 +149,62 @@ def _avatar(who: str, size: str = "") -> str:
     return (f'<span class="{cls}" style="--h:{hue}" aria-hidden="true">{initial}</span>')
 
 
+def _thumb_url(video_id: str, size: str = "mqdefault") -> str:
+    """YouTube's own still. Loaded straight from i.ytimg.com with a
+    no-referrer policy; nothing about the vault leaves the machine."""
+    vid = re.sub(r"[^A-Za-z0-9_-]", "", video_id or "")
+    return f"https://i.ytimg.com/vi/{vid}/{size}.jpg" if vid else ""
+
+
+def _mini_thumb(q: dict) -> str:
+    """A 48x27 still in the collapsed row: which tutorial this is about is
+    recognisable at a glance, which a slug in another column never is."""
+    url = _thumb_url(q.get("video_id", ""), "default")
+    if not url:
+        return ""
+    title = escape(q.get("video", ""), quote=True)
+    return (f'<span class="qthumb" title="{title}">'
+            f'<img loading="lazy" alt="" width="48" height="27" '
+            f'referrerpolicy="no-referrer" src="{url}" '
+            f'onerror="this.parentNode.classList.add(\'hide\')"></span>')
+
+
 def _st_class(status: str) -> str:
     import re
     return "st-" + re.sub(r"[^a-z0-9]+", "-", status.lower()).strip("-")
 
 
+# The vault stores the precise value; "no-source" states WHY it is open
+# (nothing written to answer from). On screen that reads as jargon, so the
+# label is plain and the original meaning moves into the tooltip.
+_STATUS_LABEL = {"no-source": "unanswered"}
+_STATUS_TITLE = {
+    "no-source": "no-source in the vault: nothing written yet to answer from",
+    "escalated": "escalated: waiting on you specifically",
+    "answered": "answered: a reply exists, kept in the knowledge base",
+    "out-of-scope": "out of scope: not about the catalog",
+}
+
+
 def _pill(status: str) -> str:
-    return f'<span class="pill {_st_class(status)}">{escape(status)}</span>'
+    label = _STATUS_LABEL.get(status, status)
+    title = _STATUS_TITLE.get(status, status)
+    return (f'<span class="pill {_st_class(status)}" '
+            f'title="{escape(title, quote=True)}">{escape(label)}</span>')
+
+
+def _diff_pill(q: dict) -> str:
+    """How much material the vault already has for this question."""
+    d = q.get("difficulty")
+    if not d or q.get("status") == "answered":
+        return ""
+    tips = {
+        "easy": "easy: the vault already has a close match, Search my notes should find it",
+        "medium": "medium: related material exists but nothing that answers it directly",
+        "hard": "hard: nothing in the vault covers this yet, it is a documentation gap",
+    }
+    return (f'<span class="dpill d-{d}" title="{escape(tips[d], quote=True)}">'
+            f'{d} <b>{q.get("coverage", 0)}%</b></span>')
 
 
 def _chn(channel: str) -> str:
@@ -191,14 +241,14 @@ def _delta24(hist: list, key: str) -> int:
 _DARK_TOKENS = """
     --ground:#0a0c11; --surface:#111620; --surface2:#161d29; --surface3:#1c2534;
     --line:#212a38; --line2:#1a2230;
-    --ink:#e9edf4; --ink2:#98a3b5; --ink3:#69748a;
+    --ink:#e9edf4; --ink2:#98a3b5; --ink3:#838da1;
     --accent:#6c8dff; --accent-ink:#0a0c11; --accent-bg:#161f38; --accent-line:#2b3d68;
     --ok:#3ecf82; --ok-bg:#0f2a1e; --ok-line:#1c4834;
     --warn:#e9a83c; --warn-bg:#2b2113; --warn-line:#4a3a1c;
     --crit:#f2645a; --crit-bg:#2d1618; --crit-line:#502428;
     --info:#a98bfa; --info-bg:#221c39; --info-line:#3a2f60;
     --mute-bg:#1a2230;
-    --av-l:58%; --av-s:52%;
+    --av-l:33%; --av-s:52%;
     --e1:0 1px 2px rgba(0,0,0,.4);
     --e2:0 2px 10px rgba(0,0,0,.45);
     --e3:0 18px 44px rgba(0,0,0,.6);
@@ -223,14 +273,14 @@ CSS = """
   /* ---- light palette ---- */
   --ground:#f6f7f9; --surface:#ffffff; --surface2:#f7f8fa; --surface3:#eef1f5;
   --line:#e5e8ee; --line2:#eef0f4;
-  --ink:#101319; --ink2:#5a6373; --ink3:#8992a3;
-  --accent:#3d63f5; --accent-ink:#ffffff; --accent-bg:#eaefff; --accent-line:#c9d6ff;
-  --ok:#15904d; --ok-bg:#e7f6ed; --ok-line:#c2e6d1;
-  --warn:#b4700c; --warn-bg:#fdf2df; --warn-line:#f2ddb4;
-  --crit:#cf3232; --crit-bg:#fdecec; --crit-line:#f6cfcf;
+  --ink:#101319; --ink2:#5a6373; --ink3:#636d7f;
+  --accent:#365df5; --accent-ink:#ffffff; --accent-bg:#eaefff; --accent-line:#c9d6ff;
+  --ok:#127c42; --ok-bg:#e7f6ed; --ok-line:#c2e6d1;
+  --warn:#9a600a; --warn-bg:#fdf2df; --warn-line:#f2ddb4;
+  --crit:#cc3030; --crit-bg:#fdecec; --crit-line:#f6cfcf;
   --info:#6d3cf0; --info-bg:#f0ebfe; --info-line:#dcd0fb;
   --mute-bg:#eff1f5;
-  --av-l:44%; --av-s:56%;
+  --av-l:33%; --av-s:56%;
   --e1:0 1px 2px rgba(16,19,25,.05);
   --e2:0 2px 8px rgba(16,19,25,.06),0 1px 2px rgba(16,19,25,.04);
   --e3:0 16px 40px rgba(16,19,25,.14);
@@ -270,7 +320,7 @@ a { color:var(--accent); text-underline-offset:2px; }
   padding:var(--s4) var(--s3); gap:var(--s1); }
 .brand { display:flex; gap:var(--s3); align-items:center; padding:var(--s1) var(--s2) var(--s5); }
 .brand .mark { width:34px; height:34px; border-radius:var(--r-md); flex:none;
-  background:linear-gradient(140deg,var(--accent),var(--info)); color:#fff;
+  background:linear-gradient(140deg,var(--accent),var(--info)); color:var(--accent-ink);
   display:grid; place-items:center; font-weight:800; font-size:var(--t-lg);
   letter-spacing:-.03em; box-shadow:var(--e2); }
 .brand b { display:block; font-size:var(--t-md); line-height:1.2; letter-spacing:-.01em; }
@@ -353,7 +403,7 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
 .btn.icon { padding:8px; }
 .bell { position:relative; }
 .bell .badge { position:absolute; top:-6px; right:-6px; background:var(--crit);
-  color:#fff; font-size:var(--t-2xs); font-weight:700; border-radius:var(--r-full);
+  color:var(--accent-ink); font-size:var(--t-2xs); font-weight:700; border-radius:var(--r-full);
   padding:1px 6px; min-width:18px; text-align:center; font-family:var(--mono);
   border:2px solid var(--ground); }
 .spin svg { animation:rot .9s linear infinite; }
@@ -420,7 +470,7 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
 .card h2 > svg { color:var(--ink3); }
 .card h2 .cnt { margin-left:auto; color:var(--ink3); font-weight:550;
   font-size:var(--t-xs); font-family:var(--mono); letter-spacing:0; }
-.grid3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr));
+.grid3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(340px,100%),1fr));
   gap:var(--s4); align-items:start; }
 .grid3 .card { margin-bottom:0; }
 .hide { display:none !important; }
@@ -456,7 +506,7 @@ select.fchip { appearance:none; max-width:200px; padding-right:28px;
   padding:var(--s1) var(--s2); border-radius:var(--r-xs); }
 .fclear:hover { color:var(--crit); background:var(--crit-bg); }
 .filters.flash { animation:flash 1.1s var(--ease); }
-@keyframes flash { 0%,55% { box-shadow:0 0 0 3px var(--accent-bg); border-radius:var(--r-md); }
+@keyframes flash { 0%,55% { box-shadow:0 0 0 3px var(--accent); border-radius:var(--r-md); }
   100% { box-shadow:0 0 0 0 transparent; } }
 
 /* ================= tables ================= */
@@ -481,8 +531,19 @@ td.num { font-family:var(--mono); font-size:var(--t-sm); font-variant-numeric:ta
 tr.qrow { cursor:pointer; transition:background var(--dur) var(--ease); }
 tr.qrow > td { transition:background var(--dur) var(--ease); }
 tr.qrow:hover > td { background:var(--surface2); }
-tr.qrow.kfocus > td { background:var(--accent-bg); box-shadow:inset 3px 0 0 var(--accent); }
+tr.qrow.kfocus > td { background:var(--accent-bg); }
+tr.qrow.kfocus > td:first-child { box-shadow:inset 3px 0 0 var(--accent); }
 tr.qrow[aria-expanded="true"] > td { background:var(--surface2); }
+/* Expanded, the row is just an identity header: the snippet, system,
+   channel, date and actions all reappear inside the panel below, and
+   showing them twice made the card read as noise. visibility, not display:
+   a hidden <td> would change the cell count and break column alignment for
+   every other row. */
+tr.qrow[aria-expanded="true"] > td:nth-child(3) .snip,
+tr.qrow[aria-expanded="true"] > td:nth-child(4),
+tr.qrow[aria-expanded="true"] > td:nth-child(5),
+tr.qrow[aria-expanded="true"] > td:nth-child(6),
+tr.qrow[aria-expanded="true"] .rowacts { visibility:hidden; }
 .agew { color:var(--warn); }
 .agec { color:var(--crit); font-weight:650; }
 .uc { display:flex; gap:var(--s2); align-items:center; min-width:132px; }
@@ -506,8 +567,35 @@ tr.qrow[aria-expanded="true"] > td { background:var(--surface2); }
 .st-blind { background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line); }
 .u-critical { background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line); }
 .u-urgent { background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line); }
+.qcell { display:flex; gap:var(--s3); align-items:center; }
+.qthumb { flex:none; width:48px; height:27px; border-radius:var(--r-xs);
+  overflow:hidden; background:var(--surface3); }
+.qthumb img { width:100%; height:100%; object-fit:cover; display:block; }
+.stcell { white-space:nowrap; }
+.dpill { display:inline-flex; align-items:center; gap:4px; margin-left:6px;
+  padding:2px 7px; border-radius:var(--r-full); font-size:var(--t-2xs);
+  font-weight:650; border:1px solid transparent; }
+.dpill b { font-family:var(--mono); font-weight:700; opacity:.75; }
+.d-easy { background:var(--ok-bg); color:var(--ok); border-color:var(--ok-line); }
+.d-medium { background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line); }
+.d-hard { background:var(--mute-bg); color:var(--ink2); border-color:var(--line); }
 .snip { color:var(--ink2); max-width:440px; display:-webkit-box; -webkit-line-clamp:2;
   -webkit-box-orient:vertical; overflow:hidden; line-height:1.45; }
+/* The video still leads the expanded card: recognising which tutorial the
+   comment is about is most of the work of answering it. */
+.vidcard { display:flex; gap:var(--s4); align-items:center; padding:var(--s3);
+  border:1px solid var(--line); border-radius:var(--r-md); background:var(--surface);
+  text-decoration:none; color:inherit;
+  transition:border-color var(--dur) var(--ease), background var(--dur) var(--ease); }
+a.vidcard:hover { border-color:var(--accent); background:var(--accent-bg); }
+.vidcard img { width:168px; height:94px; object-fit:cover; border-radius:var(--r-xs);
+  flex:none; background:var(--surface3); }
+.vidcard .vmeta { min-width:0; display:grid; gap:var(--s1); }
+.vidcard .vmeta b { font-size:var(--t-md); font-weight:620; line-height:1.35;
+  letter-spacing:-.01em; }
+.vidcard .vmeta > span { display:inline-flex; align-items:center; gap:5px;
+  color:var(--accent); font-size:var(--t-sm); font-weight:600; }
+.vidcard.novid { color:var(--ink2); }
 .chn { display:inline-flex; gap:6px; align-items:center; color:var(--ink2);
   font-size:var(--t-sm); }
 .cd { width:8px; height:8px; border-radius:var(--r-full); flex:none; }
@@ -576,6 +664,9 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
   padding:var(--s2) var(--s3); font-size:var(--t-sm); margin-bottom:var(--s2); }
 .aisrc { color:var(--ink3); font-family:var(--mono); font-size:var(--t-2xs);
   margin-bottom:var(--s3); word-break:break-all; }
+.regen { margin-left:auto; color:var(--accent); cursor:pointer; font-weight:600;
+  font-family:var(--ui); font-size:var(--t-xs); }
+.regen:hover { text-decoration:underline; }
 .btn.ai { border-color:var(--info-line); color:var(--info); }
 .btn.ai:hover { background:var(--info-bg); border-color:var(--info); }
 .conf { display:inline-flex; gap:7px; align-items:center; font-size:var(--t-2xs);
@@ -694,6 +785,7 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
   gap:var(--s2); margin-bottom:var(--s4); }
 .mk { background:var(--surface2); border:1px solid var(--line2); border-radius:var(--r-md);
   padding:var(--s3) var(--s4); }
+.mk.skel { background:var(--skel); background-size:400% 100%; }
 .mk .v { font-size:var(--t-2xl); font-weight:700; font-variant-numeric:tabular-nums;
   line-height:1.15; letter-spacing:-.03em; }
 .mk .l { color:var(--ink3); font-size:var(--t-2xs); text-transform:uppercase;
@@ -732,7 +824,7 @@ footer { margin-top:var(--s6); padding-top:var(--s4); border-top:1px solid var(-
   color:var(--ink3); font-size:var(--t-xs); font-family:var(--mono); }
 
 /* ================= responsive ================= */
-@media (min-width:900px) {
+@media (min-width:1500px) {
   /* the questions table fits: drop the scroll container so the sticky
      header can anchor to the viewport instead of a short scroll box */
   #questions .scroll { overflow:visible; margin:0; padding:0; }
@@ -742,7 +834,7 @@ footer { margin-top:var(--s6); padding-top:var(--s4); border-top:1px solid var(-
   .app { grid-template-columns:1fr; }
   .side { display:none; }
   .mnav { display:flex; }
-  .cols { grid-template-columns:1fr; }
+  .cols { grid-template-columns:minmax(0,1fr); }
   .main { padding:0 var(--s4) var(--s8); }
   h1 { font-size:var(--t-lg); }
   .tile.hero .v { font-size:var(--t-3xl); }
@@ -800,6 +892,7 @@ FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' "
 
 JS = """
 var EPOCH = __EPOCH__, LIVE = __LIVE__, PAGE = __PAGE__;
+var AI_CACHE = __AI_CACHE__;
 function $(s, r) { return (r || document).querySelector(s); }
 function $$(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
 function esc(s) {
@@ -829,7 +922,7 @@ function applyTheme(mode) {
   else delete document.documentElement.dataset.theme;
   var b = $("#themebtn");
   if (!b) return;
-  b.querySelector("span").textContent =
+  b.querySelector(".tlabel").textContent =
     mode === "dark" ? "Dark" : mode === "light" ? "Light" : "Auto";
   $$(".ticon", b).forEach(function (i) {
     i.classList.toggle("hide", i.dataset.icon !== THEME_ICON[mode]);
@@ -856,6 +949,11 @@ function toast(text, kind) {
 
 /* ---- sticky header shadow ---- */
 var topBar = $(".top");
+function syncHeadH() {
+  document.documentElement.style.setProperty("--head-h", topBar.offsetHeight + "px");
+}
+syncHeadH();
+addEventListener("resize", debounce(syncHeadH, 120));
 addEventListener("scroll", function () {
   topBar.classList.toggle("stuck", scrollY > 8);
 }, { passive: true });
@@ -922,6 +1020,7 @@ var state = {
   ch: params.get("ch") || "all",
   st: params.get("st") || "all",
   sys: params.get("sys") || "all",
+  df: params.get("df") || "all",
   q: params.get("q") || "",
   sort: params.get("sort") || "date",
   dir: params.get("dir") || "desc"
@@ -932,6 +1031,7 @@ function syncUrl() {
   if (state.ch !== "all") p.set("ch", state.ch);
   if (state.st !== "all") p.set("st", state.st);
   if (state.sys !== "all") p.set("sys", state.sys);
+  if (state.df !== "all") p.set("df", state.df);
   if (state.q) p.set("q", state.q);
   if (state.sort !== "date" || state.dir !== "desc") { p.set("sort", state.sort); p.set("dir", state.dir); }
   var qs = p.toString();
@@ -976,6 +1076,7 @@ function match(r) {
   if (state.ch !== "all" && r.dataset.ch !== state.ch) return false;
   if (state.st !== "all" && r.dataset.st !== state.st) return false;
   if (state.sys !== "all" && r.dataset.sys !== state.sys) return false;
+  if (state.df !== "all" && r.dataset.df !== state.df) return false;
   if (state.q && r.dataset.txt.indexOf(state.q) === -1) return false;
   return true;
 }
@@ -1035,6 +1136,7 @@ $("#q").addEventListener("input", function () { searchApply(this.value); });
 function clearFilters() {
   setGroup("ch", "all");
   setGroup("st", "all");
+  setGroup("df", "all");
   state.sys = "all";
   $("#sysSel").value = "all";
   state.q = "";
@@ -1053,7 +1155,7 @@ function toggleDet(row, focus) {
   if (!det || !det.classList.contains("qdet")) return;
   var open = !det.classList.contains("open");
   clearTimeout(det._t);   /* a pending close must never hide a reopened row */
-  det.classList.remove("hide");
+  if (open) det.classList.remove("hide");
   /* Force layout instead of waiting for a frame: requestAnimationFrame does
      not fire in a background or non-compositing tab, which left restored
      rows stuck closed after an auto-reload. Reading offsetHeight flushes
@@ -1076,56 +1178,6 @@ $$("#qtbody tr.qrow").forEach(function (r) {
     toggleDet(r);
   });
 });
-function runSuggest(det, btn) {
-  var out = det.querySelector(".sugout");
-  out.style.display = "block";
-  out.textContent = "Searching your notes and past answers...";
-  if (btn) { btn.disabled = true; btn.classList.add("spin"); }
-  function done() { if (btn) { btn.disabled = false; btn.classList.remove("spin"); } }
-  if (!LIVE) {
-    out.textContent = "Static file: suggestions need the live server (panel.py --watch).";
-    done();
-    return;
-  }
-  fetch("/suggest", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: det.dataset.id }) })
-    .then(function (r) { return r.json(); })
-    .then(function (s) {
-      done();
-      if (s.ok && s.text) {
-        out.textContent = "";
-        var src = document.createElement("div");
-        src.className = "src";
-        var where = document.createElement("span");
-        where.textContent = "from " + s.source;
-        src.appendChild(where);
-        var conf = typeof s.confidence === "number" ? s.confidence : 0;
-        var cls = conf >= 60 ? "ok" : conf >= 30 ? "warn" : "crit";
-        var badge = document.createElement("span");
-        badge.className = "conf conf-" + cls;
-        badge.innerHTML = '<span class="confbar"><i style="width:' + conf + '%"></i></span>'
-          + conf + "% confidence \\u00b7 " + s.matched + " of " + s.total + " terms";
-        src.appendChild(badge);
-        var pre = document.createElement("pre");
-        pre.textContent = s.text;
-        var use = document.createElement("button");
-        use.className = "btn tiny";
-        use.textContent = "Use as draft";
-        use.addEventListener("click", function () {
-          var box = det.querySelector(".qbox");
-          box.value = s.text;
-          ss("lp-draft:" + det.dataset.id, s.text);
-          box.focus();
-        });
-        out.appendChild(src); out.appendChild(pre); out.appendChild(use);
-      } else {
-        out.textContent = "Nothing in your notes or past answers matches this yet. "
-          + "Real gap: type the answer below; replying files it as searchable knowledge "
-          + "so the next identical question suggests itself.";
-      }
-    })
-    .catch(function () { done(); out.textContent = "Could not reach the panel server."; });
-}
 function runReply(det) {
   var box = det.querySelector(".qbox");
   var msg = det.querySelector(".msg");
@@ -1173,44 +1225,78 @@ $$("[data-act]").forEach(function (el) {
     var det = row ? row.nextElementSibling : null;
     if (!det) return;
     if (!det.classList.contains("open")) toggleDet(row);
-    if (el.dataset.act === "suggest") runSuggest(det, det.querySelector("[data-suggest]"));
+    if (el.dataset.act === "suggest") runAi(det, "search", false);
     else det.querySelector(".qbox").focus();
   });
 });
-$$("[data-suggest]").forEach(function (b) {
-  b.addEventListener("click", function () { runSuggest(b.closest("tr.qdet"), b); });
-});
 
-/* ---- AI draft: the Claude CLI reads the vault, we poll the job ---- */
-function aiRender(det, s, btn) {
-  var out = det.querySelector(".aiout");
+/* ---- AI: the Claude CLI reads the vault; results persist in the vault ----
+   Two modes share this code path. search = fast retrieval that quotes an
+   existing passage verbatim. draft = a full reply composed from everything.
+   Every finished result is cached server side, embedded in the page on the
+   next build, and replayed here on load, so the reload that follows every
+   vault change never throws away a generation. */
+function aiOut(det, mode) { return det.querySelector('.aiout[data-mode="' + mode + '"]'); }
+function aiBtn(det, mode) { return det.querySelector('[data-ai="' + mode + '"]'); }
+function ageText(ts) {
+  var s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 3600) return Math.round(s / 60) + "m ago";
+  if (s < 86400) return Math.round(s / 3600) + "h ago";
+  return Math.round(s / 86400) + "d ago";
+}
+function aiRender(det, mode, s, btn) {
+  var out = aiOut(det, mode);
   out.style.display = "block";
-  btn.disabled = false;
-  btn.classList.remove("spin");
+  if (btn) { btn.disabled = false; btn.classList.remove("spin"); }
+  out.innerHTML = "";
+  var label = mode === "search" ? "retrieval" : "draft";
+
   if (s.state === "error") {
-    out.innerHTML = '<div class="src">Claude could not draft this</div>'
+    out.innerHTML = '<div class="src">The ' + label + " could not run</div>"
       + "<pre>" + esc(s.error || "unknown error") + "</pre>";
     return;
   }
+
   var conf = typeof s.confidence === "number" ? s.confidence : 0;
   var cls = conf >= 60 ? "ok" : conf >= 30 ? "warn" : "crit";
-  var meta = "drafted by " + esc(s.model || "claude") + " \\u00b7 effort "
-    + esc(s.effort || "") + " \\u00b7 " + (s.elapsed || 0) + "s";
-  if (typeof s.cost === "number") meta += " \\u00b7 $" + s.cost.toFixed(2);
-  out.innerHTML = "";
+  var bits = [(mode === "search" ? "found by " : "drafted by ") + (s.model || "claude")];
+  if (s.effort) bits.push("effort " + s.effort);
+  if (s.elapsed) bits.push(s.elapsed + "s");
+  if (typeof s.cost === "number") bits.push("$" + s.cost.toFixed(2));
+  if (s.at) bits.push(ageText(s.at));
+
   var src = document.createElement("div");
   src.className = "src";
-  src.innerHTML = esc(meta) + ' <span class="conf conf-' + cls + '">'
-    + '<span class="confbar"><i style="width:' + conf + '%"></i></span>'
-    + conf + "% confidence</span>";
+  src.innerHTML = esc(bits.join(" \\u00b7 "));
+  if (s.answer) {
+    src.innerHTML += ' <span class="conf conf-' + cls + '">'
+      + '<span class="confbar"><i style="width:' + conf + '%"></i></span>'
+      + conf + "% confidence</span>";
+  }
+  var again = document.createElement("span");
+  again.className = "regen";
+  again.textContent = "regenerate";
+  again.title = "Run it again and replace this cached result";
+  again.addEventListener("click", function () { runAi(det, mode, true); });
+  src.appendChild(again);
   out.appendChild(src);
-  var pre = document.createElement("pre");
-  pre.textContent = s.answer || "(empty answer)";
-  out.appendChild(pre);
+
+  if (s.answer) {
+    var pre = document.createElement("pre");
+    pre.textContent = s.answer;
+    out.appendChild(pre);
+  } else {
+    var none = document.createElement("div");
+    none.className = "aimiss";
+    none.textContent = mode === "search"
+      ? "Nothing in the vault answers this yet."
+      : "The model returned an empty answer.";
+    out.appendChild(none);
+  }
   if (s.missing) {
     var miss = document.createElement("div");
     miss.className = "aimiss";
-    miss.textContent = "Not in the vault: " + s.missing;
+    miss.textContent = (s.answer ? "Not in the vault: " : "") + s.missing;
     out.appendChild(miss);
   }
   if (s.sources && s.sources.length) {
@@ -1219,40 +1305,42 @@ function aiRender(det, s, btn) {
     srcs.textContent = "read: " + s.sources.join(" \\u00b7 ");
     out.appendChild(srcs);
   }
-  var use = document.createElement("button");
-  use.className = "btn tiny";
-  use.textContent = "Use as draft";
-  use.addEventListener("click", function () {
-    var box = det.querySelector(".qbox");
-    box.value = s.answer || "";
-    ss("lp-draft:" + det.dataset.id, box.value);
-    box.focus();
-  });
-  out.appendChild(use);
+  if (s.answer) {
+    var use = document.createElement("button");
+    use.className = "btn tiny";
+    use.textContent = "Use as draft";
+    use.addEventListener("click", function () {
+      var box = det.querySelector(".qbox");
+      box.value = s.answer;
+      ss("lp-draft:" + det.dataset.id, box.value);
+      box.focus();
+    });
+    out.appendChild(use);
+  }
 }
-function runAi(det, btn) {
-  var out = det.querySelector(".aiout");
+function runAi(det, mode, force) {
+  var out = aiOut(det, mode), btn = aiBtn(det, mode);
   out.style.display = "block";
   if (!LIVE) {
-    out.textContent = "Static file: the AI draft needs the live server (panel.py --watch).";
+    out.textContent = "Static file: this needs the live server (panel.py --watch).";
     return;
   }
   btn.disabled = true;
   btn.classList.add("spin");
   var t0 = Date.now();
-  out.innerHTML = '<div class="src" id="aitick-' + esc(det.dataset.id) + '">'
-    + "Claude is reading your vault...</div>";
+  var waiting = mode === "search" ? "Searching the vault" : "Claude is reading your vault";
+  out.innerHTML = '<div class="src">' + waiting + "...</div>";
   var tick = out.querySelector(".src");
   var timer = setInterval(function () {
-    tick.textContent = "Claude is reading your vault... "
-      + Math.round((Date.now() - t0) / 1000) + "s";
+    tick.textContent = waiting + "... " + Math.round((Date.now() - t0) / 1000) + "s";
   }, 1000);
   function stop() { clearInterval(timer); }
   fetch("/suggest_ai", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: det.dataset.id }) })
+    body: JSON.stringify({ id: det.dataset.id, mode: mode, force: !!force }) })
     .then(function (r) { return r.json(); })
     .then(function (j) {
       if (!j.ok) throw new Error(j.error || "could not start");
+      if (j.cached) { stop(); aiRender(det, mode, j, btn); return; }
       (function poll() {
         fetch("/suggest_ai_status", { method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1261,21 +1349,32 @@ function runAi(det, btn) {
           .then(function (s) {
             if (s.state === "running") { setTimeout(poll, 2000); return; }
             stop();
-            aiRender(det, s, btn);
+            aiRender(det, mode, s, btn);
           })
           .catch(function () {
             stop();
-            aiRender(det, { state: "error", error: "lost contact with the panel server" }, btn);
+            aiRender(det, mode, { state: "error", error: "lost contact with the panel server" }, btn);
           });
       })();
     })
     .catch(function (e) {
       stop();
-      aiRender(det, { state: "error", error: String(e.message || e) }, btn);
+      aiRender(det, mode, { state: "error", error: String(e.message || e) }, btn);
     });
 }
 $$("[data-ai]").forEach(function (b) {
-  b.addEventListener("click", function () { runAi(b.closest("tr.qdet"), b); });
+  b.addEventListener("click", function () {
+    runAi(b.closest("tr.qdet"), b.dataset.ai, false);
+  });
+});
+
+/* replay everything already generated, so a reload costs nothing */
+Object.keys(AI_CACHE).forEach(function (key) {
+  var sep = key.indexOf(":");
+  var mode = key.slice(0, sep), qid = key.slice(sep + 1);
+  var det;
+  try { det = $('tr.qdet[data-id="' + CSS.escape(qid) + '"]'); } catch (e) { return; }
+  if (det) aiRender(det, mode, AI_CACHE[key], aiBtn(det, mode));
 });
 $$("[data-reply]").forEach(function (b) {
   b.addEventListener("click", function () { runReply(b.closest("tr.qdet")); });
@@ -1324,10 +1423,11 @@ function copyText(text, el) {
   function done() {
     toast("Copied to clipboard.", "good");
     if (!el) return;
-    var old = el.dataset.label || el.textContent;
-    el.dataset.label = old;
+    if (el.dataset.busy) return;
+    el.dataset.busy = "1";
+    var old = el.innerHTML;
     el.textContent = "copied";
-    setTimeout(function () { el.textContent = old; }, 1400);
+    setTimeout(function () { el.innerHTML = old; delete el.dataset.busy; }, 1400);
   }
   if (navigator.clipboard && navigator.clipboard.writeText)
     navigator.clipboard.writeText(text).then(done, done);
@@ -1356,6 +1456,7 @@ function kFocus(i) {
   $$("tr.kfocus").forEach(function (r) { r.classList.remove("kfocus"); });
   var r = visRows[kIdx];
   r.classList.add("kfocus");
+  r.focus({ preventScroll: true });
   r.scrollIntoView({ block: "nearest" });
 }
 document.addEventListener("keydown", function (e) {
@@ -1586,6 +1687,7 @@ $$("section[id]").forEach(function (s) { io.observe(s); });
 /* ---- boot: restore filters, sort, open rows, drafts, scroll ---- */
 setGroup("ch", state.ch);
 setGroup("st", state.st);
+setGroup("df", state.df);
 if (state.sys !== "all") {
   var sel = $("#sysSel");
   var hasOpt = Array.prototype.some.call(sel.options, function (o) { return o.value === state.sys; });
@@ -1647,24 +1749,24 @@ def _tiles(d: dict, n_systems: int) -> str:
         ("hero", "chat", "c-blue", "Open questions",
          f'<span class="cu" data-n="{d["open_q"]}">{_fmt(d["open_q"])}</span>',
          "waiting on you", delta("open", good_when_up=False),
-         _spark(series("open"), "a", "#3d63f5")),
+         _spark(series("open"), "a", "var(--accent)")),
         ("", "check", "c-green", "Answered",
          f'<span class="cu" data-n="{d["answer_rate"]}">{d["answer_rate"]}</span>%',
          f"of {_fmt(len(d['questions']))} logged", delta("rate", good_when_up=True),
-         _spark(series("rate"), "b", "#15904d")),
+         _spark(series("rate"), "b", "var(--ok)")),
         ("", "book", "c-violet", "Catalog coverage",
          f'<span class="cu" data-n="{pct}">{pct}</span>%',
          f"{_fmt(d['written'])} of {_fmt(d['total_facets'])} notes", "",
-         _spark(series("cov"), "c", "#6d3cf0")),
+         _spark(series("cov"), "c", "var(--info)")),
         ("", "alert", "c-red", "Critical systems",
          f'<span class="cu" data-n="{d["critical"]}">{_fmt(d["critical"])}</span>',
          f"{_fmt(d['urgent'])} more urgent", "",
-         _spark(series("crit"), "d", "#cf3232")),
+         _spark(series("crit"), "d", "var(--crit)")),
         ("", "flag", "c-amber", "Complete",
          f'<span class="cu" data-n="{d["complete"]}">{_fmt(d["complete"])}</span>'
          f' <small>/ {n_systems}</small>',
          f"{_fmt(d['empty'])} still empty", "",
-         _spark(series("complete"), "e", "#b4700c")),
+         _spark(series("complete"), "e", "var(--warn)")),
     ]
     cells = []
     for extra, icon, color, label, value, sub, dlt, spark in tiles:
@@ -1709,8 +1811,18 @@ def _filters(questions: list) -> str:
     parts.append('<span class="fchip on" data-k="st" data-v="all" aria-pressed="true">All statuses</span>')
     for st in statuses:
         parts.append(f'<span class="fchip" data-k="st" data-v="{escape(st, quote=True)}" '
-                     f'aria-pressed="false">{escape(st)} '
+                     f'aria-pressed="false" title="{escape(_STATUS_TITLE.get(st, st), quote=True)}">'
+                     f'{escape(_STATUS_LABEL.get(st, st))} '
                      f'<span class="fc-n">{_fmt(st_counts[st])}</span></span>')
+    parts.append('<span class="fsep"></span>')
+    parts.append('<span class="fchip on" data-k="df" data-v="all" aria-pressed="true">Any difficulty</span>')
+    for df in ("easy", "medium", "hard"):
+        cnt = sum(1 for q in questions
+                  if q.get("difficulty") == df and q["status"] != "answered")
+        if not cnt:
+            continue
+        parts.append(f'<span class="fchip" data-k="df" data-v="{df}" aria-pressed="false">'
+                     f'{df} <span class="fc-n">{_fmt(cnt)}</span></span>')
     parts.append('<span class="fsep"></span>')
     parts.append('<select id="sysSel" class="fchip" aria-label="Filter by system">'
                  '<option value="all">All systems</option>'
@@ -1740,11 +1852,12 @@ def _question_rows(questions: list) -> str:
             f' data-st="{escape(q["status"], quote=True)}"'
             f' data-sys="{escape(q["system"], quote=True)}"'
             f' data-date="{escape(q["date"], quote=True)}"'
-            f' data-who="{escape(q["who"].lower(), quote=True)}" data-txt="{txt}">'
+            f' data-who="{escape(q["who"].lower(), quote=True)}" data-df="{escape(q.get("difficulty", ""), quote=True)}" data-txt="{txt}">'
             f'<td><span class="uc">{_avatar(q["who"])}'
             f'<span><span class="n">{escape(q["who"])}</span><br>{sub}</span></span></td>'
-            f'<td>{_pill(q["status"])}</td>'
-            f'<td><div class="snip">{escape(q["text"][:230])}</div></td>'
+            f'<td class="stcell">{_pill(q["status"])}{_diff_pill(q)}</td>'
+            f'<td><div class="qcell">{_mini_thumb(q)}'
+            f'<div class="snip">{escape(q["text"][:230])}</div></div></td>'
             f'<td>{escape(sys_label)}</td>'
             f'<td>{_chn(q["channel"])}</td>'
             f'<td class="num">{q["date"]}</td>'
@@ -1758,14 +1871,27 @@ def _question_rows(questions: list) -> str:
 
         prov = [f'{_chn(q["channel"])}', f'<span class="num">{q["date"]}</span>']
         copy_target = _safe_url(q.get("video_url", ""))
-        if q.get("video") and copy_target:
-            prov.append(
-                f'<a href="{escape(copy_target, quote=True)}" target="_blank" rel="noopener">'
-                f'{_icon("video", 12)}{escape(q["video"])}{_icon("external", 11)}</a>')
-        elif q.get("video"):
-            prov.append(f'<span>from: {escape(q["video"])}</span>')
         if q.get("source"):
             prov.append(f'<span class="num">{escape(q["source"])}</span>')
+
+        # The expanded card leads with the video still: recognising the
+        # tutorial is most of the work of answering a comment about it.
+        big = _thumb_url(q.get("video_id", ""), "mqdefault")
+        vidcard = ""
+        if big and q.get("video"):
+            inner = (
+                f'<img loading="lazy" alt="" width="168" height="94" '
+                f'referrerpolicy="no-referrer" src="{big}" '
+                f'onerror="this.classList.add(\'hide\')">'
+                f'<span class="vmeta"><b>{escape(q["video"])}</b>'
+                f'<span>{_icon("video", 12)}watch this moment on YouTube'
+                f'{_icon("external", 11)}</span></span>')
+            vidcard = (
+                f'<a class="vidcard" href="{escape(copy_target, quote=True)}" '
+                f'target="_blank" rel="noopener">{inner}</a>'
+                if copy_target else f'<div class="vidcard">{inner}</div>')
+        elif q.get("video"):
+            vidcard = f'<div class="vidcard novid"><span class="vmeta"><b>{escape(q["video"])}</b></span></div>'
         copy_btn = (f'<button class="btn tiny" data-copy="{escape(copy_target, quote=True)}">'
                     f'{_icon("copy", 12)}Copy link</button>') if copy_target else ""
         your_reply = ""
@@ -1776,15 +1902,20 @@ def _question_rows(questions: list) -> str:
         rows.append(
             f'<tr class="qdet hide" data-id="{qid}"><td colspan="7">'
             f'<div class="detwrap"><div class="detinner"><div class="det">'
+            f'{vidcard}'
             f'<div class="full">{escape(q["text"])}</div>'
             f'{your_reply}'
             f'<div class="prov">{" ".join(prov)}</div>'
-            f'<div class="detbtns"><button class="btn tiny" data-suggest>'
+            f'<div class="detbtns">'
+            f'<button class="btn tiny" data-ai="search" '
+            f'title="Fast retrieval: quotes an existing passage, never composes">'
             f'{_icon("sparkle", 13)}Search my notes</button>'
-            f'<button class="btn tiny ai" data-ai>{_icon("brain", 13)}Ask Claude</button>'
+            f'<button class="btn tiny ai" data-ai="draft" '
+            f'title="Writes a full reply from everything in the vault">'
+            f'{_icon("brain", 13)}Ask Claude</button>'
             f'{copy_btn}</div>'
-            f'<div class="sugout"></div>'
-            f'<div class="aiout"></div>'
+            f'<div class="aiout" data-mode="search"></div>'
+            f'<div class="aiout" data-mode="draft"></div>'
             f'<textarea class="qbox" aria-label="Reply text" placeholder="Type the reply. '
             f'Reply always updates the vault and files the answer as searchable knowledge; '
             f'posting to YouTube for real needs the one-time OAuth setup."></textarea>'
@@ -2108,7 +2239,7 @@ def _header(d: dict, live: bool) -> str:
         f'<button class="btn icon" id="filtbtn" aria-label="Jump to filters" title="Filters">'
         f'{_icon("filter", 15)}</button>'
         f'<button class="btn" id="themebtn" aria-label="Switch color theme">'
-        f'{theme_icons}<span>Auto</span></button>'
+        f'{theme_icons}<span class="tlabel">Auto</span></button>'
         f'<button class="btn icon bell" id="bellbtn" aria-label="Open questions" '
         f'title="Open questions">{_icon("bell", 15)}'
         f'<span class="badge">{_fmt(d["open_q"])}</span></button></div>'
@@ -2118,9 +2249,16 @@ def _header(d: dict, live: bool) -> str:
 def render_html(d: dict, live: bool, facets: list, instrumentation: list) -> str:
     n_systems = len(d["systems"])
 
+    import json as _json
+    # </script> inside embedded JSON would close the script tag early; the
+    # cache holds model prose, so escaping it is not optional.
+    ai_cache = (_json.dumps(d.get("ai_cache") or {})
+                .replace("</", "<\\/").replace(" ", "\\u2028")
+                .replace(" ", "\\u2029"))
     js = (JS.replace("__EPOCH__", str(d["epoch"]))
             .replace("__LIVE__", "true" if live else "false")
-            .replace("__PAGE__", str(PAGE)))
+            .replace("__PAGE__", str(PAGE))
+            .replace("__AI_CACHE__", ai_cache))
 
     diag = (f'generated {escape(d["generated_at"])} &middot; scan {d.get("scan_ms", "?")} ms '
             f'&middot; {_fmt(d.get("md_files", 0))} notes &middot; '
