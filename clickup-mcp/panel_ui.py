@@ -408,6 +408,9 @@ tr.qdet > td { background:var(--surface2); border-bottom:1px solid var(--line);
 .qbox:focus { outline:2px solid var(--accent); outline-offset:-1px; }
 .detbtns { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 .msg { font-size:12px; color:var(--ink2); }
+.yourreply { background:var(--ok-bg); border-left:3px solid var(--ok);
+  border-radius:10px; padding:9px 12px; font-size:12.5px; }
+.yourreply b { color:var(--ok); }
 
 /* ---- right rail ---- */
 .grow { display:flex; justify-content:space-between; align-items:center; gap:8px;
@@ -1356,10 +1359,15 @@ def _question_rows(questions: list) -> str:
             prov.append(f'<span class="num">{escape(q["source"])}</span>')
         copy_btn = (f'<button class="btn tiny" data-copy="{escape(copy_target, quote=True)}">'
                     f'{_icon("copy", 12)}Copy link</button>') if copy_target else ""
+        your_reply = ""
+        if q.get("reply"):
+            your_reply = (f'<div class="yourreply"><b>Your reply on '
+                          f'{escape(q["channel"])}:</b> {escape(q["reply"])}</div>')
 
         rows.append(
             f'<tr class="qdet hide" data-id="{qid}"><td colspan="7"><div class="det">'
             f'<div class="full">{escape(q["text"])}</div>'
+            f'{your_reply}'
             f'<div class="prov">{" ".join(prov)}</div>'
             f'<div class="detbtns"><button class="btn tiny" data-suggest>'
             f'{_icon("sparkle", 13)}Suggest answer</button>{copy_btn}</div>'

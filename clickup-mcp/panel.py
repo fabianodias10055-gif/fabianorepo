@@ -244,7 +244,7 @@ NAME_BY_SLUG = {slug: name for slug, name, _c in CATALOG}
 ANSWERED_LOG_NAME = "02 - Answered.md"
 
 QUESTION_FIELDS = ("channel", "system", "status", "subscriber", "source",
-                   "video_id", "video_url", "video")
+                   "video_id", "video_url", "video", "reply")
 _FIELD_LINE = re.compile(r"^(" + "|".join(QUESTION_FIELDS) + r"):\s*(.*)$")
 
 
@@ -306,7 +306,7 @@ def _iter_inbox_blocks():
                     # ids are case sensitive, and a lowercased source would
                     # both break the deep link and make the Reply button post
                     # against a comment id that does not exist.
-                    if fm.group(1) in ("video", "source", "video_id", "video_url"):
+                    if fm.group(1) in ("video", "source", "video_id", "video_url", "reply"):
                         fields[fm.group(1)] = v
                     else:
                         fields[fm.group(1)] = v.lower()
@@ -342,6 +342,7 @@ def parse_questions() -> list[dict]:
             "video_id": fields.get("video_id", ""),
             "video": fields.get("video", ""),
             "video_url": fields.get("video_url", ""),
+            "reply": fields.get("reply", ""),
             "text": text,
         })
     out.sort(key=lambda q: q["date"], reverse=True)

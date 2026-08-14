@@ -351,18 +351,119 @@ def write_comments(folder: Path, v: dict, comments: list[dict], channel_name: st
         (folder / "03 - Comments.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_inbox(rows: list[dict], dry: bool) -> int:
-    """Unanswered questions go to their own inbox file.
+def _words(t: str) -> set:
+    return set(re.findall(r"[a-z0-9]{3,}", t.lower()))
 
-    A separate file on purpose: the collector must never touch the note you
-    write by hand.
+
+def _local_questions() -> list[tuple]:
+    """Hand-logged question blocks from every Inbox note except the two
+    generated ones: (path, start, end, author_norm, word_set, status)."""
+    out = []
+    inbox = VAULT / "Inbox"
+    if not inbox.is_dir():
+        return out
+    for note in inbox.glob("*.md"):
+        if note.name in ("01 - From YouTube.md", "02 - Answered.md"):
+            continue
+        raw = note.read_text(encoding="utf-8", errors="replace")
+        heads = list(re.finditer(r"(?m)^###\s+\d{4}-\d{2}-\d{2}\s+(.+?)\s*$", raw))
+        for i, m in enumerate(heads):
+            start = m.end()
+            end = heads[i + 1].start() if i + 1 < len(heads) else len(raw)
+            block = raw[start:end]
+            stm = re.search(r"^status:[ \t]*(\S+)", block, re.M)
+            prose = " ".join(
+                line.strip() for line in block.splitlines()
+                if line.strip() and not re.match(r"^[a-z_]+:[ \t]", line.strip())
+            )
+            out.append((note, start, end, _norm_author(m.group(1)),
+                        _words(prose), (stm.group(1).lower() if stm else "")))
+    return out
+
+
+def _same_question(words: set, r: dict) -> bool:
+    """Hand-logged copies are paraphrases, so exact text never matches;
+    half the significant words in common is the same question in practice."""
+    rw = _words(r["text"])
+    if not words or not rw:
+        return False
+    return len(words & rw) / len(words | rw) >= 0.5
+
+
+def reconcile_answered(rows: list[dict], dry: bool) -> int:
+    """Flip hand-logged copies of questions you already answered on YouTube.
+
+    The ONLY write this collector ever makes inside a hand-authored note,
+    and it is surgical: the status: line of the matched block flips to
+    answered, plus a reply: line carrying your actual YouTube reply. That is
+    exactly what the dashboard needs to stop showing an already-answered
+    question as an open gap.
+    """
+    answered = [r for r in rows if r.get("answered")]
+    if not answered:
+        return 0
+    by_note: dict[Path, list] = {}
+    for loc in _local_questions():
+        by_note.setdefault(loc[0], []).append(loc)
+
+    flipped = 0
+    for note, blocks in by_note.items():
+        raw = note.read_text(encoding="utf-8", errors="replace")
+        changed = False
+        # Reverse order keeps earlier byte offsets valid across edits.
+        for (_n, start, end, author, words, status) in sorted(blocks, key=lambda b: -b[1]):
+            if status not in ("no-source", "escalated", "unknown", ""):
+                continue
+            hit = next((r for r in answered
+                        if _norm_author(r["author"]) == author
+                        and _same_question(words, r)), None)
+            if not hit:
+                continue
+            block = raw[start:end]
+            new_block, n = re.subn(r"^status:[ \t]*\S+[ \t]*$", "status: answered",
+                                   block, count=1, flags=re.M)
+            if not n:
+                continue
+            if hit.get("reply") and "\nreply:" not in new_block:
+                flat = " ".join(hit["reply"].split())[:800]
+                new_block = new_block.replace(
+                    "status: answered", f"status: answered\nreply: {flat}", 1)
+            raw = raw[:start] + new_block + raw[end:]
+            changed = True
+            flipped += 1
+            print(f"  reconciled as answered: {hit['author']} in {note.name}")
+        if changed and not dry:
+            note.write_text(raw, encoding="utf-8")
+    return flipped
+
+
+def write_inbox(rows: list[dict], dry: bool) -> int:
+    """Questions go to their own inbox file: unanswered ones as no-source,
+    ones you already answered on YouTube as answered, with your reply kept.
+
+    A separate file on purpose: apart from the surgical status flip in
+    reconcile_answered, the collector never touches notes you write by hand.
     """
     path = VAULT / "Inbox" / "01 - From YouTube.md"
     seen = set()
     if path.is_file():
         seen = set(re.findall(r"^source:\s*(\S+)", path.read_text(encoding="utf-8", errors="replace"), re.M))
 
-    fresh = [r for r in rows if f"yt:{r['id']}" not in seen]
+    locs = _local_questions()
+
+    def has_local_copy(r: dict) -> bool:
+        return any(author == _norm_author(r["author"]) and _same_question(words, r)
+                   for (_n, _s, _e, author, words, _st) in locs)
+
+    fresh = []
+    for r in rows:
+        if f"yt:{r['id']}" in seen:
+            continue
+        # An answered question someone already logged by hand is not added
+        # again: reconcile_answered flips the hand-logged copy instead.
+        if r.get("answered") and has_local_copy(r):
+            continue
+        fresh.append(r)
     if not fresh:
         return 0
 
@@ -371,16 +472,21 @@ def write_inbox(rows: list[dict], dry: bool) -> int:
         # A deep link straight to the comment (lc=) so opening it lands on the
         # exact thread instead of the top of the video.
         watch_url = f"https://www.youtube.com/watch?v={r['video_id']}&lc={r['id']}"
+        status = "answered" if r.get("answered") else "no-source"
+        reply_line = ""
+        if r.get("reply"):
+            reply_line = f"reply: {' '.join(r['reply'].split())[:800]}\n"
         blocks.append(
             f"\n### {r['date']} {r['author']}\n"
             f"channel: youtube\n"
             f"system: {r['system'] or '-'}\n"
-            f"status: no-source\n"
+            f"status: {status}\n"
             f"subscriber: unknown\n"
             f"source: yt:{r['id']}\n"
             f"video_id: {r['video_id']}\n"
             f"video: {r['video_folder']}\n"
-            f"video_url: {watch_url}\n\n"
+            f"video_url: {watch_url}\n"
+            f"{reply_line}\n"
             f"{r['text'][:400]}\n"
         )
 
@@ -443,7 +549,7 @@ def main() -> int:
 
     created = updated = skipped = 0
     inbox_rows: list[dict] = []
-    total_comments = total_unanswered = 0
+    total_comments = total_unanswered = total_answered = 0
 
     for v in videos:
         folder = known.get(v["id"])
@@ -474,14 +580,31 @@ def main() -> int:
                     **c, "system": system,
                     "video_id": v["id"], "video_folder": folder.name,
                 })
+            elif (_norm_author(c["author"]) != _norm_author(channel_name)
+                  and looks_like_question(c["text"])
+                  and answered_by_channel(c, channel_name)):
+                # Questions you already answered on YouTube belong on the
+                # dashboard too, as answered, with your actual reply: without
+                # them the answer rate lies and an already-handled question
+                # can sit in the open list looking like a gap.
+                reply = next((r["text"] for r in c["replies"]
+                              if _norm_author(r["author"]) == _norm_author(channel_name)), "")
+                total_answered += 1
+                inbox_rows.append({
+                    **c, "system": system, "answered": True, "reply": reply,
+                    "video_id": v["id"], "video_folder": folder.name,
+                })
 
     added = write_inbox(inbox_rows, args.dry_run)
+    flipped = reconcile_answered(inbox_rows, args.dry_run)
 
     verb = "would be" if args.dry_run else ""
     print(f"\nfolders {verb} created: {created} · comment files {verb} updated: {updated} "
           f"· unchanged: {skipped}")
-    print(f"comments read: {total_comments} · unanswered questions: {total_unanswered}")
-    print(f"added to inbox: {added} (new ones only)")
+    print(f"comments read: {total_comments} · unanswered questions: {total_unanswered} "
+          f"· already answered by you: {total_answered}")
+    print(f"added to inbox: {added} (new ones only) · hand-logged copies "
+          f"reconciled as answered: {flipped}")
     print(f"quota used: {_quota['units']} units of the 10,000 daily · "
           f"{time.time() - t0:.1f}s")
     return 0
