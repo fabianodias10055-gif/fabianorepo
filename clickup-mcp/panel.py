@@ -2192,6 +2192,50 @@ def derived_status(person: dict, today: datetime) -> str:
     return "Quiet"
 
 
+YOUTUBE_HANDLE = os.getenv("YOUTUBE_HANDLE", "LocoDev")
+
+
+def youtube_channel_stats(max_age_hours: int = 6) -> dict:
+    """Subscribers and views, cached to a file.
+
+    The page rebuilds on every vault change, which is often, and the channel
+    count moves by a handful a day. Calling YouTube on each rebuild would
+    spend quota to learn nothing new, so the answer is kept on disk and
+    refreshed a few times a day.
+    """
+    path = VAULT / "Panel" / "youtube-channel.json"
+    try:
+        cached = json.loads(path.read_text(encoding="utf-8"))
+        age = time.time() - path.stat().st_mtime
+        if age < max_age_hours * 3600:
+            return cached
+    except (OSError, ValueError):
+        cached = {}
+
+    key = get_secret("YOUTUBE_API_KEY")
+    if not key:
+        return cached
+    try:
+        url = ("https://www.googleapis.com/youtube/v3/channels?part=statistics"
+               f"&forHandle={YOUTUBE_HANDLE}&key={key}")
+        data = json.load(urlrequest.urlopen(url, timeout=20))
+        stats = (data.get("items") or [{}])[0].get("statistics", {})
+    except (OSError, ValueError, IndexError):
+        return cached          # keep yesterday's number over showing none
+    out = {
+        "subscribers": int(stats.get("subscriberCount", 0) or 0),
+        "videos": int(stats.get("videoCount", 0) or 0),
+        "views": int(stats.get("viewCount", 0) or 0),
+        "read_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(out), encoding="utf-8")
+    except OSError:
+        pass
+    return out
+
+
 def patreon_summary() -> dict:
     """The paying side in numbers, for the home page.
 
@@ -2381,6 +2425,8 @@ def scan() -> dict:
         "md_files": md_files,
         "patrons": patrons_by_handle(),
         "patreon": patreon_summary(),
+        "youtube": youtube_channel_stats(),
+        "discord_members": len((_members() or {})),
         "sync": sync_report(),
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "epoch": int(time.time()),

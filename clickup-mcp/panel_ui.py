@@ -582,6 +582,21 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .cfield.wide:last-child { display:flex; align-items:center; gap:var(--s3); }
 .cmsg { min-height:1em; }
 
+/* ---- search results, over everything ---- */
+.search { position:relative; }
+.qres { position:absolute; top:calc(100% + 6px); left:0; right:0; z-index:40;
+  background:var(--surface); border:1px solid var(--line);
+  border-radius:var(--r-md); box-shadow:var(--el-2); padding:var(--s2);
+  max-height:60vh; overflow-y:auto; }
+.qrgroup { padding:var(--s2) 0; border-bottom:1px solid var(--line2); }
+.qrgroup:last-child { border-bottom:0; }
+.qrgroup .clabel { display:block; padding:0 var(--s2) 4px; }
+.qritem { display:block; width:100%; text-align:left; background:none;
+  border:0; color:var(--ink); font:inherit; font-size:var(--t-sm);
+  padding:6px var(--s2); border-radius:var(--r-sm); cursor:pointer; }
+.qritem:hover, .qritem:focus-visible { background:var(--accent-bg); color:var(--accent); }
+.qritem .note { color:var(--ink3); font-size:var(--t-xs); }
+
 /* ---- what is owed, at the top of Home ---- */
 #attention { margin-bottom:var(--s4); }
 .att { display:grid; gap:2px; padding:var(--s3) 0 var(--s3) var(--s4);
@@ -1648,7 +1663,115 @@ var searchApply = debounce(function (v) {
   apply();
   syncUrl();
 }, 150);
-$("#q").addEventListener("input", function () { searchApply(this.value); });
+$("#q").addEventListener("input", function () {
+  searchApply(this.value); universalSearch(this.value);
+});
+
+/* ---- search that reaches past the question table ----
+   Typing already filters the inbox. The same words are also somebody's
+   name and somebody's product, and those were unreachable from here: you
+   had to know which screen to open first. */
+function universalSearch(term) {
+  var box = $("#qres");
+  term = (term || "").trim().toLowerCase();
+  if (term.length < 2) { box.classList.add("hide"); return; }
+
+  var people = {}, prods = {}, hits = 0;
+  for (var id in QDATA) {
+    var q = QDATA[id];
+    var who = (q.who || "").toLowerCase();
+    var sys = (q.system || "");
+    if (who.indexOf(term) !== -1) people[q.who] = (people[q.who] || 0) + 1;
+    if (sys.toLowerCase().indexOf(term) !== -1) prods[sys] = (prods[sys] || 0) + 1;
+    if ((q.text || "").toLowerCase().indexOf(term) !== -1) hits++;
+  }
+  /* A patron may be findable by the name on their card rather than the
+     handle they type under. */
+  for (var h in PATRONS) {
+    var p = PATRONS[h];
+    if (p.name && p.name.toLowerCase().indexOf(term) !== -1) {
+      for (var id2 in QDATA) {
+        var w = (QDATA[id2].who || "");
+        if (w.replace(/^@/, "").split(" ")[0].toLowerCase() === h) {
+          people[w] = people[w] || 0;
+        }
+      }
+    }
+  }
+
+  var top = function (o) {
+    return Object.keys(o).sort(function (a, b) { return o[b] - o[a]; });
+  };
+  var out = "";
+  var pk = top(people).slice(0, 5);
+  if (pk.length) {
+    out += '<div class="qrgroup"><span class="clabel">People</span>';
+    pk.forEach(function (w) {
+      var p = PATRONS[w.replace(/^@/, "").split(" ")[0].toLowerCase()];
+      out += '<button class="qritem" data-go="person" data-key="' + esc(w) + '">'
+        + esc(w) + (p && p.name ? ' <span class="note">' + esc(p.name) + "</span>" : "")
+        + (p && p.paying ? ' <span class="tag sub">pays</span>' : "")
+        + ' <span class="note">' + people[w] + " question"
+        + (people[w] === 1 ? "" : "s") + "</span></button>";
+    });
+    out += "</div>";
+  }
+  var sk = top(prods).slice(0, 5);
+  if (sk.length) {
+    out += '<div class="qrgroup"><span class="clabel">Products</span>';
+    sk.forEach(function (s) {
+      out += '<button class="qritem" data-go="product" data-key="' + esc(s) + '">'
+        + esc(s) + ' <span class="note">' + prods[s] + " questions</span></button>";
+    });
+    out += "</div>";
+  }
+  out += '<div class="qrgroup"><span class="clabel">Questions</span>'
+    + '<button class="qritem" data-go="inbox" data-key="' + esc(term) + '">'
+    + _fmt2(hits) + " mention " + esc(term) + ' <span class="note">open the inbox</span></button></div>';
+  box.innerHTML = out;
+  box.classList.remove("hide");
+}
+function _fmt2(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+
+/* Reveal a row that "View all" is still hiding, or the jump lands on
+   nothing and looks broken. */
+function revealRow(tr) {
+  if (!tr) return;
+  var card = tr.closest(".card");
+  if (tr.classList.contains("hide") || tr.classList.contains("xtra")) {
+    $$(".xtra", card).forEach(function (x) { x.classList.remove("hide"); });
+    var btn = card.querySelector("[data-viewall]");
+    if (btn) btn.classList.add("hide");
+  }
+  tr.scrollIntoView({ block: "center" });
+}
+
+document.addEventListener("click", function (ev) {
+  var b = ev.target.closest ? ev.target.closest(".qritem") : null;
+  if (!b) {
+    if (!ev.target.closest || !ev.target.closest(".search")) $("#qres").classList.add("hide");
+    return;
+  }
+  var key = b.dataset.key;
+  $("#qres").classList.add("hide");
+  if (b.dataset.go === "person") {
+    goView("people");
+    setTimeout(function () {
+      var tr = document.querySelector('#people tr.crow[data-who="' + key.replace(/"/g, '\\"') + '"]');
+      revealRow(tr);
+      if (tr && !tr.classList.contains("copen")) toggleCustomer(tr);
+    }, 30);
+  } else if (b.dataset.go === "product") {
+    goView("systems");
+    setTimeout(function () {
+      var tr = document.querySelector('#systems tr.prodrow[data-name="' + key.replace(/"/g, '\\"') + '"]');
+      revealRow(tr);
+      if (tr && !tr.classList.contains("copen")) toggleProduct(tr);
+    }, 30);
+  } else {
+    goView("questions");
+  }
+});
 function clearFilters() {
   setGroup("ch", "all");
   setGroup("st", "open");   /* back to the working queue, not the archive */
@@ -2987,6 +3110,48 @@ def _business_card(d: dict) -> str:
             f'The business, in short</h2>{rows}</section>')
 
 
+def _community_card(d: dict) -> str:
+    """How many people each channel actually reaches.
+
+    Sizes rather than health scores: a number someone can repeat out loud,
+    with the one comparison that matters underneath it, which is how much of
+    that audience ever pays.
+    """
+    pat = d.get("patreon") or {}
+    yt = d.get("youtube") or {}
+    disc = d.get("discord_members") or 0
+    rows = []
+
+    def line(label, value, sub=""):
+        return (f'<div class="orow"><span class="olabel">{label}</span>'
+                f'<span class="ovals"><b>{value}</b>'
+                + (f'<br><span class="note">{sub}</span>' if sub else "")
+                + "</span></div>")
+
+    if yt.get("subscribers"):
+        rows.append(line("YouTube", _fmt(yt["subscribers"]),
+                         f'{_fmt(yt.get("views", 0))} views across '
+                         f'{_fmt(yt.get("videos", 0))} videos'))
+    if disc:
+        rows.append(line("Discord", _fmt(disc), "people in the server"))
+    if pat.get("total"):
+        share = (pat.get("paying", 0) * 100 / pat["total"]) if pat["total"] else 0
+        rows.append(line("Patreon", _fmt(pat["total"]),
+                         f'{_fmt(pat.get("paying", 0))} of them pay, {share:.0f}%'))
+    if not rows:
+        return ""
+    # The one number that ties the three together, and the honest gap.
+    reach = (yt.get("subscribers", 0) or 0) + disc
+    paying = pat.get("paying", 0)
+    rows.append(line("Paying, out of all that",
+                     f"{(paying * 100 / reach):.1f}%" if reach else "-",
+                     f'{_fmt(paying)} people out of roughly {_fmt(reach)} reached'))
+    return (f'<section class="card"><h2><span class="he">🌍</span>Community</h2>'
+            f'{"".join(rows)}'
+            f'<p class="note">Email subscribers and Wingman users are not here: '
+            f'nothing in this panel can count them yet.</p></section>')
+
+
 def _overview_cards(d: dict) -> str:
     """The screen that was five numbers and a footer.
 
@@ -3066,6 +3231,7 @@ def _overview_cards(d: dict) -> str:
         + '<div class="grid2">'
         + _today_card(d)
         + _business_card(d)
+        + _community_card(d)
         + card("Where they ask", "📣", "".join(where))
         + card("Under the most pressure", "🔥", "".join(pressure))
         + card("What the bot knows", "🤖", know)
@@ -3820,7 +3986,8 @@ def _header(d: dict, live: bool) -> str:
         f'<div class="top"><h1>Operations</h1>{chip}'
         f'<div class="search">{_icon("search", 15)}'
         f'<input id="q" type="search" placeholder="Search questions, users, systems..." '
-        f'autocomplete="off" aria-label="Search questions"><kbd>Ctrl K</kbd></div>'
+        f'autocomplete="off" aria-label="Search questions"><kbd>Ctrl K</kbd>'
+        f'<div id="qres" class="qres hide" role="listbox"></div></div>'
         f'<button class="btn primary" id="updbtn" aria-label="Rebuild the panel now">'
         f'{_icon("refresh", 14)}Update</button>'
         f'<button class="btn icon" id="filtbtn" aria-label="Jump to filters" title="Filters">'
