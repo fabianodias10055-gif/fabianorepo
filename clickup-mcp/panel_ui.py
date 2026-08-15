@@ -545,8 +545,8 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
 [hidden] { display:none !important; }
 
 /* ---- one customer, opened in place ---- */
-tr.crow, tr.prow { cursor:pointer; }
-tr.crow:hover td:first-child, tr.prow:hover td:first-child {
+tr.crow, tr.prodrow { cursor:pointer; }
+tr.crow:hover td:first-child, tr.prodrow:hover td:first-child {
   box-shadow:inset 2px 0 0 var(--accent); }
 tr.copen td { background:var(--surface2); }
 tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
@@ -2447,7 +2447,7 @@ document.addEventListener("click", function (ev) {
      the product. Two useful actions, and neither steals the other. */
   if (ev.target.closest(".pdet") || ev.target.closest("a")
       || ev.target.closest(".sysdrill")) return;
-  var tr = ev.target.closest("tr.prow");
+  var tr = ev.target.closest("tr.prodrow");
   if (tr) toggleProduct(tr);
 });
 
@@ -3380,7 +3380,7 @@ def _system_pressure_card(d: dict, facets: list) -> str:
         openc = (f'<span class="gcnt">{r["open"]}</span>' if r["open"]
                  else '<span class="zero">0</span>')
         rows.append(
-            f'<tr class="prow {hid.strip()}" tabindex="0" '
+            f'<tr class="prodrow {hid.strip()}" tabindex="0" '
             f'data-name="{escape(r["name"], quote=True)}" '
             f'title="Open this product"><td><span class="sysdrill" '
             f'data-sys="{escape(r["slug"], quote=True)}" '
