@@ -271,16 +271,33 @@ def _pill(status: str) -> str:
             f'<i class="pe">{emoji}</i>{escape(label)}</span>')
 
 
+_DIFF_TIP = {
+    "easy": "easy: the vault already has a close match, Search my notes should find it",
+    "medium": "medium: related material exists but nothing that answers it directly",
+    "hard": "hard: nothing in the vault covers this yet, it is a documentation gap",
+}
+
+
+def _row_lookups() -> dict:
+    """The small tables the row markup needs, handed to the browser.
+
+    The rows are built there now, and these are the only thing a second
+    renderer would otherwise have to keep a copy of. Passing the data means
+    there is still one source for what a status is called and which colour
+    a role gets.
+    """
+    return {"st_label": _STATUS_LABEL, "st_title": _STATUS_TITLE,
+            "st_emoji": _STATUS_EMOJI, "diff_emoji": _DIFF_EMOJI,
+            "diff_tip": _DIFF_TIP, "hues": list(_AV_HUES),
+            "role_class": _ROLE_CLASS}
+
+
 def _diff_pill(q: dict) -> str:
     """How much material the vault already has for this question."""
     d = q.get("difficulty")
     if not d or q.get("status") == "answered":
         return ""
-    tips = {
-        "easy": "easy: the vault already has a close match, Search my notes should find it",
-        "medium": "medium: related material exists but nothing that answers it directly",
-        "hard": "hard: nothing in the vault covers this yet, it is a documentation gap",
-    }
+    tips = _DIFF_TIP
     return (f'<span class="dpill d-{d}" title="{escape(tips[d], quote=True)}">'
             f'<i class="pe">{_DIFF_EMOJI[d]}</i>{d} '
             f'<b>{q.get("coverage", 0)}%</b></span>')
@@ -1295,6 +1312,8 @@ var QDATA = __QDATA__;
 /* Only the people who linked Patreon to Discord, which is a hundred-odd
    rows rather than the thousand in the table. */
 var PATRONS = __PATRONS__;
+var LOOKUPS = __LOOKUPS__;
+var BRANDS = __BRANDS__;
 /* What you have written about people, and the statuses you can set. The
    ones the facts already state are not offered: they would go stale the
    day after being set. */
@@ -1616,6 +1635,85 @@ function match(r) {
   if (state.q && r.dataset.txt.indexOf(state.q) === -1) return false;
   return true;
 }
+/* ---- rows built when they are about to be seen ----
+   The queue holds a few thousand questions and shows twenty-five. Rendering
+   every cell of every one of them was most of what this page weighed, for
+   markup that was hidden the moment it arrived. The row keeps the
+   attributes the filters and the sort read; its cells are built the first
+   time it appears on a page and then left alone. */
+function avatarHtml(who, url) {
+  var h = 0;
+  for (var i = 0; i < who.length; i++) h = (h * 31 + who.charCodeAt(i)) >>> 0;
+  var hue = LOOKUPS.hues[h % LOOKUPS.hues.length];
+  var initial = esc((who.replace(/^@/, "")[0] || "?").toUpperCase());
+  /* The coloured initial stays underneath, so an image that fails to load
+     leaves an identity rather than a hole. */
+  var img = url ? '<img loading="lazy" alt="" referrerpolicy="no-referrer" src="'
+    + esc(url) + '">' : "";
+  return '<span class="av sm" style="--h:' + hue + '" aria-hidden="true">'
+    + initial + img + "</span>";
+}
+function rolesHtml(roles) {
+  if (!roles || !roles.length) return "";
+  var out = roles.slice(0, 3).map(function (r) {
+    return '<span class="role ' + (LOOKUPS.role_class[r] || "r-other") + '">'
+      + esc(r) + "</span>";
+  }).join("");
+  if (roles.length > 3) {
+    out += '<span class="role r-other" title="' + esc(roles.slice(3).join(", "))
+      + '">+' + (roles.length - 3) + "</span>";
+  }
+  return out;
+}
+function fillRow(tr) {
+  if (tr.firstChild) return;                 /* already built */
+  var q = QDATA[tr.dataset.id];
+  if (!q) { tr.innerHTML = '<td colspan="7"></td>'; return; }
+
+  var meta = '<span class="qid" data-copy="' + esc(q.code) + '">' + esc(q.code) + "</span>";
+  var brand = BRANDS.indexOf(q.channel) !== -1;
+  meta += brand
+    ? '<span class="mch" title="' + esc(q.channel) + '"><svg width="12" height="12" '
+      + 'aria-hidden="true" class="bi"><use href="#bi-' + esc(q.channel) + '"></use></svg></span>'
+    : '<span class="mch">' + esc(q.channel) + "</span>";
+  if (q.video) {
+    meta += '<span class="mvid" title="' + esc(q.video) + '">'
+      + esc(q.video.slice(11) || q.video) + "</span>";
+  }
+  if (q.sub) meta += '<span class="tag sub">subscriber</span>';
+
+  var thumb = q.small
+    ? '<span class="mthumb" title="' + esc(q.video || "") + '"><img loading="lazy" '
+      + 'alt="" referrerpolicy="no-referrer" src="' + esc(q.small) + '"></span>'
+    : "";
+
+  var st = q.status;
+  var pill = '<span class="pill st-' + st.replace(/[^a-z0-9]+/g, "-")
+    + '" title="' + esc(LOOKUPS.st_title[st] || st) + '"><i class="pe">'
+    + (LOOKUPS.st_emoji[st] || "") + "</i>" + esc(LOOKUPS.st_label[st] || st) + "</span>";
+
+  var dp = "";
+  if (q.df && st !== "answered") {
+    dp = '<span class="dpill d-' + q.df + '" title="' + esc(LOOKUPS.diff_tip[q.df] || "")
+      + '"><i class="pe">' + (LOOKUPS.diff_emoji[q.df] || "") + "</i>" + q.df
+      + " <b>" + (q.cov || 0) + "%</b></span>";
+  }
+
+  tr.innerHTML =
+    '<td class="qcol"><div class="qcell">' + thumb
+    + '<div class="qtext"><div class="snip">' + esc(q.text.slice(0, 230)) + "</div>"
+    + '<div class="qmeta">' + meta + "</div></div></div></td>"
+    + '<td class="stcell">' + pill + "</td>"
+    + "<td>" + dp + "</td>"
+    + '<td><span class="uc">' + avatarHtml(q.who, q.avatar)
+    + '<span><span class="n">' + esc(q.who) + "</span>"
+    + '<span class="roles">' + rolesHtml(q.roles) + "</span></span></span></td>"
+    + '<td class="syscell">' + esc(q.system) + "</td>"
+    + '<td class="num agecell" data-date="' + esc(q.date) + '">' + esc(q.date) + "</td>"
+    + '<td class="acts"><button class="btn tiny answerbtn" data-act="answer">'
+    + (st === "answered" ? "View" : "Answer") + "</button></td>";
+}
+
 function apply() {
   var rows = $$("#qtbody tr.qrow");
   matchRows = rows.filter(match);
@@ -1626,6 +1724,7 @@ function apply() {
   var onPage = new Set(visRows);
 
   rows.forEach(function (r) { r.classList.toggle("hide", !onPage.has(r)); });
+  visRows.forEach(fillRow);
   if (openId) {
     var openRow = rowById(openId);
     if (!openRow || openRow.classList.contains("hide")) closeDet();
@@ -2073,14 +2172,17 @@ function runReply(det) {
       btn.classList.remove("spin");
     });
 }
-$$("[data-act]").forEach(function (el) {
-  el.addEventListener("click", function (e) {
-    e.stopPropagation();
-    var row = el.closest("tr.qrow");
-    if (!row) return;
-    if (openId !== row.dataset.id) toggleDet(row, "box");
-    else { var b = $("tr.qdet .qbox"); if (b) b.focus(); }
-  });
+/* Delegated: the Answer button is built when its row first appears, long
+   after a per-element binding would have run, so binding each one found at
+   load reached exactly zero buttons. */
+document.addEventListener("click", function (e) {
+  var el = e.target.closest ? e.target.closest("[data-act]") : null;
+  if (!el) return;
+  e.stopPropagation();
+  var row = el.closest("tr.qrow");
+  if (!row) return;
+  if (openId !== row.dataset.id) toggleDet(row, "box");
+  else { var b = $("tr.qdet .qbox"); if (b) b.focus(); }
 });
 
 /* ---- AI: the Claude CLI reads the vault; results persist in the vault ----
@@ -3378,24 +3480,6 @@ def _question_rows(questions: list) -> str:
             quote=True)
         qid = escape(q["id"], quote=True)
 
-        meta = [f'<span class="qid" data-copy="{escape(q["code"], quote=True)}">'
-                f'{escape(q["code"])}</span>']
-        brand = _brand_icon(q["channel"], 12)
-        if brand:
-            meta.append(f'<span class="mch" title="{escape(q["channel"], quote=True)}">'
-                        f'{brand}</span>')
-        else:
-            meta.append(f'<span class="mch">{escape(q["channel"])}</span>')
-        if q.get("video"):
-            meta.append(f'<span class="mvid" title="{escape(q["video"], quote=True)}">'
-                        f'{escape(q["video"][11:] or q["video"])}</span>')
-        if q["subscriber"] == "yes":
-            meta.append('<span class="tag sub">subscriber</span>')
-
-        action = ('<button class="btn tiny answerbtn" data-act="answer">Answer</button>'
-                  if q["status"] != "answered" else
-                  '<button class="btn tiny answerbtn" data-act="answer">View</button>')
-
         rows.append(
             f'<tr class="qrow{hid}" data-id="{qid}" data-ch="{escape(q["channel"], quote=True)}"'
             f' data-st="{escape(q["status"], quote=True)}"'
@@ -3403,19 +3487,7 @@ def _question_rows(questions: list) -> str:
             f' data-date="{escape(q["date"], quote=True)}"'
             f' data-who="{escape(q["who"].lower(), quote=True)}"'
             f' data-df="{escape(q.get("difficulty", ""), quote=True)}"'
-            f' data-cov="{q.get("coverage", 0)}" data-txt="{txt}">'
-            f'<td class="qcol"><div class="qcell">{_mini_thumb(q)}'
-            f'<div class="qtext"><div class="snip">{escape(q["text"][:230])}</div>'
-            f'<div class="qmeta">{"".join(meta)}</div></div></div></td>'
-            f'<td class="stcell">{_pill(q["status"])}</td>'
-            f'<td>{_diff_pill(q)}</td>'
-            f'<td><span class="uc">{_avatar(q["who"], "sm", q.get("avatar_url", ""))}'
-            f'<span><span class="n">{escape(q["who"])}</span>'
-            f'<span class="roles">{_roles(q)}</span></span></span></td>'
-            f'<td class="syscell">{escape(sys_label)}</td>'
-            f'<td class="num agecell" data-date="{escape(q["date"], quote=True)}">'
-            f'{q["date"]}</td>'
-            f'<td class="acts">{action}</td></tr>'
+            f' data-cov="{q.get("coverage", 0)}" data-txt="{txt}"></tr>'
         )
     return "".join(rows)
 
@@ -3437,6 +3509,10 @@ def _question_payload(questions: list) -> dict:
             "joined": q.get("joined", ""), "asker": q["who"],
             "status": q["status"],
             "thumb": _thumb_url(q.get("video_id", "")),
+            # For the row itself, which the browser now builds.
+            "df": q.get("difficulty", ""), "cov": q.get("coverage", 0),
+            "sub": q.get("subscriber") == "yes",
+            "small": _thumb_url(q.get("video_id", ""), "default"),
             # Only a YouTube comment can be answered in place; everything
             # else is filed in the vault and the button must say so.
             "postable": bool(
@@ -4069,6 +4145,8 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
             .replace("__TOKEN__", token)
             .replace("__AI_CACHE__", embed(d.get("ai_cache") or {}))
             .replace("__QDATA__", embed(_question_payload(d["questions"])))
+            .replace("__LOOKUPS__", embed(_row_lookups()))
+            .replace("__BRANDS__", embed(list(_BRAND)))
             .replace("__MANUAL_STATUS__", embed(list(manual_status)))
             .replace("__CRM__", embed({
                 p["who"]: {"status": (p.get("note") or {}).get("status", ""),
