@@ -193,8 +193,17 @@ def from_docs() -> list[dict]:
         body = flatten_tables(body).strip()
         if len(body) < MIN_ANSWER:
             continue
-        system = path.parent.name.replace("-", " ")
-        question = f"{system} - {heading}"
+        # From the path's first part, not the parent folder: a note now sits
+        # under its tier and sometimes under a section folder too, so the
+        # parent is "01 - How it works" and the slug is two levels up.
+        slug = panel.system_of(path)
+        tier = panel.tier_of(path)
+        system = slug.replace("-", " ")
+        # The tier belongs in the searchable field. The same system ships as
+        # three different projects, and "where is the punch montage" has a
+        # different answer in each; an answer that does not say which project
+        # it describes is worse than no answer for the other two.
+        question = f"{system}{' ' + tier if tier else ''} - {heading}"
         key = norm(question)
         if key in seen:
             continue
@@ -211,8 +220,9 @@ def from_docs() -> list[dict]:
                 path.stat().st_mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
             "origin": "vault",
             "kind": "doc",
-            "source": f"{path.parent.name}/{path.name}",
-            "system": path.parent.name,
+            "tier": tier,
+            "source": f"{slug}/{path.name}",
+            "system": slug,
         })
     return out
 

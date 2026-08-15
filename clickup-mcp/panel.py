@@ -573,6 +573,72 @@ def parse_answers() -> list[dict]:
 ANSWERS_KB_NAME = "05 - Answered questions.md"
 GENERAL_KB_DIR = "_general"
 
+# Who was asking. A paying customer's question is a different question: they
+# have the project files, so "where do I put this" means something else than
+# it does from someone watching the free tutorial.
+TIER_ROLES = (("LocoPremium", "Premium"), ("LocoStandard", "Standard"),
+              ("LocoBasic", "Basic"), ("Locodev's Course", "Course"))
+TIER_NOTE = {
+    "Premium": "Asked by a Premium member, who has the complete projects.",
+    "Standard": "Asked by a Standard member, who has the project files.",
+    "Basic": "Asked by a Basic member.",
+    "Course": "Asked by someone enrolled in the course.",
+    "Community": "Asked in Discord by a member carrying no tier role.",
+    "Tutorial": ("Asked in the comments of a free YouTube tutorial. There is "
+                 "no tier to look up here: the channel is the entitlement."),
+    "Unknown": ("The asker is not in the roles snapshot, having left the "
+                "server or renamed. Their tier is unknown, not assumed."),
+}
+_members_cache: tuple[float, dict] = (0.0, {})
+
+
+def _members() -> dict:
+    """The roles snapshot the collector writes, indexed by handle."""
+    global _members_cache
+    path = VAULT / "Panel" / "discord-members.json"
+    try:
+        stamp = path.stat().st_mtime
+    except OSError:
+        return {}
+    if _members_cache[0] == stamp:
+        return _members_cache[1]
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    people = raw.get("members", raw)
+    idx: dict[str, dict] = {}
+    for handle, m in people.items():
+        idx[handle.lower().lstrip("@")] = m
+        shown = (m.get("display") or m.get("name") or "").strip().lower()
+        if shown:
+            idx.setdefault(shown, m)
+    _members_cache = (stamp, idx)
+    return idx
+
+
+def member_tier(who: str, channel: str) -> str:
+    """The tier a question was asked from, never guessed.
+
+    YouTube comments are Tutorial by origin: those are people watching the
+    free video, and no tier exists to look up. Discord goes through the
+    roles snapshot. A handle that is not in it belongs to someone who left
+    the server or renamed, and that is reported as unknown rather than
+    folded into the free tier, because folding it would claim something
+    about a person the data cannot support.
+    """
+    if channel == "youtube":
+        return "Tutorial"
+    m = re.match(r"^@?([^\s(]+)", (who or "").strip())
+    person = _members().get(m.group(1).lower().lstrip("@")) if m else None
+    if not person:
+        return "Unknown"
+    roles = set(person.get("roles") or [])
+    for role, tier in TIER_ROLES:
+        if role in roles:
+            return tier
+    return "Community"
+
 
 def build_answers_kb() -> int:
     """Materialize every answered question and your actual reply into the
@@ -603,23 +669,27 @@ def build_answers_kb() -> int:
                 "q": a["q"], "a": a["a"],
             })
 
-    by_system: dict[str, list[dict]] = {}
+    by_system: dict[tuple[str, str], list[dict]] = {}
     for p in pairs:
         slug = p["system"] if p["system"] in NAME_BY_SLUG else GENERAL_KB_DIR
-        by_system.setdefault(slug, []).append(p)
+        p["tier"] = member_tier(p["who"], p["channel"])
+        by_system.setdefault((slug, p["tier"]), []).append(p)
 
     written = 0
-    for slug, items in by_system.items():
+    for (slug, tier), items in by_system.items():
         items.sort(key=lambda p: p["date"], reverse=True)
         name = NAME_BY_SLUG.get(slug, "General / catalog wide")
         lines = [
             "---",
             "tags: [locodev, kb, answered, generated]",
             f"system: {slug}",
+            f"tier: {tier.lower()}",
             "source: panel.build_answers_kb",
             "---",
             "",
-            f"# Answered questions: {name}",
+            f"# Answered questions: {name} ({tier})",
+            "",
+            TIER_NOTE.get(tier, ""),
             "",
             "Generated from your real replies (YouTube backfill plus the panel's",
             "Reply button). **Do not edit by hand**: regenerated on every collect",
@@ -628,7 +698,7 @@ def build_answers_kb() -> int:
         ]
         for p in items:
             q_head = " ".join(p["q"].split())[:120]
-            ctx = f"asked by {p['who']} · {p['date']} · {p['channel']}"
+            ctx = f"asked by {p['who']} · {p['date']} · {p['channel']} · {p['tier']}"
             if p["video"]:
                 ctx += f" · video: {p['video']}"
             lines += [
@@ -644,11 +714,19 @@ def build_answers_kb() -> int:
 
         folder = VAULT / "Systems" / slug
         folder.mkdir(parents=True, exist_ok=True)
-        path = folder / ANSWERS_KB_NAME
+        path = folder / f"{ANSWERS_KB_NAME[:-3]} - {tier}.md"
         old = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
         if old != content:
             path.write_text(content, encoding="utf-8")
             written += 1
+
+    # The pre-split file held every one of these answers under one name.
+    # Leaving it would make Suggest score each answer twice and show it
+    # twice, so the version that has been superseded goes.
+    for slug, _ in {k[0]: 1 for k in by_system}.items():
+        legacy = VAULT / "Systems" / slug / ANSWERS_KB_NAME
+        if legacy.is_file():
+            legacy.unlink()
     return written
 
 
@@ -708,10 +786,48 @@ def strip_boilerplate(text: str) -> str:
     return "\n".join(lines)
 
 
+TIER_FOLDERS = ("Premium", "Standard", "Basic", "Course", "Tutorial")
+
+
+def system_of(path: Path) -> str:
+    """The catalog slug a note belongs to, at whatever depth it sits.
+
+    The notes used to be one level under Systems, so the folder name was
+    the slug. They are now filed per tier, and a note can sit three levels
+    down; taking the parent folder would call it "01 - How it works".
+    """
+    try:
+        return path.relative_to(VAULT / "Systems").parts[0]
+    except ValueError:
+        return ""
+
+
+def tier_of(path: Path) -> str:
+    """Premium, Standard and so on, when the note is filed under one.
+
+    The same system ships as three different projects and the same question
+    has three different answers, so which project a note describes is part
+    of what the note says.
+    """
+    try:
+        parts = path.relative_to(VAULT / "Systems").parts[1:-1]
+    except ValueError:
+        return ""
+    for part in parts:
+        if part in TIER_FOLDERS:
+            return part
+    return ""
+
+
 def _all_sections() -> list[tuple[str, Path]]:
-    """Every answerable section in the catalog, read once."""
+    """Every answerable section in the catalog, read once.
+
+    Recursive since the catalog grew tier folders: a one-level glob stopped
+    seeing every note the moment they moved, and the search went quiet about
+    the best-documented system in the vault without erroring once.
+    """
     out: list[tuple[str, Path]] = []
-    for path in sorted((VAULT / "Systems").glob("*/*.md")):
+    for path in sorted((VAULT / "Systems").rglob("*.md")):
         text = strip_scaffold(path.read_text(encoding="utf-8", errors="replace"))
         for section in re.split(r"(?m)^(?=#{1,6}\s)", text):
             section = section.strip()
@@ -807,11 +923,11 @@ def suggest_answer(question: dict) -> dict:
     if system and system != "-":
         sysdir = VAULT / "Systems" / system
         if sysdir.is_dir():
-            candidates.extend(sorted(sysdir.glob("*.md")))
+            candidates.extend(sorted(sysdir.rglob("*.md")))
     if not candidates:
         # Catalog-wide or unknown system: search everything rather than
         # nothing, small corpus (a few dozen files), brute force is fine.
-        candidates.extend((VAULT / "Systems").glob("*/*.md"))
+        candidates.extend((VAULT / "Systems").rglob("*.md"))
     else:
         # General answers (licensing, tiers, compatibility) apply to a
         # system question too; the _general KB is always in scope.
