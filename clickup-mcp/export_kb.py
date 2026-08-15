@@ -125,6 +125,44 @@ def from_vault() -> list[dict]:
     return out
 
 
+def flatten_tables(text: str) -> str:
+    """Markdown tables into lines, because Discord does not draw tables.
+
+    A table reaches the reader as raw pipes and dashes, one long broken row
+    per line. Asking the model to reformat is unreliable, since it repeats
+    the shape it was given; it cannot repeat a table it never saw. The
+    header names are kept inline so a cell still says what it is.
+    """
+    out: list[str] = []
+    rows: list[list[str]] = []
+
+    def flush() -> None:
+        if not rows:
+            return
+        header = rows[0]
+        for row in rows[1:]:
+            if not any(c for c in row):
+                continue
+            first, rest = row[0], row[1:]
+            parts = [f"{header[i + 1]}: {c}" for i, c in enumerate(rest)
+                     if c and i + 1 < len(header)]
+            out.append(f"- {first}" + (" - " + ", ".join(parts) if parts else ""))
+        rows.clear()
+
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("|") and s.endswith("|"):
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            if set(s) <= set("|-: "):   # the separator row
+                continue
+            rows.append(cells)
+            continue
+        flush()
+        out.append(line)
+    flush()
+    return "\n".join(out)
+
+
 def from_docs() -> list[dict]:
     """The catalog notes, which are where the facts actually live.
 
@@ -152,6 +190,7 @@ def from_docs() -> list[dict]:
         else:
             heading = path.stem
             body = section.strip()
+        body = flatten_tables(body).strip()
         if len(body) < MIN_ANSWER:
             continue
         system = path.parent.name.replace("-", " ")
