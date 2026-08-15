@@ -582,6 +582,9 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .cfield.wide:last-child { display:flex; align-items:center; gap:var(--s3); }
 .cmsg { min-height:1em; }
 
+.stagenote { margin:-6px 0 var(--s3); color:var(--ink3);
+  font-size:var(--t-xs); padding-left:2px; }
+
 /* ---- search results, over everything ---- */
 .search { position:relative; }
 .qres { position:absolute; top:calc(100% + 6px); left:0; right:0; z-index:40;
@@ -3110,6 +3113,37 @@ def _business_card(d: dict) -> str:
             f'The business, in short</h2>{rows}</section>')
 
 
+def _sales_card(d: dict) -> str:
+    """Where people are, between never having paid and having left."""
+    stages = d.get("pipeline") or []
+    if not stages:
+        return ""
+    top = max((s["n"] for s in stages), default=1) or 1
+    rows = []
+    for s in stages:
+        width = max(2, round(s["n"] * 100 / top))
+        tone = "r" if s.get("urgent") else ("g" if s["value"] else "a")
+        names = ""
+        if s.get("names"):
+            names = " &middot; " + ", ".join(escape(n) for n in s["names"])
+        rows.append(
+            f'<div class="orow"><span class="olabel">{escape(s["stage"])}</span>'
+            f'{_bar(width, tone)}'
+            f'<span class="ovals"><b>{_fmt(s["n"])}</b>'
+            f'<br><span class="note">{escape(s["value"]) if s["value"] else ""}</span>'
+            f'</span></div>'
+            f'<p class="note stagenote">{escape(s["note"])}{names}</p>'
+        )
+    return (
+        f'<section class="card" id="sales">'
+        f'<h2><span class="he">💳</span>Where people are</h2>'
+        f'<p class="note">Only what Patreon can prove. A sale made anywhere '
+        f'else, on the website or by hand, is not in this and would have to '
+        f'come from wherever it was recorded.</p>'
+        f'{"".join(rows)}</section>'
+    )
+
+
 def _community_card(d: dict) -> str:
     """How many people each channel actually reaches.
 
@@ -3904,6 +3938,7 @@ _NAV = [
     ("questions", "chat", "Inbox", "open_q"),
     ("answers", "check", "Answered", "answers"),
     ("people", "users", "Customers", ""),
+    ("sales", "target", "Sales", ""),
     ("systems", "flame", "Products", ""),
     ("videos", "video", "Videos", ""),
     ("links", "link", "Links", ""),
@@ -4063,7 +4098,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 <div class="cols2">
 {_stamp_views(_answers_card(d) + _system_pressure_card(d, facets))}
 </div>
-{_stamp_views(_links_card() + _sync_card(d) + _wingman_card(d))}
+{_stamp_views(_sales_card(d) + _links_card() + _sync_card(d) + _wingman_card(d))}
 <div class="grid3">
 {_stamp_views(_people_card(d) + _videos_card(d) + _sources_card(instrumentation, d))}
 </div>

@@ -2236,6 +2236,58 @@ def youtube_channel_stats(max_age_hours: int = 6) -> dict:
     return out
 
 
+def sales_pipeline(people: list) -> list:
+    """The stages a customer actually passes through here.
+
+    Not the stages a CRM template offers. Patreon knows who follows, who
+    pays, whose card just failed and who left; the panel knows who asked
+    something without ever paying, which is a warmer lead than a silent
+    follower. Anything needing a salesperson's judgement is only here when
+    you have written it down yourself.
+    """
+    try:
+        raw = json.loads((VAULT / "Panel" / "patreon-members.json")
+                         .read_text(encoding="utf-8")).get("members", [])
+    except (OSError, ValueError):
+        raw = []
+
+    following = [m for m in raw if not m.get("status")]
+    paying = [m for m in raw if m.get("status") == "active_patron"]
+    declined = [m for m in raw if m.get("status") == "declined_patron"]
+    stopped = [m for m in raw if m.get("status") == "former_patron"]
+
+    asked_not_paying = [p for p in people
+                        if not (p.get("patron") or {}).get("paying") and p["asked"]]
+    marked = [p for p in people
+              if (p.get("note") or {}).get("status") in
+              ("Talking", "Interested", "Ready to buy")]
+
+    def money(rows, key):
+        return sum(r.get(key, 0) for r in rows) / 100
+
+    return [
+        {"stage": "Following, never paid", "n": len(following),
+         "note": "on Patreon at no cost", "value": ""},
+        {"stage": "Asked something, does not pay", "n": len(asked_not_paying),
+         "note": "they came with a question, which is warmer than a follow",
+         "value": ""},
+        {"stage": "You marked them as a lead", "n": len(marked),
+         "note": "talking, interested or ready to buy, in your own words",
+         "value": "", "names": [p["who"] for p in marked[:5]]},
+        {"stage": "Paying now", "n": len(paying), "note": "active patrons",
+         "value": f"US$ {money(paying, 'monthly_cents'):,.0f} a month"},
+        # The stage nobody sees: their card failed, they have not left yet,
+        # and every day that passes makes the win-back harder.
+        {"stage": "Payment just failed", "n": len(declined),
+         "note": "still subscribed, but the last charge did not go through",
+         "value": f"US$ {money(declined, 'lifetime_cents'):,.0f} paid before",
+         "urgent": True},
+        {"stage": "Stopped paying", "n": len(stopped),
+         "note": "gone, and they used to pay",
+         "value": f"US$ {money(stopped, 'lifetime_cents'):,.0f} earned while they stayed"},
+    ]
+
+
 def patreon_summary() -> dict:
     """The paying side in numbers, for the home page.
 
@@ -2426,6 +2478,7 @@ def scan() -> dict:
         "patrons": patrons_by_handle(),
         "patreon": patreon_summary(),
         "youtube": youtube_channel_stats(),
+        "pipeline": sales_pipeline(people),
         "discord_members": len((_members() or {})),
         "sync": sync_report(),
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
