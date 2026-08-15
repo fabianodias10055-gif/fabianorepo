@@ -83,6 +83,26 @@ def get_secret(name: str, default: str = "") -> str:
     return stored or default
 
 
+def looks_like_secret(value: str) -> str:
+    """Empty when the value could be a credential, else why it cannot be.
+
+    Reading the clipboard has one obvious failure that costs an hour to
+    find: the last thing copied is usually the command you pasted to run
+    this, so the command gets stored and every call fails with 401 as if
+    the token were revoked. A credential has no spaces and is not a path,
+    and refusing here turns that hour into a sentence.
+    """
+    if not value:
+        return "it is empty"
+    if any(c.isspace() for c in value):
+        return "it contains spaces or line breaks"
+    if re.match(r"^[A-Za-z]:[\\/]", value) or value.startswith(("\\\\", "./", ".\\")):
+        return "it looks like a file path"
+    if len(value) > 600:
+        return f"it is {len(value)} characters, which is longer than any token"
+    return ""
+
+
 def set_secret(name: str, value: str) -> bool:
     if keyring is None:
         return False
@@ -222,8 +242,12 @@ def main() -> int:
         except (OSError, subprocess.SubprocessError) as exc:
             print(f"ERROR: could not read the clipboard: {type(exc).__name__}")
             return 1
-        if not value:
-            print("The clipboard is empty. Copy the value first, then run this.")
+        why = looks_like_secret(value)
+        if why:
+            print(f"The clipboard does not hold a credential: {why}.")
+            print("The usual cause is that the last thing copied was the "
+                  "command you pasted to run this. Copy the token, then "
+                  "press the up arrow to recall this command and Enter.")
             return 1
         set_secret(args.set_from_clipboard, value)
         # Length and the first characters only: enough to confirm the right
@@ -241,8 +265,9 @@ def main() -> int:
         print("Type or paste, then press Enter. Nothing will appear on screen "
               "while you type. That is deliberate, not a frozen prompt.")
         value = getpass(f"value for {args.set} (not echoed): ").strip()
-        if not value:
-            print("nothing entered")
+        why = looks_like_secret(value)
+        if why:
+            print(f"That is not a credential: {why}. Nothing was stored.")
             return 1
         set_secret(args.set, value)
         print(f"{args.set} stored in {SERVICE}: {len(value)} characters")
