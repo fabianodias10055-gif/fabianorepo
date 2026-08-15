@@ -66,6 +66,11 @@ DEFAULT_CHANNELS = ",".join((
     "1230971979515826277",   # cpp-tips
     "1158854094597935155",   # als-coding-tips
     "1158414318975582309",   # funny-bugs
+    # People ask real questions here between the greetings, and it is the
+    # one place the bot cannot be relied on to catch them: a question sent
+    # while the bot is restarting is never delivered to it, and this poll is
+    # what finds it afterwards.
+    "1158395982485147689",   # welcome
 ))
 
 MIN_QUESTION_LEN = 25
@@ -353,9 +358,24 @@ CLOSERS = ("thank", "thanks", "tks", "obrigad", "worked", "solved", "fixed it",
            "nice work", "love it", "keep it up", "well done")
 
 
+_URL_ONLY = re.compile(r"https?://\S+")
+# "Nice, if you need help, we're here" is someone offering, and it carries
+# the same words as someone asking. Reading the offer as a request files a
+# helper's kindness in the queue as work to do.
+OFFERS = ("if you need help", "if u need help", "we're here", "were here",
+          "happy to help", "here to help", "let me know if you need",
+          "feel free to ask", "you can ask")
+
+
 def looks_like_question(text: str) -> bool:
     t = " ".join(text.split()).lower()
+    # A pasted link with nothing around it says nothing to search on and
+    # nothing to answer; the length test passes it because a URL is long.
+    if len(_URL_ONLY.sub("", t).strip()) < MIN_QUESTION_LEN:
+        return False
     if len(t) < MIN_QUESTION_LEN:
+        return False
+    if "?" not in t and any(o in t for o in OFFERS):
         return False
     # Someone closing a thread often uses a marker word in passing
     # ("this is not the first time I buy from you"). Gratitude with no
