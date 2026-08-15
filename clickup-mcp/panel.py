@@ -836,6 +836,42 @@ def _kb_file(path: Path) -> tuple[list, float]:
         return [], 0.0
 
 
+def doc_backlog(rows: list[dict]) -> list[dict]:
+    """Which system to write about next, ordered by how much people ask.
+
+    A system nobody asks about can stay undocumented for another year with
+    no cost. The one with a hundred people waiting cannot, and the two
+    numbers side by side are the whole argument: the punch has the most
+    written and the fewest people still waiting.
+    """
+    waiting: dict[str, int] = {}
+    for q in parse_questions():
+        if q["status"] != "answered" and q.get("system"):
+            waiting[q["system"]] = waiting.get(q["system"], 0) + 1
+
+    by_slug: dict[str, dict] = {}
+    for r in rows:
+        slug = r["slug"]
+        if not slug:
+            continue
+        cur = by_slug.setdefault(slug, {"slug": slug, "written": 0, "notes": 0,
+                                        "empty": 0, "in_bot": 0})
+        if r["state"] == "generated":
+            continue
+        cur["notes"] += 1
+        cur["written"] += r["written"]
+        cur["empty"] += 1 if r["state"] == "silent" else 0
+        cur["in_bot"] += 1 if r["state"] == "delivered" else 0
+
+    out = []
+    for slug, info in by_slug.items():
+        info["name"] = NAME_BY_SLUG.get(slug, slug)
+        info["waiting"] = waiting.get(slug, 0)
+        out.append(info)
+    out.sort(key=lambda x: (-x["waiting"], x["written"]))
+    return out
+
+
 def sync_report() -> dict:
     """What each assistant knows, and which notes never reached one.
 
@@ -887,30 +923,43 @@ def sync_report() -> dict:
     answers_shipped = sum(1 for e in shipped if e.get("kind") != "doc")
     stale = bool(exported) and bool(shipped) and exp_stamp - ship_stamp > 120
 
+    readable = sum(1 for r in rows if r["state"] != "generated")
+    in_bot = sum(1 for r in rows if r["state"] == "delivered")
     consumers = [{
-        "name": "LocoAI on Discord",
-        "where": "Railway, reads the Drive copy hourly",
+        "key": "locoai",
+        "name": "LocoAI, the Discord bot",
+        "route": "your vault → Google Drive → the bot",
+        "how": ("It answers people in Discord. It gets a copy of your notes "
+                "through Google Drive, once an hour. A note with nothing "
+                "written in it has nothing to copy, so the bot never sees it."),
         "knows": len(shipped),
-        "detail": f"{answers_shipped} answers, {docs_shipped} documentation sections",
+        "detail": f"{answers_shipped} answers you gave and {docs_shipped} "
+                  f"pieces of your notes, from {in_bot} notes",
         "stamp": (datetime.fromtimestamp(ship_stamp).strftime("%Y-%m-%d %H:%M")
                   if ship_stamp else ""),
-        "state": ("waiting" if not shipped else "stale" if stale else "current"),
-        "note": ("nothing has been shipped yet" if not shipped else
-                 "the export is newer than the shipped copy" if stale else
-                 "carrying everything the last export produced"),
+        "state": ("nothing sent yet" if not shipped else
+                  "waiting for the next copy" if stale else "up to date"),
+        "note": ("nothing has been sent to it yet" if not shipped else
+                 "you wrote something new; the bot gets it within the hour"
+                 if stale else "it has everything you have written so far"),
     }, {
-        "name": "Wingman",
-        "where": "reads the vault directly on this machine",
-        "knows": 0,
-        "detail": "not wired to the export yet",
-        "stamp": "",
-        "state": "waiting",
-        "note": "reads notes straight from the vault, so nothing is shipped to it",
+        "key": "wingman",
+        "name": "Wingman, here on this computer",
+        "route": "opens the vault files directly",
+        "how": ("It writes documentation by reading your Unreal projects. It "
+                "opens the vault files itself, so it can read every note, "
+                "including the empty ones the bot cannot use."),
+        "knows": readable,
+        "detail": f"{readable} notes it can open, nothing is copied anywhere",
+        "stamp": "always",
+        "state": "up to date",
+        "note": "there is no copy to go out of date: it reads the real file",
     }]
 
     return {
         "rows": rows,
         "consumers": consumers,
+        "backlog": doc_backlog(rows),
         "exported": len(exported),
         "export_stamp": (datetime.fromtimestamp(exp_stamp).strftime("%Y-%m-%d %H:%M")
                          if exp_stamp else ""),

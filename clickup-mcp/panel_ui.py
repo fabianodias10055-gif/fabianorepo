@@ -876,6 +876,21 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
   font-variant-numeric:tabular-nums; }
 .vtag { background:var(--mute-bg); color:var(--ink2); border-radius:var(--r-xs);
   padding:2px 7px; font-size:var(--t-2xs); font-family:var(--mono); flex:none; }
+/* One block per assistant: the name, how it gets its copy, and what it has.
+   The route line is the answer to "where is this going", which the first
+   version of this card left the reader to infer. */
+.who { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:var(--s4);
+  align-items:start; padding:var(--s3) 0; border-bottom:1px solid var(--line2); }
+.who .nm { font-weight:640; font-size:var(--t-base); margin-right:var(--s2); }
+.who .route { font-family:var(--mono); font-size:var(--t-2xs); color:var(--accent); }
+.who .note { color:var(--ink3); font-size:var(--t-xs); display:block;
+  max-width:62ch; line-height:1.5; }
+.who .cnt { text-align:right; }
+.who .cnt b { font-family:var(--mono); font-size:var(--t-lg);
+  font-variant-numeric:tabular-nums; }
+.who .cnt .note { max-width:30ch; margin-left:auto; }
+@media (max-width:720px) { .who { grid-template-columns:1fr; }
+  .who .cnt { text-align:left; } .who .cnt .note { margin-left:0; } }
 .srow { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:var(--s3);
   align-items:center; padding:var(--s2) 0; border-bottom:1px solid var(--line2);
   font-size:var(--t-sm); }
@@ -2775,11 +2790,16 @@ def _sources_card(instrumentation: list) -> str:
     )
 
 
+# Plain words, because these are read by the person who wrote the notes and
+# not by whoever built the pipeline. "Delivered" and "silent" meant nothing
+# to the one reader this screen has.
 _SYNC_STATE = {
-    "delivered": ("ok", "reaching the bot"),
-    "pending": ("partial", "written, not shipped yet"),
-    "silent": ("blind", "carries nothing an assistant can use"),
-    "generated": ("no-source", "generated from answers, sent as answers"),
+    "delivered": ("ok", "Yes", "the bot can answer from this note"),
+    "pending": ("partial", "Not yet", "written, but the copy has not gone out"),
+    "silent": ("blind", "Nothing to send",
+               "the note is empty, so there is nothing for the bot to learn"),
+    "generated": ("no-source", "Sent as answers",
+                  "this file is written for you from answers you already gave"),
 }
 
 
@@ -2793,53 +2813,97 @@ def _sync_card(d: dict) -> str:
 
     who = []
     for c in s.get("consumers") or []:
+        pill = ("ok" if c["state"] == "up to date"
+                else "partial" if c["state"] == "waiting for the next copy"
+                else "no-source")
         who.append(
-            f'<div class="srow"><span><span class="nm">{escape(c["name"])}</span><br>'
-            f'<span class="note">{escape(c["where"])} &middot; {escape(c["note"])}</span></span>'
-            f'<span class="vol">{_fmt(c["knows"])}<br>'
-            f'<span class="note">{escape(c["stamp"] or "never")}</span></span>'
-            f'<span class="pill st-{"ok" if c["state"] == "current" else "partial" if c["state"] == "stale" else "no-source"}">'
-            f'{escape(c["state"])}</span></div>'
+            f'<div class="who"><div><span class="nm">{escape(c["name"])}</span>'
+            f'<span class="pill st-{pill}">{escape(c["state"])}</span><br>'
+            f'<span class="route">{escape(c["route"])}</span><br>'
+            f'<span class="note">{escape(c["how"])}</span></div>'
+            f'<div class="cnt"><b>{_fmt(c["knows"])}</b><br>'
+            f'<span class="note">{escape(c["detail"])}<br>'
+            f'last copy: {escape(c["stamp"] or "never")}</span></div></div>'
         )
 
-    # Silent first: a note that delivers nothing is the only row here that
-    # asks the reader to do something.
+    # Empty notes first: a note the bot already has asks nothing of anyone.
     order = {"silent": 0, "pending": 1, "delivered": 2, "generated": 3}
     body = []
     for r in sorted(rows, key=lambda x: (order.get(x["state"], 9), x["rel"])):
-        cls, why = _SYNC_STATE.get(r["state"], ("unknown", ""))
+        cls, label, why = _SYNC_STATE.get(r["state"], ("unknown", "?", ""))
+        extra = f' ({_fmt(r["shipped"])} pieces)' if r["state"] == "delivered" else ""
         tier = f' <span class="tag">{escape(r["tier"])}</span>' if r["tier"] else ""
         body.append(
             f'<tr data-state="{escape(r["state"], quote=True)}">'
             f'<td><span class="nm">{escape(r["name"])}</span>{tier}<br>'
             f'<span class="note">{escape(r["rel"])}</span></td>'
             f'<td class="num">{_fmt(r["written"])}</td>'
-            f'<td class="num">{_fmt(r["sections"])}</td>'
-            f'<td class="num">{_fmt(r["shipped"])}</td>'
             f'<td><span class="pill st-{cls}" title="{escape(why, quote=True)}">'
-            f'{escape(r["state"])}</span></td>'
+            f'{escape(label)}</span>{extra}</td>'
+            f'<td><span class="pill st-ok">Yes</span></td>'
             f'<td class="note">{escape(r["modified"])}</td></tr>'
         )
 
-    exported = s.get("exported", 0)
-    stamp = s.get("export_stamp") or "never"
+    empty = s.get("silent", 0)
     summary = (
-        f'<p class="note">{_fmt(exported)} pieces of knowledge exported at {escape(stamp)} '
-        f'&middot; <b>{_fmt(s.get("delivered", 0))}</b> notes reaching an assistant '
-        f'&middot; <b>{_fmt(s.get("silent", 0))}</b> silent '
-        f'&middot; {_fmt(s.get("generated", 0))} generated. '
-        f'A silent note is written but delivers nothing: too short to count as a '
-        f'section, or filed where the catalog does not look.</p>'
+        f'<p class="note">Every note you have written, and whether each '
+        f'assistant can use it. <b>{_fmt(s.get("delivered", 0))}</b> notes are '
+        f'in the Discord bot. <b>{_fmt(empty)}</b> are still empty, so there is '
+        f'nothing in them for it to learn. Wingman reads the files here, so it '
+        f'can open all of them either way.</p>'
     )
 
     return (
         f'<section class="card" id="sync">'
-        f'<h2><span class="he">🔄</span>Knowledge delivery</h2>'
+        f'<h2><span class="he">🔄</span>Who knows what</h2>'
         f'{"".join(who)}{summary}'
         f'<div class="scroll"><table><thead><tr>'
-        f'<th>Note</th><th class="num">Written</th><th class="num">Sections</th>'
-        f'<th class="num">Shipped</th><th>State</th><th>Modified</th>'
+        f'<th>Note</th><th class="num">Letters you wrote</th>'
+        f'<th>Discord bot knows it?</th><th>Wingman can read it?</th>'
+        f'<th>Last edited</th>'
         f'</tr></thead><tbody>{"".join(body)}</tbody></table></div>'
+        f'</section>'
+    )
+
+
+def _wingman_card(d: dict) -> str:
+    s = d.get("sync") or {}
+    backlog = [b for b in (s.get("backlog") or []) if b["waiting"] or b["written"]]
+    if not backlog:
+        return ""
+
+    rows = []
+    for b in backlog[:24]:
+        # The comparison that decides the order: people waiting against how
+        # much has been written for them.
+        if b["waiting"] >= 40 and b["written"] < 1000:
+            cls, label = "blind", "write this first"
+        elif b["written"] < 1000:
+            cls, label = "partial", "nothing written yet"
+        else:
+            cls, label = "ok", "documented"
+        rows.append(
+            f'<tr><td><span class="nm">{escape(b["name"])}</span><br>'
+            f'<span class="note">{escape(b["slug"])}</span></td>'
+            f'<td class="num">{_fmt(b["waiting"])}</td>'
+            f'<td class="num">{_fmt(b["written"])}</td>'
+            f'<td class="num">{_fmt(b["notes"] - b["empty"])} of {_fmt(b["notes"])}</td>'
+            f'<td><span class="pill st-{cls}">{escape(label)}</span></td></tr>'
+        )
+
+    return (
+        f'<section class="card" id="wingman">'
+        f'<h2><span class="he">✍️</span>Wingman: what to write next</h2>'
+        f'<p class="note">Wingman reads your Unreal projects here on this '
+        f'computer and writes the notes. This is the order that matters: how '
+        f'many people are waiting for an answer about a system, against how '
+        f'much has been written about it. The brief it follows is '
+        f'<code>clickup-mcp/WINGMAN_BRIEF.md</code>.</p>'
+        f'<div class="scroll"><table><thead><tr>'
+        f'<th>System</th><th class="num">People waiting</th>'
+        f'<th class="num">Letters written</th><th class="num">Notes with text</th>'
+        f'<th>Where it stands</th>'
+        f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
         f'</section>'
     )
 
@@ -2852,7 +2916,8 @@ _NAV = [
     ("people", "users", "People", ""),
     ("videos", "video", "Videos", ""),
     ("links", "link", "Links", ""),
-    ("sync", "refresh", "Sync", "silent"),
+    ("sync", "refresh", "Who knows what", "silent"),
+    ("wingman", "sparkle", "Wingman", ""),
     ("sources", "database", "Sources", ""),
 ]
 
@@ -2976,6 +3041,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 </div>
 {_links_card()}
 {_sync_card(d)}
+{_wingman_card(d)}
 <div class="grid3">
 {_people_card(d)}
 {_videos_card(d)}
