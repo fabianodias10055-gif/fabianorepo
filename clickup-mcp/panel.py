@@ -16,6 +16,7 @@ refreshes itself within a couple of seconds.
 """
 
 import argparse
+import difflib
 import hashlib
 import http.server
 import json
@@ -464,7 +465,48 @@ def update_question_status(qid: str, new_status: str) -> bool:
     return False
 
 
-def append_answered_log(question: dict, answer: str, posted_to_youtube: bool) -> None:
+def answer_provenance(question: dict, answer: str, offer: dict) -> dict:
+    """How this answer came to be, worked out once and written down.
+
+    Every count the panel wants to show about the assistant rests on this:
+    what it offered, how much of that survived, and how long the person had
+    been waiting. None of it can be recovered later from the answer alone,
+    which is why it is recorded at the moment of sending rather than
+    inferred afterwards.
+    """
+    offered = str(offer.get("offer_text") or "")
+    mode = str(offer.get("offer_mode") or "")
+    written_by = {"search": "vault", "draft": "claude"}.get(mode, "hand")
+    if not offered.strip():
+        written_by = "hand"
+
+    # How much of the offer is still in what was sent. Whole-string ratio
+    # rather than a diff of words: a reply that keeps the substance and
+    # rewrites the opening should not read as written from scratch.
+    kept = ""
+    if written_by != "hand":
+        ratio = difflib.SequenceMatcher(None, " ".join(offered.split()),
+                                        " ".join(answer.split())).ratio()
+        kept = str(round(ratio * 100))
+
+    waited = ""
+    try:
+        asked = datetime.strptime(question.get("date", "")[:10], "%Y-%m-%d")
+        waited = str(max(0, (datetime.now() - asked).days))
+    except (ValueError, TypeError):
+        pass
+
+    return {
+        "written_by": written_by,
+        "kept": kept,
+        "offered_confidence": str(offer.get("offer_confidence") or "") if written_by != "hand" else "",
+        "offered_from": str(offer.get("offer_source") or "") if written_by != "hand" else "",
+        "waited_days": waited,
+    }
+
+
+def append_answered_log(question: dict, answer: str, posted_to_youtube: bool,
+                        provenance: dict | None = None) -> None:
     """Durable record of every reply sent from the panel.
 
     Deliberately a separate, always-appended file rather than writing into a
@@ -491,13 +533,23 @@ def append_answered_log(question: dict, answer: str, posted_to_youtube: bool) ->
         where += f"\nvideo_id: {question['video_id']}"
     if question.get("video_url"):
         where += f"\nvideo_url: {question['video_url']}"
+    # How the answer came to be, one field per fact, so counting later is
+    # reading rather than guessing. Blank fields are left out entirely: an
+    # empty "kept:" would read as nothing kept.
+    prov = ""
+    for key in ("written_by", "kept", "offered_confidence", "offered_from",
+                "waited_days"):
+        val = (provenance or {}).get(key, "")
+        if val != "":
+            prov += f"\n{key}: {val}"
+
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     block = (
         f"\n### {stamp} reply to {question['who']}\n"
         f"question: {question.get('code', '')}\n"
         f"channel: {question['channel']}\n"
         f"system: {question['system']}{where}\n"
-        f"posted_to_platform: {'yes' if posted_to_youtube else 'no'}\n\n"
+        f"posted_to_platform: {'yes' if posted_to_youtube else 'no'}{prov}\n\n"
         f"**Q:** {question['text']}\n\n"
         f"**A:** {answer}\n"
     )
@@ -544,7 +596,8 @@ def parse_answers() -> list[dict]:
         for line in block.splitlines():
             fm = re.match(
                 r"^(channel|system|video|video_id|video_url|question|"
-                r"posted_to_platform):\s*(.*)$", line.strip())
+                r"posted_to_platform|written_by|kept|offered_confidence|"
+                r"offered_from|waited_days):\s*(.*)$", line.strip())
             if fm:
                 fields[fm.group(1)] = fm.group(2).strip()
         qm = re.search(r"\*\*Q:\*\*\s*(.*?)(?=\n\*\*A:\*\*|\Z)", block, re.S)
@@ -563,6 +616,13 @@ def parse_answers() -> list[dict]:
                           or (f"https://www.youtube.com/watch?v={video_id}"
                               if video_id else "")),
             "posted": fields.get("posted_to_platform", "no") == "yes",
+            # Absent on everything filed before this was recorded, which is
+            # every answer so far; "" reads as unknown, never as "by hand".
+            "written_by": fields.get("written_by", ""),
+            "kept": fields.get("kept", ""),
+            "offered_confidence": fields.get("offered_confidence", ""),
+            "offered_from": fields.get("offered_from", ""),
+            "waited_days": fields.get("waited_days", ""),
             "q": " ".join((qm.group(1) if qm else "").split()),
             "a": (am.group(1).strip() if am else ""),
         })
@@ -2677,7 +2737,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     posted, platform_msg = post_discord_reply(*target, answer)
 
             update_question_status(qid, "answered")
-            append_answered_log(question, answer, posted)
+            append_answered_log(question, answer, posted,
+                                answer_provenance(question, answer, payload))
             # The reply becomes searchable knowledge immediately: the next
             # Suggest for the same topic finds it.
             build_answers_kb()

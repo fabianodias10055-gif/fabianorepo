@@ -1810,8 +1810,16 @@ function runReply(det) {
   btn.disabled = true;
   btn.classList.add("spin");
   msg.textContent = "Updating the vault...";
+  var offer = {};
+  try { offer = JSON.parse(det.dataset.offer || "{}"); } catch (e) { offer = {}; }
   fetch("/reply", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: det.dataset.id, text: text }) })
+    body: JSON.stringify({
+      id: det.dataset.id, text: text,
+      /* How this answer came to be. The server works out how much of the
+         offer survived; the page only reports what it was handed. */
+      offer_mode: offer.mode || "", offer_text: offer.text || "",
+      offer_confidence: offer.confidence || 0, offer_source: offer.source || "",
+    }) })
     .then(function (r) { return r.json(); })
     .then(function (s) {
       btn.classList.remove("spin");
@@ -1965,6 +1973,15 @@ function aiRender(det, mode, s, btn) {
       var box = det.querySelector(".qbox");
       box.value = s.answer;
       ss("lp-draft:" + det.dataset.id, box.value);
+      /* What was offered, kept beside the row until the reply is sent.
+         Without it nothing downstream can tell an answer the assistant
+         wrote from one that was typed, and every count of how much it
+         helped is a guess. */
+      det.dataset.offer = JSON.stringify({
+        mode: mode, text: s.answer,
+        confidence: s.confidence || 0,
+        source: (s.sources || []).join(" · "),
+      });
       box.focus();
     });
     out.appendChild(use);
