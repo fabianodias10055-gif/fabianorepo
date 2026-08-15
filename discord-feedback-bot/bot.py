@@ -5816,11 +5816,43 @@ _KB_QUESTION_STARTERS = {
     "help", "having", "having", "getting", "trying", "unable",
 }
 
+# Someone with a broken build rarely writes a question. "my climbing is
+# broken when i use gasp" wants an answer as much as any "how do I" does,
+# and a bot that waits for a question mark ignores the people who most need
+# it. Ported from the panel's collector, which learned these the hard way.
+_PROBLEM_MARKERS = (
+    "doesn't work", "does not work", "dont work", "not working", "won't work",
+    "wont work", "isn't working", "isnt working", "stopped working",
+    "crash", "error", "bug", "broken", "stuck", "freeze", "glitch",
+    "can't", "cant ", "cannot", "unable to", "fails", "failing", "failed",
+    "issue", "problem", "not able", "no idea how", "dont know how",
+    "don't know how", "i need help", "need help", "help me", "any help",
+    "i need the", "i want to", "im trying", "i'm trying", "trying to",
+    "does not have", "doesn't have", "i dont see", "i don't see",
+    "not showing", "not appearing", "missing", "wrong",
+)
+# "the montage is not playing", "the trace is not detecting": the shape is
+# "<thing> is not <verb>ing", which no single phrase above catches.
+_NEGATED_VERB = re.compile(r"\b(is|are|was|were|does|do|did|will|wont|won.t)\s+not\s+\w+")
+# Gratitude closes a thread, it does not open one. Without this the bot
+# answers "thanks, that fixed my crash" as though a crash were being reported.
+_CLOSERS = ("thank", "thanks", "tks", "obrigad", "worked", "solved", "fixed it",
+            "amazing", "awesome", "great work", "great stuff", "congrat",
+            "nice work", "love it", "keep it up", "well done")
+
+
 def _looks_like_question(text: str) -> bool:
     """Return True if text is plausibly a question or support request."""
-    if "?" in text:
+    t = " ".join((text or "").split()).lower()
+    if not t:
+        return False
+    if len(t) < 160 and "?" not in t and any(c in t for c in _CLOSERS):
+        return False
+    if any(m in t for m in _PROBLEM_MARKERS) or _NEGATED_VERB.search(t):
         return True
-    words = text.lower().split()
+    if "?" in t:
+        return True
+    words = t.split()
     return bool(words) and words[0] in _KB_QUESTION_STARTERS and len(words) >= 4
 
 def _kb_search_scored(query: str, top_n: int = 3, min_score: int = 1,
