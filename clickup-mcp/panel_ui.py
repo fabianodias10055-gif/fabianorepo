@@ -2997,22 +2997,65 @@ def _people_card(d: dict) -> str:
         )
         rows.append(
             f'<tr class="{hid.strip()}"><td><span class="uc">{_avatar(p["who"], "sm")}'
-            f'<span class="n">{escape(p["who"])}{tags}</span>{marks}</span></td>'
+            f'<span class="n">{escape(p["who"])}{tags}</span>{marks}</span>'
+            f'{_patron_line(p)}</td>'
+            f'<td>{_pays(p)}</td>'
             f'<td class="num">{p["asked"]}</td><td class="num">{p["open"]}</td>'
             f'<td class="num">{p["last"]}</td></tr>'
         )
-    more = (f'<button class="linkbtn" data-viewall>View all {len(d["people"])} users</button>'
+    more = (f'<button class="linkbtn" data-viewall>View all {len(d["people"])} people</button>'
             if len(d["people"]) > 8 else "")
     body = "".join(rows) if rows else (
-        '<tr><td colspan="4"><div class="empty">Nobody logged yet.</div></td></tr>')
+        '<tr><td colspan="5"><div class="empty">Nobody logged yet.</div></td></tr>')
+
+    paying = [p for p in d["people"] if p.get("patron", {}).get("paying")]
+    monthly = sum(p["patron"]["monthly_cents"] for p in paying)
+    owed = [p for p in paying if p["open"]]
+    head = f'{_fmt(len(d["people"]))} people'
+    if paying:
+        head += (f' &middot; {len(paying)} paying, US$ {monthly / 100:,.0f}/mo'
+                 f'{f" &middot; {len(owed)} waiting on you" if owed else ""}')
     return (
         f'<section class="card" id="people"><h2><span class="he">👥</span>Customers'
-        f'<span class="cnt">{_fmt(len(d["people"]))} people</span></h2>'
-        f'<div class="scroll"><table aria-label="People asking questions"><thead><tr>'
-        f'<th scope="col">User</th><th scope="col">Asked</th>'
-        f'<th scope="col">Open</th><th scope="col">Last</th></tr></thead>'
+        f'<span class="cnt">{head}</span></h2>'
+        f'<p class="note">Paying customers with an unanswered question come '
+        f'first. Money shows only where someone linked their Patreon to their '
+        f'Discord; everyone else may well be paying and nothing here says so.</p>'
+        f'<div class="scroll"><table aria-label="Customers"><thead><tr>'
+        f'<th scope="col">Person</th><th scope="col">Paying</th>'
+        f'<th scope="col">Asked</th><th scope="col">Waiting</th>'
+        f'<th scope="col">Last seen</th></tr></thead>'
         f'<tbody>{body}</tbody></table></div>{more}</section>'
     )
+
+
+def _patron_line(p: dict) -> str:
+    """The customer's real name and how long they have been paying."""
+    pat = p.get("patron") or {}
+    if not pat:
+        return ""
+    bits = []
+    if pat.get("name"):
+        bits.append(escape(pat["name"]))
+    if pat.get("since"):
+        bits.append(f'customer since {escape(pat["since"][:7])}')
+    if pat.get("lifetime_cents"):
+        bits.append(f'US$ {pat["lifetime_cents"] / 100:,.0f} in total')
+    return f'<br><span class="note">{" &middot; ".join(bits)}</span>' if bits else ""
+
+
+def _pays(p: dict) -> str:
+    pat = p.get("patron") or {}
+    if not pat:
+        return '<span class="note">-</span>'
+    if not pat.get("paying"):
+        # Someone who used to pay is a different person to talk to than
+        # someone who never did, so the difference is on the row.
+        return '<span class="pill st-no-source">was paying</span>'
+    tier = ", ".join(t for t in pat.get("tiers", []) if t and t != "Free")
+    money = f'US$ {pat["monthly_cents"] / 100:,.0f}/mo' if pat.get("monthly_cents") else "free tier"
+    return (f'<span class="pill st-ok">{escape(tier or "patron")}</span>'
+            f'<br><span class="note">{money}</span>')
 
 
 def _videos_card(d: dict) -> str:

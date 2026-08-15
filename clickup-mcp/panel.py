@@ -2041,6 +2041,52 @@ def build_gaps(questions: list[dict]) -> list[dict]:
     return gaps
 
 
+_patrons_cache: tuple[float, dict] = (0.0, {})
+
+
+def patrons_by_handle() -> dict:
+    """Paying customers, keyed by the Discord handle they ask questions under.
+
+    Patreon publishes the Discord account a patron linked, and the member
+    snapshot carries the same id, so the two sides meet on a number rather
+    than on a name that happens to look similar. Anyone who never linked
+    their account simply is not here, which is the honest answer: they may
+    well be paying, and nothing in the data says so.
+    """
+    global _patrons_cache
+    pat_path = VAULT / "Panel" / "patreon-members.json"
+    disc_path = VAULT / "Panel" / "discord-members.json"
+    try:
+        stamp = pat_path.stat().st_mtime + disc_path.stat().st_mtime
+    except OSError:
+        return {}
+    if _patrons_cache[0] == stamp:
+        return _patrons_cache[1]
+    try:
+        pat = json.loads(pat_path.read_text(encoding="utf-8")).get("members", [])
+        disc = json.loads(disc_path.read_text(encoding="utf-8")).get("members", {})
+    except (OSError, ValueError):
+        return {}
+
+    handle_by_id = {v["id"]: v.get("handle", "") for v in disc.values() if v.get("id")}
+    out: dict[str, dict] = {}
+    for p in pat:
+        handle = handle_by_id.get(p.get("discord_id") or "", "")
+        if not handle:
+            continue
+        out[handle.lower()] = {
+            "name": p.get("name", ""),
+            "tiers": p.get("tiers") or [],
+            "monthly_cents": p.get("monthly_cents") or 0,
+            "lifetime_cents": p.get("lifetime_cents") or 0,
+            "since": p.get("since", ""),
+            "paying": p.get("status") == "active_patron",
+            "status": p.get("status", ""),
+        }
+    _patrons_cache = (stamp, out)
+    return out
+
+
 def build_people(questions: list[dict]) -> list[dict]:
     people: dict[str, dict] = {}
     for q in questions:
@@ -2062,7 +2108,20 @@ def build_people(questions: list[dict]) -> list[dict]:
             p["esc"] += 1
         if q["subscriber"] != "unknown":
             p["subscriber"] = q["subscriber"]
-    ordered = sorted(people.values(), key=lambda p: (-p["open"], -p["asked"]))
+    # What each of them is paying, when the two accounts have been linked.
+    patrons = patrons_by_handle()
+    for p in people.values():
+        handle = (p["who"] or "").lstrip("@").split(" ")[0].lower()
+        p["patron"] = patrons.get(handle) or {}
+
+    # A paying customer with a question nobody answered comes first. Not
+    # because their question is better, but because they are the one person
+    # here who is owed something, and the queue never surfaced that.
+    ordered = sorted(people.values(), key=lambda p: (
+        not (p["patron"].get("paying") and p["open"]),
+        -(p["patron"].get("lifetime_cents", 0) if p["open"] else 0),
+        -p["open"], -p["asked"],
+    ))
     for p in ordered:
         # Someone who is not a subscriber and is asking how to subscribe is a
         # lead, not a support ticket.
