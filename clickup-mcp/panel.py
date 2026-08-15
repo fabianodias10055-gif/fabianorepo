@@ -2288,6 +2288,107 @@ def sales_pipeline(people: list) -> list:
     ]
 
 
+def integration_health() -> list:
+    """Whether each source is still arriving, and when it last did.
+
+    Read from what each collector leaves on disk rather than by calling
+    anything: the page rebuilds on every vault change, and a health check
+    that costs a network round trip would be the slowest thing here. What
+    matters is whether the data arrived, which the file says, not whether a
+    task ran, which it only implies.
+
+    Every silent failure this panel has had looked the same from outside:
+    numbers that were simply old. This is the screen that would have said so.
+    """
+    now = time.time()
+    panel_dir = VAULT / "Panel"
+
+    def age(path: Path):
+        try:
+            return (now - path.stat().st_mtime) / 3600
+        except OSError:
+            return None
+
+    def state(hours, limit):
+        if hours is None:
+            return "missing", "nothing has ever been written here"
+        if hours > limit * 3:
+            return "stale", f"last arrived {hours:.0f} hours ago"
+        if hours > limit:
+            return "late", f"last arrived {hours:.0f} hours ago"
+        return "ok", (f"{hours * 60:.0f} minutes ago" if hours < 1
+                      else f"{hours:.1f} hours ago")
+
+    rows = []
+
+    h = age(panel_dir / "discord-members.json")
+    st, note = state(h, 1)
+    rows.append({"name": "Discord", "expect": "every 15 minutes",
+                 "state": st, "note": note,
+                 "fix": "the collector task is not running" if st != "ok" else ""})
+
+    h = age(panel_dir / "patreon-members.json")
+    st, note = state(h, 24)
+    rows.append({"name": "Patreon members", "expect": "twice a day",
+                 "state": st, "note": note, "fix": ""})
+
+    h = age(panel_dir / "youtube-channel.json")
+    st, note = state(h, 12)
+    rows.append({"name": "YouTube numbers", "expect": "a few times a day",
+                 "state": st, "note": note, "fix": ""})
+
+    h = age(panel_dir / "knowledge_base.json")
+    st, note = state(h, 2)
+    shipped = age(KB_SHIPPED_PATH)
+    fix = ""
+    if shipped is None:
+        fix = "the copy the bot reads is missing from Google Drive"
+    elif h is not None and shipped - h > 1:
+        fix = "Drive has not picked up the newest export yet"
+    rows.append({"name": "Knowledge sent to the bot", "expect": "every 2 hours",
+                 "state": st, "note": note, "fix": fix})
+
+    # The one that broke in production without a word: an expired token
+    # answers 401 exactly like a wrong one.
+    try:
+        import patreon_api
+        exp = patreon_api._expires_at()
+    except Exception:  # noqa: BLE001
+        exp = 0
+    if exp:
+        days = (exp - now) / 86400
+        rows.append({"name": "Patreon access", "expect": "renews itself",
+                     "state": "ok" if days > 3 else "late",
+                     "note": f"valid for another {days:.0f} days",
+                     "fix": ""})
+    else:
+        rows.append({"name": "Patreon access", "expect": "renews itself",
+                     "state": "unknown",
+                     "note": "no expiry recorded, so its age is unknown",
+                     "fix": "run patreon_api.py --refresh once and the "
+                            "renewal takes over from there"})
+
+    missing = []
+    try:
+        from secrets_store import SECRET_KEYS, get_secret
+        for k in ("DISCORD_BOT_TOKEN", "YOUTUBE_API_KEY", "YOUTUBE_REFRESH_TOKEN",
+                  "PATREON_ACCESS_TOKEN", "PATREON_REFRESH_TOKEN",
+                  "PATREON_CLIENT_ID", "PATREON_CLIENT_SECRET"):
+            if not get_secret(k):
+                missing.append(k)
+        total = len(SECRET_KEYS)
+    except Exception:  # noqa: BLE001
+        total = 0
+    rows.append({
+        "name": "Credentials", "expect": "in the Windows credential store",
+        "state": "ok" if not missing else "late",
+        "note": (f"the ones this panel uses are all present"
+                 if not missing else f"{len(missing)} missing"),
+        "fix": ", ".join(missing),
+    })
+    return rows
+
+
 def patreon_summary() -> dict:
     """The paying side in numbers, for the home page.
 
@@ -2478,6 +2579,7 @@ def scan() -> dict:
         "patrons": patrons_by_handle(),
         "patreon": patreon_summary(),
         "youtube": youtube_channel_stats(),
+        "health": integration_health(),
         "pipeline": sales_pipeline(people),
         "discord_members": len((_members() or {})),
         "sync": sync_report(),

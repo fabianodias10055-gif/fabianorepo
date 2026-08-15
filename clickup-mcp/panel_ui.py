@@ -3842,6 +3842,40 @@ def _links_card() -> str:
     )
 
 
+_HEALTH_PILL = {"ok": "ok", "late": "partial", "stale": "blind",
+                "missing": "blind", "unknown": "no-source"}
+_HEALTH_WORD = {"ok": "arriving", "late": "running late", "stale": "not arriving",
+                "missing": "never arrived", "unknown": "unknown"}
+
+
+def _health_card(d: dict) -> str:
+    """Whether each source is still arriving, said plainly.
+
+    Every silent failure this panel has had looked identical from outside:
+    a number that was simply old. Nothing said so, and the fix always
+    started with somebody noticing by accident.
+    """
+    rows = []
+    for h in (d.get("health") or []):
+        pill = _HEALTH_PILL.get(h["state"], "no-source")
+        fix = (f'<br><span class="note">{escape(h["fix"])}</span>'
+               if h.get("fix") else "")
+        rows.append(
+            f'<div class="srow"><span><span class="nm">{escape(h["name"])}</span>'
+            f'<br><span class="note">{escape(h["note"])}{fix}</span></span>'
+            f'<span class="vol">{escape(h["expect"])}</span>'
+            f'<span class="pill st-{pill}">{escape(_HEALTH_WORD.get(h["state"], h["state"]))}</span>'
+            f'</div>'
+        )
+    if not rows:
+        return ""
+    return (f'<section class="card" id="health">'
+            f'<h2><span class="he">🩺</span>Is everything still arriving?</h2>'
+            f'<p class="note">Read from what each collector last wrote, not by '
+            f'calling anything: what matters is whether the data arrived.</p>'
+            f'{"".join(rows)}</section>')
+
+
 def _sources_card(instrumentation: list, d: dict | None = None) -> str:
     d = d or {}
     # The technical readout lives here and only here. It was in the footer
@@ -4194,7 +4228,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 </div>
 {_stamp_views(_sales_card(d) + _links_card() + _sync_card(d) + _wingman_card(d))}
 <div class="grid3">
-{_stamp_views(_people_card(d) + _videos_card(d) + _sources_card(instrumentation, d))}
+{_stamp_views(_people_card(d) + _videos_card(d) + _sources_card(instrumentation, d) + _health_card(d))}
 </div>
 <footer>{diag}</footer>
 </main>
