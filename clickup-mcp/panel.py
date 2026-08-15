@@ -2238,6 +2238,7 @@ def scan() -> dict:
 
     return {
         "md_files": md_files,
+        "patrons": patrons_by_handle(),
         "sync": sync_report(),
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "epoch": int(time.time()),

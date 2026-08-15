@@ -544,6 +544,30 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
    hiding has to say so out loud. */
 [hidden] { display:none !important; }
 
+/* ---- one customer, opened in place ---- */
+tr.crow { cursor:pointer; }
+tr.crow:hover td:first-child { box-shadow:inset 2px 0 0 var(--accent); }
+tr.copen td { background:var(--surface2); }
+tr.cdet > td { padding:0; background:var(--surface2); }
+.cprofile { padding:var(--s4) var(--s4) var(--s5); display:grid; gap:var(--s3); }
+.chead { display:flex; gap:var(--s3); align-items:flex-start; }
+.chead b { font-size:var(--t-lg); }
+.cav { width:40px; height:40px; border-radius:var(--r-full); flex:none;
+  object-fit:cover; }
+.cabout { display:flex; gap:var(--s2); align-items:center; flex-wrap:wrap; }
+.clabel { font-family:var(--mono); font-size:var(--t-2xs); color:var(--ink3);
+  text-transform:uppercase; letter-spacing:.08em; margin-right:var(--s2); }
+.ctl { display:grid; gap:var(--s2); max-height:420px; overflow-y:auto;
+  padding-right:var(--s2); }
+.cev { border-left:2px solid var(--line); padding:var(--s2) 0 var(--s2) var(--s3); }
+.cev.open { border-left-color:var(--warn); }
+.cdate { font-family:var(--mono); font-size:var(--t-2xs); color:var(--ink3); }
+.cq { font-weight:560; margin-top:2px; }
+.ca { color:var(--ink2); margin-top:3px; padding-left:var(--s3);
+  border-left:2px solid var(--ok-line); }
+.cwait { color:var(--warn); font-size:var(--t-xs); margin-top:3px; }
+.clink { font-size:var(--t-xs); }
+
 /* ---- the overview dashboard ---- */
 .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(380px,100%),1fr));
   gap:var(--s4); margin-top:var(--s4); }
@@ -1208,6 +1232,9 @@ window.fetch = function (url, opts) {
 };
 var AI_CACHE = __AI_CACHE__;
 var QDATA = __QDATA__;
+/* Only the people who linked Patreon to Discord, which is a hundred-odd
+   rows rather than the thousand in the table. */
+var PATRONS = __PATRONS__;
 function $(s, r) { return (r || document).querySelector(s); }
 function $$(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
 function esc(s) {
@@ -2136,6 +2163,90 @@ $$("[data-editans]").forEach(function (b) {
   });
 });
 
+/* ---- one customer, everything about them ----
+   Built from the question payload the page already carries rather than a
+   second copy of the same conversations: a profile is a filter over what is
+   here, and duplicating it would grow the file for nothing. */
+function customerProfile(who) {
+  var mine = [], pat = PATRONS[who.replace(/^@/, "").split(" ")[0].toLowerCase()] || null;
+  for (var id in QDATA) if (QDATA[id].who === who) mine.push(QDATA[id]);
+  mine.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+
+  var open = mine.filter(function (q) { return q.status !== "answered"; }).length;
+  var sys = {}, chans = {};
+  mine.forEach(function (q) {
+    if (q.system) sys[q.system] = (sys[q.system] || 0) + 1;
+    if (q.channel) chans[q.channel] = (chans[q.channel] || 0) + 1;
+  });
+  var byCount = function (o) {
+    return Object.keys(o).sort(function (a, b) { return o[b] - o[a]; });
+  };
+
+  var head = '<div class="cprofile">';
+  head += '<div class="chead">';
+  if (mine[0] && mine[0].avatar) head += '<img class="cav" src="' + mine[0].avatar + '" alt="">';
+  head += '<div><b>' + esc(pat && pat.name ? pat.name : who) + '</b>';
+  if (pat && pat.name) head += ' <span class="note">' + esc(who) + "</span>";
+  head += '<br><span class="note">';
+  var facts = [];
+  if (pat && pat.paying) {
+    facts.push("paying US$ " + (pat.monthly / 100).toFixed(0) + "/mo"
+      + (pat.tiers.length ? " on " + esc(pat.tiers.join(", ")) : ""));
+  } else if (pat) { facts.push("used to pay"); }
+  if (pat && pat.lifetime) facts.push("US$ " + (pat.lifetime / 100).toFixed(0) + " in total");
+  if (pat && pat.since) facts.push("customer since " + esc(pat.since.slice(0, 7)));
+  if (mine[0] && mine[0].joined) facts.push("in the server since " + esc(mine[0].joined));
+  facts.push(mine.length + " question" + (mine.length === 1 ? "" : "s")
+    + (open ? ", " + open + " still waiting" : ", all answered"));
+  head += facts.join(" &middot; ") + "</span></div></div>";
+
+  var about = byCount(sys).slice(0, 6).map(function (s) {
+    return '<span class="tag">' + esc(s) + " &middot; " + sys[s] + "</span>";
+  }).join(" ");
+  if (about) head += '<div class="cabout"><span class="clabel">Asks about</span>' + about + "</div>";
+  var where = byCount(chans).map(function (c) { return esc(c) + " (" + chans[c] + ")"; }).join(", ");
+  if (where) head += '<div class="cabout"><span class="clabel">Talks on</span>'
+    + '<span class="note">' + where + "</span></div>";
+
+  /* The conversation, newest first: what they asked and what you replied. */
+  head += '<div class="ctl">';
+  mine.slice(0, 40).forEach(function (q) {
+    head += '<div class="cev' + (q.status === "answered" ? "" : " open") + '">'
+      + '<span class="cdate">' + esc(q.date) + "</span>"
+      + '<div class="cq">' + esc(q.text.slice(0, 260)) + "</div>"
+      + (q.reply ? '<div class="ca">' + esc(q.reply.slice(0, 260)) + "</div>"
+                 : '<div class="cwait">no reply yet</div>')
+      + (q.link ? ' <a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open where it was asked</a>' : "")
+      + "</div>";
+  });
+  if (mine.length > 40) head += '<div class="note">and ' + (mine.length - 40) + " older</div>";
+  return head + "</div></div>";
+}
+
+/* Delegated, because "View all" adds rows after this runs and a listener
+   bound per row would miss every one of them. */
+document.addEventListener("click", function (ev) {
+  var tr = ev.target.closest ? ev.target.closest("tr.crow") : null;
+  if (tr && !ev.target.closest("a")) toggleCustomer(tr);
+});
+document.addEventListener("keydown", function (ev) {
+  if (ev.key !== "Enter" && ev.key !== " ") return;
+  var tr = ev.target.closest ? ev.target.closest("tr.crow") : null;
+  if (tr) { ev.preventDefault(); toggleCustomer(tr); }
+});
+
+function toggleCustomer(tr) {
+  var next = tr.nextElementSibling;
+  if (next && next.classList.contains("cdet")) { next.remove(); tr.classList.remove("copen"); return; }
+  var open = tr.closest("tbody").querySelector("tr.cdet");
+  if (open) { open.previousElementSibling.classList.remove("copen"); open.remove(); }
+  var row = document.createElement("tr");
+  row.className = "cdet";
+  row.innerHTML = '<td colspan="5">' + customerProfile(tr.dataset.who) + "</td>";
+  tr.after(row);
+  tr.classList.add("copen");
+}
+
 /* ---- gaps and coverage drill into the question table ---- */
 function drillTo(sys) {
   var sel = $("#sysSel");
@@ -2996,7 +3107,9 @@ def _people_card(d: dict) -> str:
             if ch in _BRAND
         )
         rows.append(
-            f'<tr class="{hid.strip()}"><td><span class="uc">{_avatar(p["who"], "sm")}'
+            f'<tr class="crow {hid.strip()}" tabindex="0" '
+            f'data-who="{escape(p["who"], quote=True)}" '
+            f'title="Open this customer"><td><span class="uc">{_avatar(p["who"], "sm")}'
             f'<span class="n">{escape(p["who"])}{tags}</span>{marks}</span>'
             f'{_patron_line(p)}</td>'
             f'<td>{_pays(p)}</td>'
@@ -3415,7 +3528,12 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
             .replace("__PAGE__", str(PAGE))
             .replace("__TOKEN__", token)
             .replace("__AI_CACHE__", embed(d.get("ai_cache") or {}))
-            .replace("__QDATA__", embed(_question_payload(d["questions"]))))
+            .replace("__QDATA__", embed(_question_payload(d["questions"])))
+            .replace("__PATRONS__", embed({
+                h: {"name": p["name"], "tiers": p["tiers"],
+                    "monthly": p["monthly_cents"], "lifetime": p["lifetime_cents"],
+                    "since": p["since"], "paying": p["paying"]}
+                for h, p in (d.get("patrons") or {}).items()})))
 
     # The timings and file counts moved to Admin, where someone looking for
     # them is looking for them. On every other screen they were noise at the
