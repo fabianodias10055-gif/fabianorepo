@@ -4764,10 +4764,24 @@ class FeedbackBot(discord.Client):
         # Search knowledge base for relevant past Q&A
         kb_context = ""
         if question:
-            kb_matches = _kb_search(question, top_n=3)
+            # Stopword-filtered search. Plain word overlap ranked by "how",
+            # "does" and "the", so "how does the ledge system work" pulled up
+            # whatever else happened to start with "does the". The floor
+            # stays at one word, which is the recall this always had: there
+            # is no stemming here, so "commercial" and "commercially" score
+            # one between them, and asking for two would drop the licence
+            # answer from a question about commercial use.
+            kb_matches = [e for _, e in
+                          _kb_search_scored(question, top_n=3, min_score=1)]
             if kb_matches:
                 kb_lines = [
+                    # Date and system, because these systems changed over
+                    # time and an answer from 2024 may describe a version
+                    # nobody is running now.
                     f"Q: {e['question']}\nA: {e['answer']}" +
+                    (f"\n(answered {e['ts'][:10]}"
+                     + (f", {e['system']}" if e.get('system') else "") + ")"
+                     if e.get('ts') else "") +
                     (f"\nImages: {', '.join(e['images'])}" if e.get('images') else "")
                     for e in kb_matches
                 ]
