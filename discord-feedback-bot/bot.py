@@ -2364,6 +2364,40 @@ async def kb_scan_slash(interaction: discord.Interaction, limit: int = 500) -> N
     await interaction.followup.send(f"Scan complete — saved **{saved}** new Q&A pairs across all channels. Knowledge base has **{approved}** approved entries{tail}.", ephemeral=True)
 
 
+@app_commands.command(name="kb_sync", description="Pull the vault export from Drive right now instead of waiting for the hourly sync.")
+async def kb_sync_slash(interaction: discord.Interaction) -> None:
+    """Force the sync, and say what changed.
+
+    The vault is exported from a PC on a schedule and picked up here on
+    another one, so after editing a note there is up to an hour where the
+    bot answers from the previous version with nothing to show for it. This
+    closes that gap, and reports the counts where they can be read without
+    opening the deploy logs.
+    """
+    roles = [r.name for r in getattr(interaction.user, "roles", [])]
+    if "LocoDev" not in roles:
+        await interaction.response.send_message("You don't have permission.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    raw = await asyncio.to_thread(_kb_fetch_vault_export)
+    if not raw:
+        await interaction.followup.send(
+            "Nothing came back from Drive. Either no file named "
+            f"`{KB_DRIVE_FILE}` is shared with the bot's service account, or "
+            "the credentials are not valid. The deploy log has the reason.",
+            ephemeral=True)
+        return
+    approved, vault, before = await asyncio.to_thread(_kb_merge_vault, raw)
+    if vault == before and before:
+        await interaction.followup.send(
+            f"The export carried too few entries to trust ({before} are "
+            "already here), so nothing was replaced.", ephemeral=True)
+        return
+    await interaction.followup.send(
+        f"Synced. **{approved}** approved entries kept, **{vault}** from the "
+        f"vault (was {before}).", ephemeral=True)
+
+
 @app_commands.command(name="test_reports", description="Send daily summary and weekly leaderboard now (test).")
 async def test_reports_slash(interaction: discord.Interaction) -> None:
     roles = [r.name for r in getattr(interaction.user, "roles", [])]
@@ -3727,6 +3761,7 @@ class FeedbackBot(discord.Client):
         self.tree.add_command(sync_merch_mentions_slash)
         self.tree.add_command(purge_user_slash)
         self.tree.add_command(kb_scan_slash)
+        self.tree.add_command(kb_sync_slash)
         self.tree.add_command(trial_stats_slash)
         self.tree.add_command(shorten_slash)
         self.tree.add_command(edit_link_slash)
@@ -3780,6 +3815,7 @@ class FeedbackBot(discord.Client):
             self.tree.add_command(sync_merch_mentions_slash)
             self.tree.add_command(purge_user_slash)
             self.tree.add_command(kb_scan_slash)
+            self.tree.add_command(kb_sync_slash)
             self.tree.add_command(trial_stats_slash)
             self.tree.add_command(shorten_slash)
             self.tree.add_command(edit_link_slash)
