@@ -819,6 +819,136 @@ def tier_of(path: Path) -> str:
     return ""
 
 
+MIN_SECTION = 40
+
+# Where the knowledge goes after it leaves here. The export is what the
+# panel writes; the shipped copy is what an assistant in the cloud can
+# actually reach, and the gap between the two is a sync that has not run.
+KB_EXPORT_PATH = "Panel/knowledge_base.json"
+KB_SHIPPED_PATH = Path(r"G:\My Drive\LocoDev Bot KB\knowledge_base.json")
+
+
+def _kb_file(path: Path) -> tuple[list, float]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return (data if isinstance(data, list) else []), path.stat().st_mtime
+    except (OSError, ValueError):
+        return [], 0.0
+
+
+def sync_report() -> dict:
+    """What each assistant knows, and which notes never reached one.
+
+    A note can be perfectly written and deliver nothing: too short to count
+    as a section, or sitting outside the folders the catalog walks. That
+    failure is silent by nature, which is why it gets a screen. Consumers
+    are a list rather than one hardcoded bot, so the next one is a row.
+    """
+    eligible: dict[str, int] = {}
+    for sec in doc_sections():
+        rel = sec["path"].relative_to(VAULT / "Systems").as_posix()
+        eligible[rel] = eligible.get(rel, 0) + 1
+
+    exported, exp_stamp = _kb_file(VAULT / KB_EXPORT_PATH)
+    shipped, ship_stamp = _kb_file(KB_SHIPPED_PATH)
+    shipped_by_source: dict[str, int] = {}
+    for e in shipped:
+        src = e.get("source") or ""
+        if e.get("kind") == "doc" and src:
+            shipped_by_source[src] = shipped_by_source.get(src, 0) + 1
+
+    rows: list[dict] = []
+    for path in sorted((VAULT / "Systems").rglob("*.md")):
+        rel = path.relative_to(VAULT / "Systems").as_posix()
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            stat = path.stat()
+        except OSError:
+            continue
+        generated = path.name.startswith("05 -")
+        n_elig = eligible.get(rel, 0)
+        n_ship = shipped_by_source.get(rel, 0)
+        if generated:
+            state = "generated"
+        elif n_ship:
+            state = "delivered"
+        elif n_elig:
+            state = "pending"
+        else:
+            state = "silent"
+        rows.append({
+            "rel": rel, "name": path.name, "slug": system_of(path),
+            "tier": tier_of(path), "written": len(strip_boilerplate(text)),
+            "sections": n_elig, "shipped": n_ship, "state": state,
+            "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+        })
+
+    docs_shipped = sum(shipped_by_source.values())
+    answers_shipped = sum(1 for e in shipped if e.get("kind") != "doc")
+    stale = bool(exported) and bool(shipped) and exp_stamp - ship_stamp > 120
+
+    consumers = [{
+        "name": "LocoAI on Discord",
+        "where": "Railway, reads the Drive copy hourly",
+        "knows": len(shipped),
+        "detail": f"{answers_shipped} answers, {docs_shipped} documentation sections",
+        "stamp": (datetime.fromtimestamp(ship_stamp).strftime("%Y-%m-%d %H:%M")
+                  if ship_stamp else ""),
+        "state": ("waiting" if not shipped else "stale" if stale else "current"),
+        "note": ("nothing has been shipped yet" if not shipped else
+                 "the export is newer than the shipped copy" if stale else
+                 "carrying everything the last export produced"),
+    }, {
+        "name": "Wingman",
+        "where": "reads the vault directly on this machine",
+        "knows": 0,
+        "detail": "not wired to the export yet",
+        "stamp": "",
+        "state": "waiting",
+        "note": "reads notes straight from the vault, so nothing is shipped to it",
+    }]
+
+    return {
+        "rows": rows,
+        "consumers": consumers,
+        "exported": len(exported),
+        "export_stamp": (datetime.fromtimestamp(exp_stamp).strftime("%Y-%m-%d %H:%M")
+                         if exp_stamp else ""),
+        "delivered": sum(1 for r in rows if r["state"] == "delivered"),
+        "pending": sum(1 for r in rows if r["state"] == "pending"),
+        "silent": sum(1 for r in rows if r["state"] == "silent"),
+        "generated": sum(1 for r in rows if r["state"] == "generated"),
+    }
+
+
+def doc_sections() -> list[dict]:
+    """Every catalog section eligible to become knowledge somewhere else.
+
+    One definition, used by the exporter that feeds the Discord bot and by
+    the sync report that says what each consumer knows. Two copies of this
+    rule would let the panel promise something the bot never received.
+
+    The answered-questions notes are excluded: they are generated from the
+    same answers the exporter already sends, so taking them again would file
+    every answer twice under a second question.
+    """
+    out: list[dict] = []
+    for section, path in _all_sections():
+        if path.name.startswith("05 -"):
+            continue
+        lines = section.splitlines()
+        if lines and lines[0].lstrip().startswith("#"):
+            heading = lines[0].lstrip("#").strip()
+            body = "\n".join(lines[1:]).strip()
+        else:
+            heading, body = path.stem, section.strip()
+        if len(body) < MIN_SECTION:
+            continue
+        out.append({"path": path, "slug": system_of(path), "tier": tier_of(path),
+                    "heading": heading, "body": body})
+    return out
+
+
 def _all_sections() -> list[tuple[str, Path]]:
     """Every answerable section in the catalog, read once.
 
@@ -1898,6 +2028,7 @@ def scan() -> dict:
 
     return {
         "md_files": md_files,
+        "sync": sync_report(),
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "epoch": int(time.time()),
         "systems": systems,

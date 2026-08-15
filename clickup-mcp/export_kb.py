@@ -178,26 +178,15 @@ def from_docs() -> list[dict]:
     """
     out: list[dict] = []
     seen: set[str] = set()
-    for section, path in panel._all_sections():
-        # Generated from the answers already exported above; taking it again
-        # would file every answer twice under a different question.
-        if path.stem.startswith("05 -"):
-            continue
-        lines = section.splitlines()
-        if lines and lines[0].lstrip().startswith("#"):
-            heading = lines[0].lstrip("#").strip()
-            body = "\n".join(lines[1:]).strip()
-        else:
-            heading = path.stem
-            body = section.strip()
-        body = flatten_tables(body).strip()
+    # One definition of what counts as a section, shared with the panel's
+    # sync report. Two copies would let the panel show a note as delivered
+    # while the bot never received it.
+    for sec in panel.doc_sections():
+        path, heading = sec["path"], sec["heading"]
+        body = flatten_tables(sec["body"]).strip()
         if len(body) < MIN_ANSWER:
             continue
-        # From the path's first part, not the parent folder: a note now sits
-        # under its tier and sometimes under a section folder too, so the
-        # parent is "01 - How it works" and the slug is two levels up.
-        slug = panel.system_of(path)
-        tier = panel.tier_of(path)
+        slug, tier = sec["slug"], sec["tier"]
         system = slug.replace("-", " ")
         # The tier belongs in the searchable field. The same system ships as
         # three different projects, and "where is the punch montage" has a
@@ -221,7 +210,10 @@ def from_docs() -> list[dict]:
             "origin": "vault",
             "kind": "doc",
             "tier": tier,
-            "source": f"{slug}/{path.name}",
+            # The path relative to Systems, because Premium and Standard hold
+            # files with the same name and the panel matches on this to say
+            # which note reached the bot.
+            "source": path.relative_to(panel.VAULT / "Systems").as_posix(),
             "system": slug,
         })
     return out

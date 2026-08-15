@@ -2775,6 +2775,75 @@ def _sources_card(instrumentation: list) -> str:
     )
 
 
+_SYNC_STATE = {
+    "delivered": ("ok", "reaching the bot"),
+    "pending": ("partial", "written, not shipped yet"),
+    "silent": ("blind", "carries nothing an assistant can use"),
+    "generated": ("no-source", "generated from answers, sent as answers"),
+}
+
+
+def _sync_card(d: dict) -> str:
+    s = d.get("sync") or {}
+    rows = s.get("rows") or []
+    if not rows:
+        return ('<section class="card" id="sync"><h2><span class="he">🔄</span>'
+                'Knowledge delivery</h2><p class="empty">No catalog notes found.</p>'
+                '</section>')
+
+    who = []
+    for c in s.get("consumers") or []:
+        who.append(
+            f'<div class="srow"><span><span class="nm">{escape(c["name"])}</span><br>'
+            f'<span class="note">{escape(c["where"])} &middot; {escape(c["note"])}</span></span>'
+            f'<span class="vol">{_fmt(c["knows"])}<br>'
+            f'<span class="note">{escape(c["stamp"] or "never")}</span></span>'
+            f'<span class="pill st-{"ok" if c["state"] == "current" else "partial" if c["state"] == "stale" else "no-source"}">'
+            f'{escape(c["state"])}</span></div>'
+        )
+
+    # Silent first: a note that delivers nothing is the only row here that
+    # asks the reader to do something.
+    order = {"silent": 0, "pending": 1, "delivered": 2, "generated": 3}
+    body = []
+    for r in sorted(rows, key=lambda x: (order.get(x["state"], 9), x["rel"])):
+        cls, why = _SYNC_STATE.get(r["state"], ("unknown", ""))
+        tier = f' <span class="tag">{escape(r["tier"])}</span>' if r["tier"] else ""
+        body.append(
+            f'<tr data-state="{escape(r["state"], quote=True)}">'
+            f'<td><span class="nm">{escape(r["name"])}</span>{tier}<br>'
+            f'<span class="note">{escape(r["rel"])}</span></td>'
+            f'<td class="num">{_fmt(r["written"])}</td>'
+            f'<td class="num">{_fmt(r["sections"])}</td>'
+            f'<td class="num">{_fmt(r["shipped"])}</td>'
+            f'<td><span class="pill st-{cls}" title="{escape(why, quote=True)}">'
+            f'{escape(r["state"])}</span></td>'
+            f'<td class="note">{escape(r["modified"])}</td></tr>'
+        )
+
+    exported = s.get("exported", 0)
+    stamp = s.get("export_stamp") or "never"
+    summary = (
+        f'<p class="note">{_fmt(exported)} pieces of knowledge exported at {escape(stamp)} '
+        f'&middot; <b>{_fmt(s.get("delivered", 0))}</b> notes reaching an assistant '
+        f'&middot; <b>{_fmt(s.get("silent", 0))}</b> silent '
+        f'&middot; {_fmt(s.get("generated", 0))} generated. '
+        f'A silent note is written but delivers nothing: too short to count as a '
+        f'section, or filed where the catalog does not look.</p>'
+    )
+
+    return (
+        f'<section class="card" id="sync">'
+        f'<h2><span class="he">🔄</span>Knowledge delivery</h2>'
+        f'{"".join(who)}{summary}'
+        f'<div class="scroll"><table><thead><tr>'
+        f'<th>Note</th><th class="num">Written</th><th class="num">Sections</th>'
+        f'<th class="num">Shipped</th><th>State</th><th>Modified</th>'
+        f'</tr></thead><tbody>{"".join(body)}</tbody></table></div>'
+        f'</section>'
+    )
+
+
 _NAV = [
     ("overview", "home", "Overview", ""),
     ("questions", "chat", "Questions", "open_q"),
@@ -2783,12 +2852,16 @@ _NAV = [
     ("people", "users", "People", ""),
     ("videos", "video", "Videos", ""),
     ("links", "link", "Links", ""),
+    ("sync", "refresh", "Sync", "silent"),
     ("sources", "database", "Sources", ""),
 ]
 
 
 def _nav_counts(d: dict) -> dict:
-    return {"open_q": d["open_q"], "answers": len(d.get("answers") or [])}
+    return {"open_q": d["open_q"], "answers": len(d.get("answers") or []),
+            # The badge counts the notes delivering nothing, because that is
+            # the number worth acting on; a delivered note needs no attention.
+            "silent": (d.get("sync") or {}).get("silent", 0)}
 
 
 def _sidebar(d: dict) -> str:
@@ -2902,6 +2975,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 {_system_pressure_card(d, facets)}
 </div>
 {_links_card()}
+{_sync_card(d)}
 <div class="grid3">
 {_people_card(d)}
 {_videos_card(d)}
