@@ -38,6 +38,9 @@ import panel  # noqa: E402
 # bot look confident about nothing.
 MIN_ANSWER = 40
 MIN_QUESTION = 15
+# A documentation section can run long, and three of them can be injected
+# into one prompt.
+MAX_DOC = 1400
 
 # The bot runs in the cloud and cannot see F:\LocoDev Vault, so the export
 # goes through Drive. Its own folder, not the vault mirror: that one is kept
@@ -122,6 +125,59 @@ def from_vault() -> list[dict]:
     return out
 
 
+def from_docs() -> list[dict]:
+    """The catalog notes, which are where the facts actually live.
+
+    Exporting only the answered questions left the bot able to recall what
+    someone was once told and unable to describe its own systems. Asked
+    which functions the punch system's bot has, it said it did not know,
+    while "Functions on the bot" sat in the Blueprints note with the four
+    names in a table.
+
+    The question field is what the bot searches, so it carries the system
+    name and the heading: "advanced combat punch - Functions on the bot"
+    matches a question about functions in the punch system on four words.
+    """
+    out: list[dict] = []
+    seen: set[str] = set()
+    for section, path in panel._all_sections():
+        # Generated from the answers already exported above; taking it again
+        # would file every answer twice under a different question.
+        if path.stem.startswith("05 -"):
+            continue
+        lines = section.splitlines()
+        if lines and lines[0].lstrip().startswith("#"):
+            heading = lines[0].lstrip("#").strip()
+            body = "\n".join(lines[1:]).strip()
+        else:
+            heading = path.stem
+            body = section.strip()
+        if len(body) < MIN_ANSWER:
+            continue
+        system = path.parent.name.replace("-", " ")
+        question = f"{system} - {heading}"
+        key = norm(question)
+        if key in seen:
+            continue
+        seen.add(key)
+        # Three of these can land in one prompt, so a long section is cut
+        # rather than allowed to crowd out the other two.
+        if len(body) > MAX_DOC:
+            body = body[:MAX_DOC].rsplit("\n", 1)[0] + "\n(...)"
+        out.append({
+            "question": question,
+            "answer": body,
+            "author": "LocoDev",
+            "ts": datetime.fromtimestamp(
+                path.stat().st_mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            "origin": "vault",
+            "kind": "doc",
+            "source": f"{path.parent.name}/{path.name}",
+            "system": path.parent.name,
+        })
+    return out
+
+
 def merge(existing: list[dict], fresh: list[dict]) -> tuple[list[dict], int, int]:
     """The bot's own entries win: a human approved each of those."""
     by_key = {}
@@ -165,8 +221,11 @@ def main() -> int:
         print(f"ERROR: vault not found at {panel.VAULT}")
         return 1
 
-    fresh = from_vault()
-    print(f"answers the vault can prove were given: {len(fresh)}")
+    answers = from_vault()
+    docs = from_docs()
+    fresh = answers + docs
+    print(f"answers the vault can prove were given: {len(answers)}")
+    print(f"documentation sections from the catalog: {len(docs)}")
 
     existing: list[dict] = []
     if args.merge_with:
