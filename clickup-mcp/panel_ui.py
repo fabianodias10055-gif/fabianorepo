@@ -545,10 +545,11 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
 [hidden] { display:none !important; }
 
 /* ---- one customer, opened in place ---- */
-tr.crow { cursor:pointer; }
-tr.crow:hover td:first-child { box-shadow:inset 2px 0 0 var(--accent); }
+tr.crow, tr.prow { cursor:pointer; }
+tr.crow:hover td:first-child, tr.prow:hover td:first-child {
+  box-shadow:inset 2px 0 0 var(--accent); }
 tr.copen td { background:var(--surface2); }
-tr.cdet > td { padding:0; background:var(--surface2); }
+tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .cprofile { padding:var(--s4) var(--s4) var(--s5); display:grid; gap:var(--s3); }
 .chead { display:flex; gap:var(--s3); align-items:flex-start; }
 .chead b { font-size:var(--t-lg); }
@@ -2338,6 +2339,118 @@ function toggleCustomer(tr) {
   tr.classList.add("copen");
 }
 
+/* ---- one product, and everyone waiting on it ----
+   Same idea as a customer profile: a filter over the questions the page
+   already carries, so no second copy of anything. */
+var STOP = {the:1,a:1,an:1,is:1,it:1,in:1,of:1,to:1,my:1,me:1,do:1,can:1,be:1,
+  for:1,how:1,what:1,where:1,when:1,why:1,who:1,will:1,are:1,have:1,has:1,
+  was:1,not:1,that:1,this:1,on:1,at:1,by:1,or:1,and:1,but:1,if:1,as:1,with:1,
+  from:1,any:1,you:1,your:1,we:1,they:1,their:1,there:1,just:1,im:1,its:1,
+  get:1,got:1,so:1,up:1,out:1,about:1,also:1,some:1,all:1,no:1,need:1,want:1,
+  like:1,more:1,would:1,could:1,should:1,does:1,did:1,use:1,using:1,work:1,
+  works:1,make:1,made:1,know:1,think:1,see:1,thanks:1,thank:1,hey:1,hello:1};
+
+function productProfile(name) {
+  var mine = [];
+  for (var id in QDATA) if (QDATA[id].system === name) mine.push(QDATA[id]);
+  if (!mine.length) return '<div class="cprofile"><p class="empty">Nobody has '
+    + "asked about this one yet.</p></div>";
+  mine.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+  var open = mine.filter(function (q) { return q.status !== "answered"; });
+
+  /* Who is asking, and which of them pay. Tiers are not per product, so
+     this says "these customers care about it", never "these bought it". */
+  var byWho = {}, chans = {}, vids = {};
+  mine.forEach(function (q) {
+    (byWho[q.who] = byWho[q.who] || []).push(q);
+    if (q.channel) chans[q.channel] = (chans[q.channel] || 0) + 1;
+    if (q.video) vids[q.video] = (vids[q.video] || 0) + 1;
+  });
+  var askers = Object.keys(byWho).sort(function (a, b) {
+    return byWho[b].length - byWho[a].length; });
+  var paying = askers.filter(function (w) {
+    var p = PATRONS[w.replace(/^@/, "").split(" ")[0].toLowerCase()];
+    return p && p.paying; });
+  var money = paying.reduce(function (s, w) {
+    return s + PATRONS[w.replace(/^@/, "").split(" ")[0].toLowerCase()].monthly; }, 0);
+
+  var out = '<div class="cprofile"><div class="chead"><div><b>' + esc(name) + "</b><br>"
+    + '<span class="note">' + mine.length + " question" + (mine.length === 1 ? "" : "s")
+    + " from " + askers.length + " people &middot; " + open.length + " still open"
+    + (paying.length ? " &middot; " + paying.length + " of them pay, US$ "
+        + (money / 100).toFixed(0) + "/mo between them" : "")
+    + "</span></div></div>";
+
+  var where = Object.keys(chans).sort(function (a, b) { return chans[b] - chans[a]; })
+    .map(function (c) { return esc(c) + " (" + chans[c] + ")"; }).join(", ");
+  out += '<div class="cabout"><span class="clabel">Asked on</span>'
+    + '<span class="note">' + where + "</span></div>";
+
+  var vlist = Object.keys(vids).sort(function (a, b) { return vids[b] - vids[a]; });
+  if (vlist.length) {
+    out += '<div class="cabout"><span class="clabel">From videos</span>'
+      + vlist.slice(0, 4).map(function (v) {
+          return '<span class="tag">' + esc(v.slice(0, 46)) + " &middot; " + vids[v] + "</span>";
+        }).join(" ") + "</div>";
+  }
+
+  /* Words that keep coming back. Counting is enough to find them; a model
+     would be a heavier way to learn the same thing. */
+  var freq = {};
+  mine.forEach(function (q) {
+    var seen = {};
+    (q.text.toLowerCase().match(/[a-z]{4,}/g) || []).forEach(function (w) {
+      if (STOP[w] || seen[w]) return;
+      seen[w] = 1; freq[w] = (freq[w] || 0) + 1;
+    });
+  });
+  var common = Object.keys(freq).filter(function (w) { return freq[w] > 2; })
+    .sort(function (a, b) { return freq[b] - freq[a]; }).slice(0, 10);
+  if (common.length) {
+    out += '<div class="cabout"><span class="clabel">Keeps coming up</span>'
+      + common.map(function (w) {
+          return '<span class="tag">' + esc(w) + " &middot; " + freq[w] + "</span>";
+        }).join(" ") + "</div>";
+  }
+
+  out += '<div class="cabout"><span class="clabel">Waiting</span>'
+    + '<span class="note">oldest first, so the person who has waited longest is at the top</span></div>';
+  out += '<div class="ctl">';
+  open.slice().reverse().slice(0, 25).forEach(function (q) {
+    var p = PATRONS[q.who.replace(/^@/, "").split(" ")[0].toLowerCase()];
+    out += '<div class="cev open"><span class="cdate">' + esc(q.date) + " &middot; "
+      + esc(q.who) + (p && p.paying ? ' <span class="tag sub">pays</span>' : "")
+      + "</span>"
+      + '<div class="cq">' + esc(q.text.slice(0, 200)) + "</div>"
+      + (q.link ? '<a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open it</a>' : "")
+      + "</div>";
+  });
+  if (!open.length) out += '<div class="note">Nothing open. Everyone who asked got an answer.</div>';
+  if (open.length > 25) out += '<div class="note">and ' + (open.length - 25) + " more</div>";
+  return out + "</div></div>";
+}
+
+function toggleProduct(tr) {
+  var next = tr.nextElementSibling;
+  if (next && next.classList.contains("pdet")) { next.remove(); tr.classList.remove("copen"); return; }
+  var open = tr.closest("tbody").querySelector("tr.pdet");
+  if (open) { open.previousElementSibling.classList.remove("copen"); open.remove(); }
+  var row = document.createElement("tr");
+  row.className = "pdet";
+  row.innerHTML = '<td colspan="5">' + productProfile(tr.dataset.name) + "</td>";
+  tr.after(row);
+  tr.classList.add("copen");
+}
+document.addEventListener("click", function (ev) {
+  if (!ev.target.closest) return;
+  /* The product name still filters the queue; the rest of the row opens
+     the product. Two useful actions, and neither steals the other. */
+  if (ev.target.closest(".pdet") || ev.target.closest("a")
+      || ev.target.closest(".sysdrill")) return;
+  var tr = ev.target.closest("tr.prow");
+  if (tr) toggleProduct(tr);
+});
+
 /* ---- gaps and coverage drill into the question table ---- */
 function drillTo(sys) {
   var sel = $("#sysSel");
@@ -3267,7 +3380,9 @@ def _system_pressure_card(d: dict, facets: list) -> str:
         openc = (f'<span class="gcnt">{r["open"]}</span>' if r["open"]
                  else '<span class="zero">0</span>')
         rows.append(
-            f'<tr class="{hid.strip()}"><td><span class="sysdrill" '
+            f'<tr class="prow {hid.strip()}" tabindex="0" '
+            f'data-name="{escape(r["name"], quote=True)}" '
+            f'title="Open this product"><td><span class="sysdrill" '
             f'data-sys="{escape(r["slug"], quote=True)}" '
             f'title="Filter the queue to this system">{escape(r["name"])}</span>{upill}</td>'
             f'<td class="num">{openc}</td>'
