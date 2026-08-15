@@ -99,11 +99,26 @@ def _icon(name: str, size: int = 16) -> str:
     )
 
 
+def _brand_sprite() -> str:
+    """Every brand mark, drawn once, at the top of the document.
+
+    Discord's own path is 1.4 KB. Inlined per row across a few thousand
+    rows that was 3.3 MB of the same drawing, which is most of what this
+    page weighed. Defined once and referenced, a mark costs about forty
+    bytes wherever it appears.
+    """
+    symbols = "".join(
+        f'<symbol id="bi-{name}" viewBox="0 0 24 24">{body}</symbol>'
+        for name, body in _BRAND.items()
+    )
+    return f'<svg width="0" height="0" aria-hidden="true" style="position:absolute">{symbols}</svg>'
+
+
 def _brand_icon(name: str, size: int = 14) -> str:
     if name not in _BRAND:
         return ""
-    return (f'<svg width="{size}" height="{size}" viewBox="0 0 24 24" '
-            f'aria-hidden="true">{_BRAND[name]}</svg>')
+    return (f'<svg width="{size}" height="{size}" aria-hidden="true" '
+            f'class="bi"><use href="#bi-{name}"></use></svg>')
 
 
 def _fmt(n) -> str:
@@ -4089,6 +4104,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 <style>{CSS}</style>
 </head>
 <body>
+{_brand_sprite()}
 <div class="app">
 {_sidebar(d)}
 <main class="main">
