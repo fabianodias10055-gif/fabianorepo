@@ -2333,8 +2333,13 @@ async def kb_scan_slash(interaction: discord.Interaction, limit: int = 500) -> N
                     continue
         except Exception as _se:
             logger.warning("KB scan error on channel %s: %s", ch_id, _se)
-    total = len(_kb_load())
-    await interaction.followup.send(f"Scan complete — saved **{saved}** new Q&A pairs across all channels. Knowledge base has **{total}** entries total.", ephemeral=True)
+    # Split the count: the two halves are not interchangeable, and one number
+    # would read as if staff had approved every answer synced from the vault.
+    entries = _kb_load()
+    approved = len([e for e in entries if e.get("origin") != _KB_VAULT_ORIGIN])
+    from_vault = len(entries) - approved
+    tail = f" plus **{from_vault}** synced from the vault" if from_vault else ""
+    await interaction.followup.send(f"Scan complete — saved **{saved}** new Q&A pairs across all channels. Knowledge base has **{approved}** approved entries{tail}.", ephemeral=True)
 
 
 @app_commands.command(name="test_reports", description="Send daily summary and weekly leaderboard now (test).")
