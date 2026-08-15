@@ -46,6 +46,11 @@ SECRET_KEYS = (
     "YOUTUBE_REFRESH_TOKEN",
     "DISCORD_BOT_TOKEN",
     "PATREON_ACCESS_TOKEN",
+    # An access token dies after about a month. These three are what mints a
+    # new one without anyone noticing it expired.
+    "PATREON_REFRESH_TOKEN",
+    "PATREON_CLIENT_ID",
+    "PATREON_CLIENT_SECRET",
     "LOCODEV_ADMIN_SECRET",
     "RESEND_API_KEY",
     "DISCORD_WEBHOOK_URL",

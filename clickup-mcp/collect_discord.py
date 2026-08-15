@@ -311,6 +311,13 @@ def refresh_members(guild_id: str, vault: Path) -> int:
                 avatar = (f"https://cdn.discordapp.com/avatars/{uid}/"
                           f"{u['avatar']}.png?size=64")
             members[uid] = {
+                # Kept in the record, not only as the key it is filed under:
+                # Patreon publishes the Discord account a patron linked, and
+                # that id is the only exact join between a paying customer
+                # and the person asking questions in the server. Matching by
+                # name instead would guess, and guessing about who paid is
+                # not a thing to do.
+                "id": uid,
                 "handle": u.get("username", ""),
                 "name": m.get("nick") or u.get("global_name") or u.get("username", ""),
                 "roles": names,
