@@ -879,6 +879,11 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
 /* One block per assistant: the name, how it gets its copy, and what it has.
    The route line is the answer to "where is this going", which the first
    version of this card left the reader to infer. */
+/* Where a person asks from, next to their name. Small and quiet: it is a
+   glance, not a column. */
+.chmark { display:inline-flex; align-items:center; margin-left:5px;
+  vertical-align:-2px; opacity:.9; }
+.chmark:first-of-type { margin-left:var(--s2); }
 .who { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:var(--s4);
   align-items:start; padding:var(--s3) 0; border-bottom:1px solid var(--line2); }
 .who .nm { font-weight:640; font-size:var(--t-base); margin-right:var(--s2); }
@@ -2699,9 +2704,19 @@ def _people_card(d: dict) -> str:
             tags += ' <span class="tag lead">lead</span>'
         if p["subscriber"] == "yes":
             tags += ' <span class="tag sub">sub</span>'
+        # Where they turn up, in order of how often. Someone who asks in
+        # Discord is in the community; someone who only comments on a video
+        # is an audience, and the two are worth telling apart at a glance.
+        seen = p.get("channels") or ({p["channel"]: p["asked"]} if p.get("channel") else {})
+        marks = "".join(
+            f'<span class="chmark" title="{n} on {escape(ch, quote=True)}">'
+            f'{_brand_icon(ch, 13) or ""}</span>'
+            for ch, n in sorted(seen.items(), key=lambda kv: -kv[1])
+            if ch in _BRAND
+        )
         rows.append(
             f'<tr class="{hid.strip()}"><td><span class="uc">{_avatar(p["who"], "sm")}'
-            f'<span class="n">{escape(p["who"])}{tags}</span></span></td>'
+            f'<span class="n">{escape(p["who"])}{tags}</span>{marks}</span></td>'
             f'<td class="num">{p["asked"]}</td><td class="num">{p["open"]}</td>'
             f'<td class="num">{p["last"]}</td></tr>'
         )

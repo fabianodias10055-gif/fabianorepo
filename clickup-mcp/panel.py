@@ -1952,8 +1952,14 @@ def build_people(questions: list[dict]) -> list[dict]:
             "who": q["who"], "channel": q["channel"],
             "subscriber": q["subscriber"], "asked": 0, "open": 0,
             "esc": 0, "last": q["date"],
+            # Per channel, not one label: the same person comments on a video
+            # and then turns up in Discord, and which of the two they use is
+            # the difference between a viewer and someone in the community.
+            "channels": {},
         })
         p["asked"] += 1
+        if q["channel"]:
+            p["channels"][q["channel"]] = p["channels"].get(q["channel"], 0) + 1
         if q["status"] in ("escalated", "no-source"):
             p["open"] += 1
         if q["status"] == "escalated":
