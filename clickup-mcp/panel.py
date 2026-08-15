@@ -2041,6 +2041,89 @@ def build_gaps(questions: list[dict]) -> list[dict]:
     return gaps
 
 
+CUSTOMERS_DIR = "Customers"
+
+# Most of what the CRM document calls a status is already a fact: someone
+# paying is a subscriber, someone with an unanswered question is waiting,
+# someone who has paid has purchased. Those are read, never typed, because
+# a status kept by hand goes stale the day after it is set. The rest is
+# judgement and only you can set it.
+DERIVED_STATUS = ("Subscriber", "Waiting for reply", "Purchased", "New", "Quiet")
+MANUAL_STATUS = ("Talking", "Interested", "Ready to buy", "Needs support",
+                 "Resolved", "Lost")
+
+
+def customer_note_path(handle: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", handle.lstrip("@").split(" ")[0])
+    return VAULT / CUSTOMERS_DIR / f"{safe or 'unknown'}.md"
+
+
+def read_customer(handle: str) -> dict:
+    """What you have written about this person, if anything.
+
+    A note per customer in the vault rather than rows in a database: it is
+    greppable, it opens in Obsidian, it survives this panel, and the body is
+    yours to write in freely while the panel only ever rewrites the header.
+    """
+    path = customer_note_path(handle)
+    out = {"status": "", "next": "", "tags": [], "notes": ""}
+    if not path.is_file():
+        return out
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    m = re.match(r"^---\n(.*?)\n---\n?(.*)$", raw, re.S)
+    body = raw
+    if m:
+        body = m.group(2)
+        for line in m.group(1).splitlines():
+            # tags_about, not tags: the note also carries Obsidian's own
+            # tags line, and reading that one returned "locodev, customer"
+            # as if you had typed it about the customer.
+            fm = re.match(r"^(status|next|tags_about):\s*(.*)$", line.strip())
+            if not fm:
+                continue
+            key, val = fm.group(1), fm.group(2).strip()
+            if key == "tags_about":
+                out["tags"] = [t.strip() for t in val.strip("[]").split(",") if t.strip()]
+            else:
+                out[key] = val
+    # The writer puts the handle in as an H1; reading it back as part of the
+    # notes and saving again would stack a new heading on every edit.
+    body = re.sub(r"^#\s+\S+\s*\n?", "", body.lstrip(), count=1)
+    out["notes"] = body.strip()
+    return out
+
+
+def write_customer(handle: str, status: str, nxt: str, tags: list, notes: str) -> Path:
+    """Rewrite the header, keep the body as written."""
+    path = customer_note_path(handle)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tag_line = ", ".join(t.strip() for t in tags if t.strip())
+    head = ("---\n"
+            "tags: [locodev, customer]\n"
+            f"customer: {handle}\n"
+            f"status: {status}\n"
+            f"next: {nxt}\n"
+            f"tags_about: [{tag_line}]\n"
+            "---\n\n"
+            f"# {handle}\n\n")
+    path.write_text(head + notes.strip() + "\n", encoding="utf-8")
+    return path
+
+
+def all_customer_notes() -> dict:
+    """Every hand-written customer note, keyed by handle, read once."""
+    out: dict[str, dict] = {}
+    folder = VAULT / CUSTOMERS_DIR
+    if not folder.is_dir():
+        return out
+    for path in folder.glob("*.md"):
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        m = re.search(r"^customer:\s*(.+)$", raw, re.M)
+        handle = (m.group(1).strip() if m else path.stem)
+        out[handle.lstrip("@").split(" ")[0].lower()] = read_customer(handle)
+    return out
+
+
 _patrons_cache: tuple[float, dict] = (0.0, {})
 
 
@@ -2087,6 +2170,28 @@ def patrons_by_handle() -> dict:
     return out
 
 
+def derived_status(person: dict, today: datetime) -> str:
+    """The status the facts already state, when nobody has set one by hand.
+
+    Ordered by what changes the next action: someone owed a reply outranks
+    someone merely paying, because the reply is the thing to do today.
+    """
+    if person["open"]:
+        return "Waiting for reply"
+    pat = person.get("patron") or {}
+    if pat.get("paying"):
+        return "Subscriber"
+    if pat.get("lifetime_cents"):
+        return "Purchased"
+    try:
+        first = datetime.strptime((person.get("first") or person["last"])[:10], "%Y-%m-%d")
+        if (today - first).days <= 30:
+            return "New"
+    except (ValueError, TypeError):
+        pass
+    return "Quiet"
+
+
 def build_people(questions: list[dict]) -> list[dict]:
     people: dict[str, dict] = {}
     for q in questions:
@@ -2094,12 +2199,17 @@ def build_people(questions: list[dict]) -> list[dict]:
             "who": q["who"], "channel": q["channel"],
             "subscriber": q["subscriber"], "asked": 0, "open": 0,
             "esc": 0, "last": q["date"],
+            # When they first turned up, which is how long you have known
+            # them and the difference between a new face and a regular.
+            "first": q["date"],
             # Per channel, not one label: the same person comments on a video
             # and then turns up in Discord, and which of the two they use is
             # the difference between a viewer and someone in the community.
             "channels": {},
         })
         p["asked"] += 1
+        if q["date"] and q["date"] < p["first"]:
+            p["first"] = q["date"]
         if q["channel"]:
             p["channels"][q["channel"]] = p["channels"].get(q["channel"], 0) + 1
         if q["status"] in ("escalated", "no-source"):
@@ -2108,11 +2218,16 @@ def build_people(questions: list[dict]) -> list[dict]:
             p["esc"] += 1
         if q["subscriber"] != "unknown":
             p["subscriber"] = q["subscriber"]
-    # What each of them is paying, when the two accounts have been linked.
+    # What each of them is paying, when the two accounts have been linked,
+    # and whatever you have written about them.
     patrons = patrons_by_handle()
+    notes = all_customer_notes()
+    today = datetime.now()
     for p in people.values():
         handle = (p["who"] or "").lstrip("@").split(" ")[0].lower()
         p["patron"] = patrons.get(handle) or {}
+        p["note"] = notes.get(handle) or {}
+        p["status"] = p["note"].get("status") or derived_status(p, today)
 
     # A paying customer with a question nobody answered comes first. Not
     # because their question is better, but because they are the one person
@@ -2430,7 +2545,8 @@ def render_html(d: dict, live: bool) -> str:
     together with the static config the layout needs; splitting them keeps
     the data pipeline (scan/suggest/reply/serve) apart from presentation."""
     import panel_ui
-    return panel_ui.render_html(d, live, FACETS, INSTRUMENTATION, SESSION_TOKEN)
+    return panel_ui.render_html(d, live, FACETS, INSTRUMENTATION, SESSION_TOKEN,
+                                MANUAL_STATUS)
 
 
 # --------------------------------------------------------------------------
@@ -2682,6 +2798,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/rebuild":
             build(live=True)
             return self._send_json({"ok": True})
+
+        if self.path == "/customer":
+            payload = self._json_body()
+            handle = str(payload.get("who", "")).strip()
+            if not handle:
+                return self._send_json({"ok": False, "error": "no customer"}, 400)
+            status = str(payload.get("status", "")).strip()
+            if status and status not in MANUAL_STATUS:
+                # A status the panel does not know would render as a blank
+                # pill and quietly mean nothing.
+                return self._send_json({"ok": False,
+                                        "error": f"unknown status {status!r}"}, 400)
+            path = write_customer(
+                handle, status,
+                str(payload.get("next", "")).strip(),
+                payload.get("tags") or [],
+                str(payload.get("notes", "")),
+            )
+            return self._send_json({"ok": True, "path": str(path)})
 
         if self.path == "/suggest":
             payload = self._json_body()

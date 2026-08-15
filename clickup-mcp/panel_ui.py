@@ -567,6 +567,19 @@ tr.cdet > td { padding:0; background:var(--surface2); }
   border-left:2px solid var(--ok-line); }
 .cwait { color:var(--warn); font-size:var(--t-xs); margin-top:3px; }
 .clink { font-size:var(--t-xs); }
+.cedit { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+  gap:var(--s3); padding-top:var(--s3); border-top:1px solid var(--line); }
+.cfield { display:grid; gap:4px; align-content:start; }
+.cfield.wide { grid-column:1 / -1; }
+.cedit select, .cedit input, .cedit textarea {
+  font:inherit; font-size:var(--t-sm); color:var(--ink); background:var(--surface);
+  border:1px solid var(--line); border-radius:var(--r-sm); padding:7px 9px;
+  width:100%; }
+.cedit textarea { resize:vertical; min-height:64px; font-family:inherit; }
+.cedit select:focus, .cedit input:focus, .cedit textarea:focus {
+  outline:2px solid var(--accent); outline-offset:1px; }
+.cfield.wide:last-child { display:flex; align-items:center; gap:var(--s3); }
+.cmsg { min-height:1em; }
 
 /* ---- the overview dashboard ---- */
 .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(380px,100%),1fr));
@@ -1235,6 +1248,11 @@ var QDATA = __QDATA__;
 /* Only the people who linked Patreon to Discord, which is a hundred-odd
    rows rather than the thousand in the table. */
 var PATRONS = __PATRONS__;
+/* What you have written about people, and the statuses you can set. The
+   ones the facts already state are not offered: they would go stale the
+   day after being set. */
+var CRM = __CRM__;
+var MANUAL_STATUS = __MANUAL_STATUS__;
 function $(s, r) { return (r || document).querySelector(s); }
 function $$(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
 function esc(s) {
@@ -2220,14 +2238,74 @@ function customerProfile(who) {
       + "</div>";
   });
   if (mine.length > 40) head += '<div class="note">and ' + (mine.length - 40) + " older</div>";
+  head += "</div>";
+
+  /* Yours to set: what the facts cannot tell anyone. */
+  var st = CRM[who] || {};
+  head += '<div class="cedit" data-who="' + esc(who) + '">';
+  head += '<div class="cfield"><span class="clabel">Where they stand</span><select class="cstatus">';
+  head += '<option value="">from the facts: ' + esc(st.derived || "") + "</option>";
+  MANUAL_STATUS.forEach(function (s) {
+    head += '<option value="' + esc(s) + '"' + (st.status === s ? " selected" : "")
+      + ">" + esc(s) + "</option>";
+  });
+  head += "</select></div>";
+  head += '<div class="cfield"><span class="clabel">Next action</span>'
+    + '<input class="cnext" type="text" placeholder="Follow up about the Ledge System on Monday" value="'
+    + esc(st.next || "") + '"></div>';
+  head += '<div class="cfield"><span class="clabel">Tags</span>'
+    + '<input class="ctags" type="text" placeholder="Ledge System, Rope, Wingman" value="'
+    + esc((st.tags || []).join(", ")) + '"></div>';
+  head += '<div class="cfield wide"><span class="clabel">Private notes</span>'
+    + '<textarea class="cnotes" rows="3" placeholder="Only you see this. It never reaches the customer.">'
+    + esc(st.notes || "") + "</textarea></div>";
+  head += '<div class="cfield wide"><button class="btn primary csave">Save</button>'
+    + '<span class="cmsg note"></span></div>';
   return head + "</div></div>";
 }
+
+function saveCustomer(box) {
+  var msg = box.querySelector(".cmsg");
+  var body = {
+    who: box.dataset.who,
+    status: box.querySelector(".cstatus").value,
+    next: box.querySelector(".cnext").value,
+    tags: box.querySelector(".ctags").value.split(",").map(function (t) {
+      return t.trim(); }).filter(Boolean),
+    notes: box.querySelector(".cnotes").value,
+  };
+  msg.textContent = "Saving...";
+  fetch("/customer", { method: "POST",
+    headers: { "Content-Type": "application/json", "X-Panel-Token": PANEL_TOKEN },
+    body: JSON.stringify(body) })
+    .then(function (r) { return r.json(); })
+    .then(function (s) {
+      if (!s.ok) { msg.textContent = s.error || "could not save"; return; }
+      CRM[body.who] = { status: body.status, next: body.next, tags: body.tags,
+                        notes: body.notes, derived: (CRM[body.who] || {}).derived };
+      msg.textContent = "Saved to the vault.";
+      /* The page rebuilds on any vault change; hold it off long enough to
+         read the confirmation instead of watching the row vanish. */
+      holdUntil = Date.now() + 6000;
+    })
+    .catch(function (e) { msg.textContent = "could not save: " + e.message; });
+}
+document.addEventListener("click", function (ev) {
+  var b = ev.target.closest ? ev.target.closest(".csave") : null;
+  if (b) saveCustomer(b.closest(".cedit"));
+});
 
 /* Delegated, because "View all" adds rows after this runs and a listener
    bound per row would miss every one of them. */
 document.addEventListener("click", function (ev) {
-  var tr = ev.target.closest ? ev.target.closest("tr.crow") : null;
-  if (tr && !ev.target.closest("a")) toggleCustomer(tr);
+  if (!ev.target.closest) return;
+  /* The open profile sits in a row of its own directly under the clickable
+     one. Typing in it must not fold it shut, and an earlier attempt to
+     guard that by stopping the event during capture silently killed the
+     Save button along with it. */
+  if (ev.target.closest(".cdet") || ev.target.closest("a")) return;
+  var tr = ev.target.closest("tr.crow");
+  if (tr) toggleCustomer(tr);
 });
 document.addEventListener("keydown", function (ev) {
   if (ev.key !== "Enter" && ev.key !== " ") return;
@@ -3511,7 +3589,7 @@ def _header(d: dict, live: bool) -> str:
 
 
 def render_html(d: dict, live: bool, facets: list, instrumentation: list,
-                token: str = "") -> str:
+                token: str = "", manual_status: tuple = ()) -> str:
     import json as _json
 
     def embed(obj) -> str:
@@ -3529,6 +3607,15 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
             .replace("__TOKEN__", token)
             .replace("__AI_CACHE__", embed(d.get("ai_cache") or {}))
             .replace("__QDATA__", embed(_question_payload(d["questions"])))
+            .replace("__MANUAL_STATUS__", embed(list(manual_status)))
+            .replace("__CRM__", embed({
+                p["who"]: {"status": (p.get("note") or {}).get("status", ""),
+                           "next": (p.get("note") or {}).get("next", ""),
+                           "tags": (p.get("note") or {}).get("tags", []),
+                           "notes": (p.get("note") or {}).get("notes", ""),
+                           "derived": p.get("status", "")}
+                for p in d["people"]
+                if (p.get("note") or p.get("status"))}))
             .replace("__PATRONS__", embed({
                 h: {"name": p["name"], "tiers": p["tiers"],
                     "monthly": p["monthly_cents"], "lifetime": p["lifetime_cents"],
