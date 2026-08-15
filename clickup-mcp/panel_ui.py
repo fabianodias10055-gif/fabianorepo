@@ -2339,7 +2339,7 @@ function renderLinks(d) {
       + '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
       + 'stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="10"/>'
       + '<path d="M12 8v4"/><path d="M12 16h.01"/></svg></span>'
-      + "<b>Link telemetry unavailable</b><p>" + esc(txt) + "</p></div>";
+      + "<b>Click data is not reachable right now</b><p>" + esc(txt) + "</p></div>";
     var rt = $("#ltretry");
     if (rt) rt.addEventListener("click", function () { ltFails = 0; loadLinks(); });
     return;
@@ -2520,18 +2520,23 @@ def _tiles(d: dict, n_systems: int, below: str = "") -> str:
         return (f'<span class="dlt {cls}">{arrow}{sign}{_fmt(abs(dv))}{unit}</span>'
                 f'<span>vs 24h ago</span>')
 
+    # Written as what is true of people, not as metric names. "Open
+    # questions 1,462" is a number about the database; "1,462 people are
+    # waiting for an answer" is the same number about the day ahead, and
+    # only the second one tells anyone what to do.
     tiles = [
-        ("hero", "chat", "c-blue", "Open questions", _fmt(len(open_qs)),
-         "waiting on you", delta("open", False), _spark(series("open"), "a", "var(--accent)")),
-        ("", "alert", "c-red", "Escalated", _fmt(escalated),
-         "asked for you by name", "", ""),
-        ("", "sparkle", "c-green", "Ready to answer", _fmt(ready),
-         "the vault already covers these", "", ""),
-        ("", "flame", "c-amber", "Oldest open", escape(oldest or "-"),
-         "nobody has replied since", "", ""),
-        ("", "check", "c-violet", "Answer rate", f"{d['answer_rate']}%",
-         f"{_fmt(sum(1 for q in qs if q['status'] == 'answered'))} answered of "
-         f"{_fmt(len(qs))}", delta("rate", True, " pp"),
+        ("hero", "chat", "c-blue", "People waiting for an answer",
+         _fmt(len(open_qs)), "nobody has replied to them yet",
+         delta("open", False), _spark(series("open"), "a", "var(--accent)")),
+        ("", "alert", "c-red", "Asked for you by name", _fmt(escalated),
+         "they used your name, so a reply is expected", "", ""),
+        ("", "sparkle", "c-green", "You can answer these today", _fmt(ready),
+         "the answer is already written somewhere in your vault", "", ""),
+        ("", "flame", "c-amber", "Waiting the longest", escape(oldest or "-"),
+         "that person has had no reply since this day", "", ""),
+        ("", "check", "c-violet", "You have answered", f"{d['answer_rate']}%",
+         f"{_fmt(sum(1 for q in qs if q['status'] == 'answered'))} of "
+         f"{_fmt(len(qs))} people who asked", delta("rate", True, " pp"),
          _spark(series("rate"), "b", "var(--info)")),
     ]
     cells = []
@@ -2958,13 +2963,13 @@ def _system_pressure_card(d: dict, facets: list) -> str:
     pct = d["written"] * 100 // d["total_facets"] if d["total_facets"] else 0
     return (
         f'<section class="card" id="systems">'
-        f'<h2><span class="he">🔥</span>System pressure'
-        f'<span class="cnt">{_fmt(d["written"])} of {_fmt(d["total_facets"])} notes '
-        f'written ({pct}%) &middot; {d["critical"]} critical</span></h2>'
-        f'<div class="scroll"><table aria-label="System pressure"><thead><tr>'
-        f'<th scope="col">System</th><th scope="col">Open</th>'
-        f'<th scope="col">Docs</th><th scope="col">Next to write</th>'
-        f'<th scope="col">Rank</th></tr></thead>'
+        f'<h2><span class="he">🔥</span>Products, and who is waiting on each'
+        f'<span class="cnt">{_fmt(d["total_facets"] - d["written"])} notes still '
+        f'to write across every product</span></h2>'
+        f'<div class="scroll"><table aria-label="Products by demand"><thead><tr>'
+        f'<th scope="col">Product</th><th scope="col">People waiting</th>'
+        f'<th scope="col">Written up</th><th scope="col">Write this next</th>'
+        f'<th scope="col">Order</th></tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table></div>{more}</section>'
     )
 
@@ -2975,7 +2980,7 @@ def _people_card(d: dict) -> str:
         hid = "" if i < 8 else " xtra hide"
         tags = ""
         if p.get("esc"):
-            tags += ' <span class="tag esc">escalated</span>'
+            tags += ' <span class="tag esc">asked for you</span>'
         if p.get("lead"):
             tags += ' <span class="tag lead">lead</span>'
         if p["subscriber"] == "yes":
@@ -3001,7 +3006,7 @@ def _people_card(d: dict) -> str:
     body = "".join(rows) if rows else (
         '<tr><td colspan="4"><div class="empty">Nobody logged yet.</div></td></tr>')
     return (
-        f'<section class="card" id="people"><h2><span class="he">👥</span>Who is asking'
+        f'<section class="card" id="people"><h2><span class="he">👥</span>Customers'
         f'<span class="cnt">{_fmt(len(d["people"]))} people</span></h2>'
         f'<div class="scroll"><table aria-label="People asking questions"><thead><tr>'
         f'<th scope="col">User</th><th scope="col">Asked</th>'
@@ -3042,8 +3047,9 @@ def _videos_card(d: dict) -> str:
     body = "".join(rows) if rows else '<div class="empty">No videos collected yet.</div>'
     return (
         f'<section class="card" id="videos"><h2><span class="he">🎬</span>Videos'
-        f'<span class="cnt">{_fmt(len(videos))} &middot; {transcripts} transcripts '
-        f'&middot; {untagged} untagged</span></h2>{body}{more}</section>'
+        f'<span class="cnt">{_fmt(len(videos))} videos &middot; {untagged} not '
+        f'linked to a product &middot; {len(videos) - transcripts} without their '
+        f'words saved</span></h2>{body}{more}</section>'
     )
 
 
@@ -3057,7 +3063,7 @@ def _links_card() -> str:
               '<div class="skel skel-row" style="width:52%"></div>'
               '<div class="skel skel-row" style="width:61%"></div>')
     return (
-        f'<section class="card" id="links"><h2><span class="he">🔗</span>Link telemetry'
+        f'<section class="card" id="links"><h2><span class="he">🔗</span>Links people clicked'
         f'<span class="cnt" id="lt-state" role="status" aria-live="polite">loading...</span>'
         f'<a class="admlink" href="https://locodev.dev/adminlocoILco" target="_blank" '
         f'rel="noopener">open admin {_icon("external", 12)}</a></h2>'
@@ -3066,8 +3072,18 @@ def _links_card() -> str:
     )
 
 
-def _sources_card(instrumentation: list) -> str:
-    rows = []
+def _sources_card(instrumentation: list, d: dict | None = None) -> str:
+    d = d or {}
+    # The technical readout lives here and only here. It was in the footer
+    # of every screen, where it was noise under pages about people; someone
+    # who wants the scan time comes to Admin to find it.
+    tech = (
+        f'<p class="note">Last read of the vault: {escape(d.get("generated_at", "?"))}, '
+        f'{_fmt(d.get("scan_ms", 0))} ms across {_fmt(d.get("md_files", 0))} notes. '
+        f'{_fmt(len(d.get("history") or []))} points of history kept. '
+        f'Nothing is stored in this page; close it and nothing is lost.</p>'
+    )
+    rows = [tech]
     for source, vol, state, note in instrumentation:
         rows.append(
             f'<div class="srow"><span><span class="nm">{escape(source)}</span><br>'
@@ -3076,7 +3092,7 @@ def _sources_card(instrumentation: list) -> str:
             f'<span class="pill st-{escape(state, quote=True)}">{escape(state)}</span></div>'
         )
     return (
-        f'<section class="card" id="sources"><h2><span class="he">👀</span>Measured, and blind</h2>'
+        f'<section class="card" id="sources"><h2><span class="he">👀</span>What this panel can and cannot see</h2>'
         f'{"".join(rows)}</section>'
     )
 
@@ -3178,7 +3194,7 @@ def _sync_card(d: dict) -> str:
 
     return (
         f'<section class="card" id="sync">'
-        f'<h2><span class="he">🔄</span>Who knows what</h2>'
+        f'<h2><span class="he">🔄</span>What each assistant knows</h2>'
         f'{live}{"".join(who)}{summary}'
         f'<div class="scroll"><table><thead><tr>'
         f'<th>Note</th><th class="num">Letters you wrote</th>'
@@ -3216,7 +3232,7 @@ def _wingman_card(d: dict) -> str:
 
     return (
         f'<section class="card" id="wingman">'
-        f'<h2><span class="he">✍️</span>Wingman: what to write next</h2>'
+        f'<h2><span class="he">✍️</span>What to write next</h2>'
         f'<p class="note">Wingman reads your Unreal projects here on this '
         f'computer and writes the notes. This is the order that matters: how '
         f'many people are waiting for an answer about a system, against how '
@@ -3231,17 +3247,24 @@ def _wingman_card(d: dict) -> str:
     )
 
 
+# Named for what a person comes here to do. The ids stay as they were:
+# they are what the screen switch and every #questions link already use, and
+# renaming them would break bookmarks to rename nothing a reader can see.
+#
+# No tab is created for something that does not exist yet. A Sales tab with
+# no purchase anywhere behind it looks like a finished feature and answers
+# every question with a blank, which is worse than not having it.
 _NAV = [
-    ("overview", "home", "Overview", ""),
-    ("questions", "chat", "Questions", "open_q"),
-    ("answers", "check", "Answers", "answers"),
-    ("systems", "flame", "Pressure", ""),
-    ("people", "users", "People", ""),
+    ("overview", "home", "Home", ""),
+    ("questions", "chat", "Inbox", "open_q"),
+    ("answers", "check", "Answered", "answers"),
+    ("people", "users", "Customers", ""),
+    ("systems", "flame", "Products", ""),
     ("videos", "video", "Videos", ""),
     ("links", "link", "Links", ""),
-    ("sync", "refresh", "Who knows what", "silent"),
-    ("wingman", "sparkle", "Wingman", ""),
-    ("sources", "database", "Sources", ""),
+    ("sync", "refresh", "Knowledge", "silent"),
+    ("wingman", "sparkle", "Writing", ""),
+    ("sources", "database", "Admin", ""),
 ]
 
 
@@ -3325,8 +3348,8 @@ def _header(d: dict, live: bool) -> str:
         f'{_icon("filter", 15)}</button>'
         f'<button class="btn" id="themebtn" aria-label="Switch color theme">'
         f'{theme_icons}<span class="tlabel">Auto</span></button>'
-        f'<button class="btn icon bell" id="bellbtn" aria-label="Open questions" '
-        f'title="Open questions">{_icon("bell", 15)}'
+        f'<button class="btn icon bell" id="bellbtn" aria-label="People waiting for an answer" '
+        f'title="People waiting for an answer">{_icon("bell", 15)}'
         f'<span class="badge">{_fmt(d["open_q"])}</span></button></div>'
     )
 
@@ -3351,10 +3374,12 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
             .replace("__AI_CACHE__", embed(d.get("ai_cache") or {}))
             .replace("__QDATA__", embed(_question_payload(d["questions"]))))
 
-    diag = (f'generated {escape(d["generated_at"])} &middot; scan {d.get("scan_ms", "?")} ms '
-            f'&middot; {_fmt(d.get("md_files", 0))} notes &middot; '
-            f'{len(d.get("history") or [])} history points &middot; '
-            f'the vault is the source of truth, the page keeps no data of its own')
+    # The timings and file counts moved to Admin, where someone looking for
+    # them is looking for them. On every other screen they were noise at the
+    # bottom of a page about people.
+    diag = (f'updated {escape(d["generated_at"])} &middot; '
+            f'everything here is read from your vault, and this page keeps no '
+            f'copy of its own')
 
     return f"""<!doctype html>
 <html lang="en">
@@ -3380,7 +3405,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 </div>
 {_stamp_views(_links_card() + _sync_card(d) + _wingman_card(d))}
 <div class="grid3">
-{_stamp_views(_people_card(d) + _videos_card(d) + _sources_card(instrumentation))}
+{_stamp_views(_people_card(d) + _videos_card(d) + _sources_card(instrumentation, d))}
 </div>
 <footer>{diag}</footer>
 </main>
