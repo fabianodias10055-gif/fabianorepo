@@ -2478,6 +2478,32 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
+    def _serve_panel(self) -> None:
+        """Serve the page carrying this process's token, not the file's.
+
+        The token is minted once per launch and baked into the page at build
+        time, and the file on disk is often written by a different process:
+        a manual `python panel.py`, or the watcher before it was restarted.
+        The page then loads perfectly and every button answers "not
+        authorised", which reads like a permissions problem and is really
+        two processes holding different secrets. Substituting on the way out
+        means whoever serves the page owns the token in it.
+        """
+        path = VAULT / "Panel" / "panel.html"
+        try:
+            html = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return self.send_error(404, "panel.html not built yet")
+        html = re.sub(r'(var PANEL_TOKEN = ")[^"]*(")',
+                      lambda m: m.group(1) + SESSION_TOKEN + m.group(2),
+                      html, count=1)
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):  # noqa: N802
         if not self._host_ok():
             return self.send_error(421, "host not allowed")
@@ -2487,6 +2513,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         route = self.path.split("?", 1)[0]
         if route == "/" or route.startswith("/index"):
             self.path = "/panel.html"
+        if self.path.split("?", 1)[0] == "/panel.html":
+            return self._serve_panel()
         if self.path.startswith("/status.json"):
             body = json.dumps({
                 "epoch": _state["epoch"],

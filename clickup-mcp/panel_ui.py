@@ -1298,6 +1298,16 @@ function setView(name) {
   });
   ss("lp-view", name);
 }
+/* Anything that acts on another screen has to open it first. Edit lives on
+   Answers and drives the Questions table; before this it filtered, opened
+   the row and scrolled to a section that was hidden, so the click looked
+   like it did nothing at all. replaceState rather than assigning the hash,
+   so the switch happens now instead of on the next event loop turn. */
+function goView(name) {
+  setView(name);
+  try { history.replaceState(null, "", "#" + name); }
+  catch (e) { location.hash = "#" + name; }
+}
 addEventListener("hashchange", function () {
   setView(location.hash.replace("#", ""));
   scrollTo(0, 0);
@@ -2094,6 +2104,7 @@ $$("[data-editans]").forEach(function (b) {
       answerRow(b).querySelector(".amsg").textContent = "question not in the inbox";
       return;
     }
+    goView("questions");          /* the row it opens lives on that screen */
     setGroup("st", "all");        /* it is answered: the open queue hides it */
     state.q = code;
     $("#q").value = b.dataset.code;
@@ -2118,7 +2129,7 @@ function drillTo(sys) {
   page = 0;
   apply();
   syncUrl();
-  location.hash = "#questions";
+  goView("questions");
 }
 $$(".grow").forEach(function (g) {
   g.tabIndex = 0;
@@ -2162,13 +2173,13 @@ document.addEventListener("click", function (e) {
 
 /* ---- header shortcuts ---- */
 $("#filtbtn").addEventListener("click", function () {
-  location.hash = "#questions";
+  goView("questions");
   var f = $("#filters");
   f.classList.remove("flash");
   void f.offsetWidth;
   f.classList.add("flash");
 });
-$("#bellbtn").addEventListener("click", function () { location.hash = "#questions"; });
+$("#bellbtn").addEventListener("click", function () { goView("questions"); });
 
 /* ---- keyboard: search focus, j/k navigation, n next-open ---- */
 var kIdx = -1;
