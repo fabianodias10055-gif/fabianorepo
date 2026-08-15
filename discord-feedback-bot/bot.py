@@ -5191,7 +5191,11 @@ class FeedbackBot(discord.Client):
         # Build the final text prompt, including context from replied-to message
         parts = []
         if kb_context:
-            parts.append(f"[Relevant past Q&A from community knowledge base:\n{kb_context}\n]")
+            # Named for what it is rather than "past Q&A": the model repeats
+            # the label back at the reader, and it now carries documentation
+            # of the systems as much as old answers.
+            parts.append(f"[What you know about this, from LocoDev's own notes "
+                         f"and answers:\n{kb_context}\n]")
         if channel_context:
             parts.append(f"[Recent channel messages for context:\n{channel_context}\n]")
 
@@ -5591,17 +5595,25 @@ class FeedbackBot(discord.Client):
                             "- Support from experienced devs\n\n"
                             "IMPORTANT: Only mention Patreon or the plans if someone specifically asks about them. "
                             "Focus on actually helping with the question. Do not add Patreon plugs at the end of replies.\n\n"
-                            "PAST Q&A:\n"
-                            "Some messages arrive with a block of past Q&A. Those are answers "
-                            "LocoDev actually gave on Discord and YouTube, so treat them as the "
-                            "most reliable thing you have about how these systems behave, ahead "
-                            "of anything you assume about Unreal in general. Use them even when "
-                            "they cover only part of what was asked: say what is known from them "
-                            "first, then ask for the missing piece. Each one carries the date it "
-                            "was answered; when two disagree, follow the recent one and say the "
+                            "WHAT LOCODEV KNOWS:\n"
+                            "Some messages arrive with a block of LocoDev's own material: "
+                            "documentation of these systems and answers he gave on Discord and "
+                            "YouTube. Treat it as the most reliable thing you have about how "
+                            "these systems behave, ahead of anything you assume about Unreal in "
+                            "general. Use it even when it covers only part of what was asked: "
+                            "say what is known first, then ask for the missing piece. Entries "
+                            "carry a date; when two disagree, follow the recent one and say the "
                             "other describes an older version.\n"
+                            "It is your own knowledge, so present it that way. \"Here's what I "
+                            "know\" or simply the answer. Never say it came from past Q&A, a "
+                            "knowledge base or a context block: the person asked you, and how "
+                            "you looked it up is not part of the answer.\n"
                             "Never invent a feature, a price, a file name or a version. If the "
                             "block does not contain it, you do not know it.\n\n"
+                            "FORMATTING:\n"
+                            "Discord does not draw markdown tables. Never reply with one, and "
+                            "never line values up with pipes: it arrives as a wall of broken "
+                            "rows. Use short bullet lines, one per item, names in backticks.\n\n"
                             "When the question is vague, ask what they are trying to build or "
                             "what exactly they need before concluding you cannot help. A "
                             "clarifying question is a better reply than a refusal.\n\n"
