@@ -123,11 +123,16 @@ PUSHOVER_API_TOKEN = os.getenv("PUSHOVER_API_TOKEN", "")
 KB_CHANNEL_IDS = {
     int(c) for c in os.getenv(
         "KB_CHANNEL_IDS",
-        # general-chat, general-support, support-hub, welcome. People ask
-        # real questions in the welcome channel and were getting silence,
-        # since it was never on this list.
+        # general-chat, general-support, support-hub, welcome,
+        # patreon-support. People ask real questions in the welcome channel
+        # and were getting silence, since it was never on this list.
+        #
+        # Not the backup channel: everything in there was posted by this bot
+        # mirroring patreon-support, and bot messages are skipped, so adding
+        # it would answer nothing that is mirrored and would only put replies
+        # into an archive.
         "1158395982485147692,1459914723330883727,1460338435163164827"
-        ",1158395982485147689",
+        ",1158395982485147689,1160715880787869729",
     ).replace(" ", "").split(",") if c.strip().isdigit()
 }
 MAX_MESSAGES_PER_CHANNEL = int(os.getenv("MAX_MESSAGES_PER_CHANNEL", "250"))
