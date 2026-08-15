@@ -1054,6 +1054,70 @@ footer { margin-top:var(--s6); padding-top:var(--s4); border-top:1px solid var(-
     -webkit-backdrop-filter:none; }
   body::before { display:none; }
 }
+/* ================= motion =================
+   Transform and shadow only. An opacity reveal leaves the content blank if
+   the tab stops compositing, which this page has done before, so nothing
+   here can hide anything: at worst a card sits a few pixels lower than it
+   should. Everything is switched off by the reduced-motion block below. */
+
+/* 1. Cards arrive from just below, each a beat after the last. */
+@keyframes cardIn { from { transform:translateY(9px); } to { transform:none; } }
+.card { animation:cardIn .36s var(--ease) both; }
+.card:nth-of-type(2) { animation-delay:.04s; }
+.card:nth-of-type(3) { animation-delay:.08s; }
+.card:nth-of-type(4) { animation-delay:.12s; }
+.card:nth-of-type(n+5) { animation-delay:.16s; }
+
+/* 2. The icon leans toward the label the pointer is on. */
+.nav a svg, .mnav a svg { transition:transform var(--dur) var(--ease); }
+.nav a:hover svg { transform:translateX(2px); }
+
+/* 3. The marker beside the open section grows from its centre. */
+@keyframes barIn { from { transform:scaleY(.2); } to { transform:scaleY(1); } }
+.nav a.active::before { animation:barIn .22s var(--ease) both; }
+
+/* 4. Buttons take a step down when pressed, and come back slower. */
+.btn { transition:background var(--dur) var(--ease), border-color var(--dur)
+  var(--ease), transform .18s var(--ease); }
+.btn:active { transform:translateY(1px) scale(.985); }
+
+/* 5. A hovered row grows an accent edge instead of only changing colour. */
+tbody tr td:first-child { transition:box-shadow .18s var(--ease); }
+tbody tr:hover td:first-child { box-shadow:inset 2px 0 0 var(--accent); }
+
+/* 6. Status pills lift a hair, enough to read as touchable. */
+.pill { transition:transform var(--dur) var(--ease); }
+.pill:hover { transform:translateY(-1px); }
+
+/* 7. The queue badge breathes while something is waiting to be sent. It is
+      the one thing on the page that means "right now". */
+@keyframes breathe { 0%,100% { transform:scale(1); } 50% { transform:scale(1.035); } }
+.queue .st-partial { animation:breathe 3.2s var(--ease) infinite;
+  transform-origin:left center; }
+
+/* 8. Faces grow slightly under the pointer. */
+.av { transition:transform .2s var(--ease); }
+.uc:hover .av { transform:scale(1.08); }
+
+/* 9. The card's emoji tips over when you are reading that card. */
+.card h2 .he { display:inline-block; transition:transform .28s var(--ease); }
+.card:hover h2 .he { transform:rotate(-8deg) scale(1.1); }
+
+/* 10. Queued notes slide in one after another, so the list reads as a
+       queue rather than a block that appeared. */
+@keyframes qIn { from { transform:translateX(-6px); } to { transform:none; } }
+.qlist li { animation:qIn .3s var(--ease) both; }
+.qlist li:nth-child(2) { animation-delay:.03s; }
+.qlist li:nth-child(3) { animation-delay:.06s; }
+.qlist li:nth-child(4) { animation-delay:.09s; }
+.qlist li:nth-child(n+5) { animation-delay:.12s; }
+
+/* 11. Jumping to a section rings it once, so the eye lands in the right
+       place after a click in the sidebar. */
+@keyframes arrive { 0% { box-shadow:0 0 0 2px var(--accent); }
+  100% { box-shadow:var(--el-1); } }
+.card:target { animation:arrive 1.1s var(--ease) both; }
+
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior:auto; }
   *, *::before, *::after { animation-duration:.001ms !important;
