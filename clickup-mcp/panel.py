@@ -682,6 +682,32 @@ def _idf_table(sections: list[str]) -> dict[str, float]:
     return {w: math.log(1 + n / (1 + c)) for w, c in df.items()}
 
 
+def strip_boilerplate(text: str) -> str:
+    """What a reader can learn from, tables included.
+
+    strip_template answers a different question, "did the author write
+    anything here", and a table the template shipped with is not writing.
+    Used as a search filter it threw away the most factual sections in the
+    catalog: "Functions on the bot" is a heading and a table of four
+    function names, and measured as prose it is empty, so nothing could
+    ever match it. Separator rows carry no content and still go.
+    """
+    lines = []
+    for line in strip_scaffold(text).splitlines():
+        s = line.strip()
+        if not s or s.startswith(("#", ">", "![](")):
+            continue
+        if s.startswith("|"):
+            if set(s) <= set("|-: "):
+                continue
+            lines.append(s)
+            continue
+        if _BARE_SCAFFOLD.fullmatch(s):
+            continue
+        lines.append(s)
+    return "\n".join(lines)
+
+
 def _all_sections() -> list[tuple[str, Path]]:
     """Every answerable section in the catalog, read once."""
     out: list[tuple[str, Path]] = []
@@ -689,7 +715,7 @@ def _all_sections() -> list[tuple[str, Path]]:
         text = strip_scaffold(path.read_text(encoding="utf-8", errors="replace"))
         for section in re.split(r"(?m)^(?=#{1,6}\s)", text):
             section = section.strip()
-            if len(strip_template(section)) < 40:
+            if len(strip_boilerplate(section)) < 40:
                 continue
             out.append((section, path))
     return out
