@@ -581,6 +581,19 @@ tr.cdet > td { padding:0; background:var(--surface2); }
 .cfield.wide:last-child { display:flex; align-items:center; gap:var(--s3); }
 .cmsg { min-height:1em; }
 
+/* ---- what is owed, at the top of Home ---- */
+#attention { margin-bottom:var(--s4); }
+.att { display:grid; gap:2px; padding:var(--s3) 0 var(--s3) var(--s4);
+  border-bottom:1px solid var(--line2); position:relative; }
+.att:last-of-type { border-bottom:0; }
+.att::before { content:""; position:absolute; left:0; top:var(--s3); bottom:var(--s3);
+  width:3px; border-radius:2px; background:var(--ink3); }
+.att-crit::before { background:var(--crit); }
+.att-warn::before { background:var(--warn); }
+.att-info::before { background:var(--accent); }
+.att b { font-size:var(--t-base); font-weight:640; }
+.att .note { color:var(--ink3); font-size:var(--t-xs); }
+
 /* ---- the overview dashboard ---- */
 .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(380px,100%),1fr));
   gap:var(--s4); margin-top:var(--s4); }
@@ -2749,6 +2762,118 @@ def _bar(pct: int, tone: str = "g") -> str:
     return (f'<span class="pbar"><i class="{tone}" style="width:{pct}%"></i></span>')
 
 
+def _needs_attention(d: dict) -> str:
+    """What is owed, in the order it is owed.
+
+    Everything here is somebody waiting. Sorted by who is owed most, which
+    puts a paying customer above a queue count and a promise you made
+    above a stranger's first question.
+    """
+    people = d["people"]
+    items = []
+
+    owed = [p for p in people if p.get("patron", {}).get("paying") and p["open"]]
+    if owed:
+        money = sum(p["patron"]["monthly_cents"] for p in owed) / 100
+        names = ", ".join(escape(p["who"]) for p in owed[:4])
+        items.append(("crit", f"{len(owed)} paying customers waiting for a reply",
+                      f"US$ {money:,.0f} a month between them &middot; {names}"
+                      + (" and more" if len(owed) > 4 else "")))
+
+    promised = [p for p in people if (p.get("note") or {}).get("next")]
+    if promised:
+        first = promised[0]
+        items.append(("warn", f"{len(promised)} next actions you wrote down",
+                      f"{escape(first['who'])}: "
+                      f"{escape(first['note']['next'][:80])}"))
+
+    esc_n = sum(1 for p in people if p.get("esc"))
+    if esc_n:
+        items.append(("warn", f"{esc_n} people asked for you by name",
+                      "they used your name, so they are waiting on you and "
+                      "not on the community"))
+
+    waiting = sum(1 for p in people if p["open"])
+    oldest = min((q["date"] for q in d["questions"]
+                  if q["status"] != "answered" and q["date"]), default="")
+    if waiting:
+        items.append(("info", f"{_fmt(waiting)} people have an unanswered question",
+                      f"the longest has been waiting since {escape(oldest)}"
+                      if oldest else ""))
+
+    lost = [p for p in people
+            if p.get("patron") and not p["patron"].get("paying")
+            and p["patron"].get("lifetime_cents")]
+    if lost:
+        items.append(("info", f"{len(lost)} customers stopped paying",
+                      "they paid before and no longer do, which is a "
+                      "different conversation to have"))
+
+    rows = "".join(
+        f'<div class="att att-{tone}"><b>{label}</b>'
+        f'<span class="note">{sub}</span></div>'
+        for tone, label, sub in items
+    ) or '<p class="empty">Nobody is waiting on you. Genuinely.</p>'
+    return (f'<section class="card" id="attention"><h2><span class="he">🔔</span>'
+            f'Needs attention</h2>{rows}</section>')
+
+
+def _today_card(d: dict) -> str:
+    from datetime import datetime as _dt, timedelta as _td
+    today = _dt.now().strftime("%Y-%m-%d")
+    week = (_dt.now() - _td(days=7)).strftime("%Y-%m-%d")
+    qs = d["questions"]
+    asked_today = sum(1 for q in qs if q["date"] == today)
+    asked_week = sum(1 for q in qs if q["date"] >= week)
+    answered_today = sum(1 for a in (d.get("answers") or [])
+                         if (a.get("when") or "")[:10] == today)
+    new_people = sum(1 for p in d["people"] if p.get("first") == today)
+    pat = d.get("patreon") or {}
+
+    def line(n, label, sub=""):
+        return (f'<div class="orow"><span class="olabel">{label}</span>'
+                f'<span class="ovals"><b>{_fmt(n)}</b>'
+                + (f'<br><span class="note">{sub}</span>' if sub else "")
+                + "</span></div>")
+
+    return (
+        f'<section class="card"><h2><span class="he">📅</span>Today</h2>'
+        + line(asked_today, "questions arrived", f"{_fmt(asked_week)} in the last 7 days")
+        + line(answered_today, "you answered")
+        + line(new_people, "people asked for the first time")
+        + line(pat.get("new_this_month", 0), "new patrons", "this month")
+        + "</section>"
+    )
+
+
+def _business_card(d: dict) -> str:
+    pat = d.get("patreon") or {}
+    people = d["people"]
+    waiting = sum(1 for p in people if p["open"])
+
+    def line(label, value, sub=""):
+        return (f'<div class="orow"><span class="olabel">{label}</span>'
+                f'<span class="ovals"><b>{value}</b>'
+                + (f'<br><span class="note">{sub}</span>' if sub else "")
+                + "</span></div>")
+
+    rows = line("people who have asked something", _fmt(len(people)))
+    if pat:
+        rows += line("paying right now", _fmt(pat.get("paying", 0)),
+                     f"of {_fmt(pat.get('total', 0))} on Patreon")
+        rows += line("coming in monthly",
+                     f"US$ {pat.get('monthly_cents', 0) / 100:,.0f}")
+        rows += line("paid over the years",
+                     f"US$ {pat.get('lifetime_cents', 0) / 100:,.0f}")
+    rows += line("questions still open", _fmt(waiting))
+    if pat.get("read_at"):
+        rows += (f'<p class="note">Patreon read {escape(pat["read_at"])}. '
+                 f'WhatsApp and website sales are not here: nothing in this '
+                 f'panel can see them yet.</p>')
+    return (f'<section class="card"><h2><span class="he">📊</span>'
+            f'The business, in short</h2>{rows}</section>')
+
+
 def _overview_cards(d: dict) -> str:
     """The screen that was five numbers and a footer.
 
@@ -2821,8 +2946,13 @@ def _overview_cards(d: dict) -> str:
         return (f'<section class="card"><h2><span class="he">{emoji}</span>'
                 f'{title}</h2>{body}</section>')
 
+    # Attention first, then what happened today, then the shape of the
+    # business. Everything below that is context rather than a call to act.
     return (
-        '<div class="grid2">'
+        _needs_attention(d)
+        + '<div class="grid2">'
+        + _today_card(d)
+        + _business_card(d)
         + card("Where they ask", "📣", "".join(where))
         + card("Under the most pressure", "🔥", "".join(pressure))
         + card("What the bot knows", "🤖", know)

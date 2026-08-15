@@ -2192,6 +2192,32 @@ def derived_status(person: dict, today: datetime) -> str:
     return "Quiet"
 
 
+def patreon_summary() -> dict:
+    """The paying side in numbers, for the home page.
+
+    Read from the whole export rather than from the handful of patrons who
+    linked their Discord: the money is true of everyone, and only the
+    joining to a conversation needs the link.
+    """
+    path = VAULT / "Panel" / "patreon-members.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    members = raw.get("members", [])
+    active = [m for m in members if m.get("status") == "active_patron"]
+    month = datetime.now().strftime("%Y-%m")
+    return {
+        "total": len(members),
+        "paying": len(active),
+        "monthly_cents": sum(m.get("monthly_cents", 0) for m in active),
+        "lifetime_cents": sum(m.get("lifetime_cents", 0) for m in members),
+        "new_this_month": sum(1 for m in active if (m.get("since") or "")[:7] == month),
+        "stopped": sum(1 for m in members if m.get("status") == "former_patron"),
+        "read_at": (raw.get("read_at") or "")[:16].replace("T", " "),
+    }
+
+
 def build_people(questions: list[dict]) -> list[dict]:
     people: dict[str, dict] = {}
     for q in questions:
@@ -2354,6 +2380,7 @@ def scan() -> dict:
     return {
         "md_files": md_files,
         "patrons": patrons_by_handle(),
+        "patreon": patreon_summary(),
         "sync": sync_report(),
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "epoch": int(time.time()),
