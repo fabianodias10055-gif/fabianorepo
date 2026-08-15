@@ -67,6 +67,11 @@ ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
 # Proactive KB auto-reply thresholds
 KB_AUTO_MIN_SCORE = int(os.getenv("KB_AUTO_MIN_SCORE", "3"))   # min non-stopword word overlap
 KB_AUTO_COOLDOWN = int(os.getenv("KB_AUTO_COOLDOWN", "120"))   # seconds between KB replies per user per channel
+# Answer questions in the watched channels with the AI, without waiting to be
+# @mentioned. This is the bot speaking in public on its own, so it is a switch
+# and not a code change: set it to 0 and the mention requirement comes back
+# with no deploy.
+KB_AI_AUTO_ANSWER = os.getenv("KB_AI_AUTO_ANSWER", "1") not in ("0", "false", "False", "no")
 # Per-user cooldown on the expensive @mention/reply AI path (subprocess + fetches)
 AI_USER_COOLDOWN = int(os.getenv("AI_USER_COOLDOWN", "8"))     # seconds between AI answers per user
 # Whether to attach a KB entry's stored images to FAQ auto-replies. Off by
@@ -112,7 +117,15 @@ _SCAM_PHRASES = (
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 PUSHOVER_USER_KEY = os.getenv("PUSHOVER_USER_KEY", "")
 PUSHOVER_API_TOKEN = os.getenv("PUSHOVER_API_TOKEN", "")
-KB_CHANNEL_IDS = {1158395982485147692, 1459914723330883727, 1460338435163164827}
+# The channels the bot watches without being called. Overridable so a channel
+# can be added or removed from Railway without a deploy, which matters more
+# now that being on this list means the bot answers there on its own.
+KB_CHANNEL_IDS = {
+    int(c) for c in os.getenv(
+        "KB_CHANNEL_IDS",
+        "1158395982485147692,1459914723330883727,1460338435163164827",
+    ).replace(" ", "").split(",") if c.strip().isdigit()
+}
 MAX_MESSAGES_PER_CHANNEL = int(os.getenv("MAX_MESSAGES_PER_CHANNEL", "250"))
 PROJECTS_FORUM_CHANNEL_ID = os.getenv("PROJECTS_FORUM_CHANNEL_ID")
 # ── New-merch email watcher ───────────────────────────────────────────────────
@@ -4630,14 +4643,26 @@ class FeedbackBot(discord.Client):
                 and isinstance(message.channel, discord.Thread)
                 and str(getattr(message.channel, "parent_id", None)) == PROJECTS_FORUM_CHANNEL_ID
             )
-            if in_kb_channel or in_project_thread:
-                replied = await self._try_kb_auto_reply(message)
-                # If neither the bot nor (yet) a human has answered, watch the
-                # question and escalate to staff if it stays ignored.
-                _qtext = message.content.strip()
-                if not replied and len(_qtext) >= 10 and _looks_like_question(_qtext):
-                    self._schedule_unanswered_check(message)
-            return
+            if not (in_kb_channel or in_project_thread):
+                return
+            replied = await self._try_kb_auto_reply(message)
+            if replied:
+                return
+            # If neither the bot nor (yet) a human has answered, watch the
+            # question and escalate to staff if it stays ignored.
+            _qtext = message.content.strip()
+            if not (len(_qtext) >= 10 and _looks_like_question(_qtext)):
+                return
+            self._schedule_unanswered_check(message)
+            if not KB_AI_AUTO_ANSWER:
+                return
+            # Fall through to the AI path rather than returning here. Only a
+            # handful of answers carry a check mark, so the verbatim reply
+            # above almost never fires, and everything the vault knows sits
+            # behind a path that needed an @mention to run. The escalation
+            # stays scheduled either way: it counts any later message as an
+            # answer, so a good AI reply silences it and a failed one still
+            # reaches staff.
         if not ANTHROPIC_API_KEY:
             return
         if message.id in self._processed_messages:
