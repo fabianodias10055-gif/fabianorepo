@@ -50,6 +50,23 @@ def norm(text: str) -> str:
     return " ".join((text or "").lower().split())
 
 
+def teaches_nothing(question: str, answer: str) -> bool:
+    """True when the pair cannot inform an answer to anyone else.
+
+    A reply of "Hello, what are the 3 assets you have bought?" is a real
+    thing LocoDev wrote, but as knowledge it is worse than absent: the model
+    reads these as examples of how to respond and starts asking the customer
+    a question back instead of answering. Same for a question that is only a
+    pasted link, which carries no words to match against.
+    """
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+", answer.strip()) if s]
+    if sentences and all(s.rstrip().endswith("?") for s in sentences):
+        return True
+    if not re.sub(r"https?://\S+", "", question).strip():
+        return True
+    return False
+
+
 def from_vault() -> list[dict]:
     """Every answer the vault can prove was actually given."""
     out: list[dict] = []
@@ -60,7 +77,7 @@ def from_vault() -> list[dict]:
         if q["status"] != "answered" or len(answer) < MIN_ANSWER:
             continue
         question = q["text"].strip()
-        if len(question) < MIN_QUESTION:
+        if len(question) < MIN_QUESTION or teaches_nothing(question, answer):
             continue
         key = norm(question)
         if key in seen:
@@ -85,6 +102,8 @@ def from_vault() -> list[dict]:
         answer = (a.get("a") or "").strip()
         question = (a.get("q") or "").strip()
         if len(answer) < MIN_ANSWER or len(question) < MIN_QUESTION:
+            continue
+        if teaches_nothing(question, answer):
             continue
         key = norm(question)
         if key in seen:
