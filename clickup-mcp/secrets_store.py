@@ -23,6 +23,7 @@ Usage:
 import argparse
 import os
 import re
+import subprocess
 import sys
 from getpass import getpass
 from pathlib import Path
@@ -44,6 +45,7 @@ SECRET_KEYS = (
     "YOUTUBE_OAUTH_CLIENT_SECRET",
     "YOUTUBE_REFRESH_TOKEN",
     "DISCORD_BOT_TOKEN",
+    "PATREON_ACCESS_TOKEN",
     "LOCODEV_ADMIN_SECRET",
     "RESEND_API_KEY",
     "DISCORD_WEBHOOK_URL",
@@ -198,19 +200,52 @@ def main() -> int:
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--migrate", action="store_true")
     ap.add_argument("--set", metavar="NAME")
+    ap.add_argument("--set-from-clipboard", metavar="NAME",
+                    help="take the value from the clipboard instead of typing "
+                         "it; getpass shows nothing at all while you type, "
+                         "which in some terminals is indistinguishable from "
+                         "a prompt that is not accepting input")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+
+    if args.set_from_clipboard:
+        if keyring is None:
+            print("ERROR: keyring is not installed. pip install keyring")
+            return 1
+        # Straight from the clipboard: never typed, never echoed, and never
+        # left in shell history, which is one better than a prompt.
+        try:
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
+                capture_output=True, text=True, timeout=15)
+            value = (out.stdout or "").strip()
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"ERROR: could not read the clipboard: {type(exc).__name__}")
+            return 1
+        if not value:
+            print("The clipboard is empty. Copy the value first, then run this.")
+            return 1
+        set_secret(args.set_from_clipboard, value)
+        # Length and the first characters only: enough to confirm the right
+        # thing was pasted, useless to anyone reading over your shoulder.
+        print(f"{args.set_from_clipboard} stored in {SERVICE}: "
+              f"{len(value)} characters, starts with {value[:4]}...")
+        return 0
 
     if args.set:
         if keyring is None:
             print("ERROR: keyring is not installed. pip install keyring")
             return 1
+        # Said out loud because a prompt that shows nothing at all, not even
+        # dots, is indistinguishable from one that is ignoring the keyboard.
+        print("Type or paste, then press Enter. Nothing will appear on screen "
+              "while you type. That is deliberate, not a frozen prompt.")
         value = getpass(f"value for {args.set} (not echoed): ").strip()
         if not value:
             print("nothing entered")
             return 1
         set_secret(args.set, value)
-        print(f"{args.set} stored in {SERVICE}")
+        print(f"{args.set} stored in {SERVICE}: {len(value)} characters")
         return 0
 
     if args.migrate:
