@@ -923,6 +923,39 @@ def sync_report() -> dict:
     answers_shipped = sum(1 for e in shipped if e.get("kind") != "doc")
     stale = bool(exported) and bool(shipped) and exp_stamp - ship_stamp > 120
 
+    # What is in the queue right now: a note edited after the last copy left
+    # is knowledge the bot does not have yet, and naming those notes is the
+    # difference between "a sync exists" and knowing what is in flight.
+    waiting_out = []
+    for path in sorted((VAULT / "Systems").rglob("*.md")):
+        if path.name.startswith("05 -"):
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if exp_stamp and mtime > exp_stamp + 5:
+            waiting_out.append({
+                "rel": path.relative_to(VAULT / "Systems").as_posix(),
+                "name": path.name,
+                "when": datetime.fromtimestamp(mtime).strftime("%H:%M"),
+                "mins": max(0, int((time.time() - mtime) // 60)),
+            })
+    waiting_out.sort(key=lambda x: x["mins"])
+
+    # The exporter runs on a two-hour timer, so the next departure is two
+    # hours after the last one rather than a schedule read from Windows.
+    next_copy = (datetime.fromtimestamp(exp_stamp + 7200).strftime("%H:%M")
+                 if exp_stamp else "")
+    if not exp_stamp:
+        upload = "nothing has been exported yet"
+    elif not ship_stamp:
+        upload = "the copy for the bot has never been written"
+    elif exp_stamp - ship_stamp > 120:
+        upload = "Google Drive has not picked up the newest copy yet"
+    else:
+        upload = "Google Drive has the newest copy"
+
     readable = sum(1 for r in rows if r["state"] != "generated")
     in_bot = sum(1 for r in rows if r["state"] == "delivered")
     consumers = [{
@@ -960,6 +993,9 @@ def sync_report() -> dict:
         "rows": rows,
         "consumers": consumers,
         "backlog": doc_backlog(rows),
+        "waiting_out": waiting_out,
+        "next_copy": next_copy,
+        "upload": upload,
         "exported": len(exported),
         "export_stamp": (datetime.fromtimestamp(exp_stamp).strftime("%Y-%m-%d %H:%M")
                          if exp_stamp else ""),

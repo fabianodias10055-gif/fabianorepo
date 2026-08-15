@@ -884,6 +884,18 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
 .chmark { display:inline-flex; align-items:center; margin-left:5px;
   vertical-align:-2px; opacity:.9; }
 .chmark:first-of-type { margin-left:var(--s2); }
+/* What is in flight. First thing in the card because it is the only part
+   that changes minute to minute. */
+.queue { background:var(--surface2); border:1px solid var(--line);
+  border-radius:var(--r-md); padding:var(--s3) var(--s4); margin-bottom:var(--s4); }
+.queue .qh { display:flex; gap:var(--s3); align-items:baseline; flex-wrap:wrap; }
+.queue .qh .note { flex:1; min-width:16ch; color:var(--ink3);
+  font-size:var(--t-xs); line-height:1.5; }
+.qlist { list-style:none; margin:var(--s3) 0 0; padding:0; display:grid;
+  gap:2px; }
+.qlist li { font-size:var(--t-sm); padding:2px 0; }
+.qlist .nm { font-weight:600; }
+.qlist .note { color:var(--ink3); font-size:var(--t-xs); }
 .who { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:var(--s4);
   align-items:start; padding:var(--s3) 0; border-bottom:1px solid var(--line2); }
 .who .nm { font-weight:640; font-size:var(--t-base); margin-right:var(--s2); }
@@ -2859,6 +2871,38 @@ def _sync_card(d: dict) -> str:
             f'<td class="note">{escape(r["modified"])}</td></tr>'
         )
 
+    # What is in flight, at the top, because it is the only part of this
+    # screen that changes minute to minute. The page rebuilds on every vault
+    # change, so editing a note puts it in this list on the next save.
+    queue = s.get("waiting_out") or []
+    if queue:
+        items = []
+        for q in queue[:8]:
+            ago = f", {_fmt(q['mins'])} min ago" if q["mins"] < 600 else ""
+            items.append(
+                f'<li><span class="nm">{escape(q["name"])}</span> '
+                f'<span class="note">{escape(q["rel"])} &middot; '
+                f'edited {escape(q["when"])}{escape(ago)}</span></li>'
+            )
+        names = "".join(items)
+        rest = (f'<li class="note">and {_fmt(len(queue) - 8)} more</li>'
+                if len(queue) > 8 else "")
+        live = (
+            f'<div class="queue"><div class="qh">'
+            f'<span class="pill st-partial">{_fmt(len(queue))} waiting to go out</span>'
+            f'<span class="note">Notes you changed since the last copy left. '
+            f'The next copy goes out about {escape(s.get("next_copy") or "?")}, '
+            f'then the bot picks it up within the hour.</span></div>'
+            f'<ul class="qlist">{names}{rest}</ul></div>'
+        )
+    else:
+        live = (
+            f'<div class="queue"><div class="qh">'
+            f'<span class="pill st-ok">nothing waiting</span>'
+            f'<span class="note">Everything you have written has left this '
+            f'computer. {escape(s.get("upload") or "")}.</span></div></div>'
+        )
+
     empty = s.get("silent", 0)
     summary = (
         f'<p class="note">Every note you have written, and whether each '
@@ -2871,7 +2915,7 @@ def _sync_card(d: dict) -> str:
     return (
         f'<section class="card" id="sync">'
         f'<h2><span class="he">🔄</span>Who knows what</h2>'
-        f'{"".join(who)}{summary}'
+        f'{live}{"".join(who)}{summary}'
         f'<div class="scroll"><table><thead><tr>'
         f'<th>Note</th><th class="num">Letters you wrote</th>'
         f'<th>Discord bot knows it?</th><th>Wingman can read it?</th>'
