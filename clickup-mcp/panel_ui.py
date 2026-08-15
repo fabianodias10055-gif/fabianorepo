@@ -539,6 +539,36 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
 .c-amber { background:var(--warn-bg); color:var(--warn); }
 
 /* ================= layout + cards ================= */
+/* One screen at a time. The author rules below set display on these
+   elements, which would beat the browser's own [hidden] styling, so the
+   hiding has to say so out loud. */
+[hidden] { display:none !important; }
+
+/* ---- the overview dashboard ---- */
+.grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(380px,100%),1fr));
+  gap:var(--s4); margin-top:var(--s4); }
+.grid2 .card { margin-bottom:0; }
+.orow { display:grid; grid-template-columns:minmax(9ch,auto) minmax(60px,1fr) auto;
+  gap:var(--s3); align-items:center; padding:var(--s3) 0;
+  border-bottom:1px solid var(--line2); }
+.orow:last-of-type { border-bottom:0; }
+.olabel { display:inline-flex; align-items:center; gap:6px; font-weight:600;
+  font-size:var(--t-sm); }
+.ovals { text-align:right; font-size:var(--t-xs); color:var(--ink2);
+  white-space:nowrap; }
+.ovals b { font-family:var(--mono); font-size:var(--t-base); color:var(--ink);
+  font-variant-numeric:tabular-nums; }
+.obig { padding:var(--s2) 0 var(--s3); }
+.obig b { display:block; font-family:var(--mono); font-size:var(--t-3xl);
+  line-height:1.05; font-variant-numeric:tabular-nums; }
+.orow2 { padding:var(--s3) 0; border-bottom:1px solid var(--line2);
+  font-size:var(--t-sm); }
+.orow2:last-of-type { border-bottom:0; }
+.orow2 .nm { font-weight:600; }
+.orow2 svg { vertical-align:-2px; }
+.oq { color:var(--ink2); margin-top:3px; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+.cols2.solo, .grid3.solo { grid-template-columns:minmax(0,1fr); }
 .cols2 { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr);
   gap:var(--s4); align-items:start; }
 .cols2 .card { margin-bottom:var(--s4); }
@@ -1242,6 +1272,37 @@ addEventListener("resize", debounce(syncHeadH, 120));
 addEventListener("scroll", function () {
   topBar.classList.toggle("stuck", scrollY > 8);
 }, { passive: true });
+
+/* ---- one screen per tab ----
+   Every card carries data-view. The sidebar links are plain anchors, so the
+   browser sets the hash and this reacts to it: no click handlers to keep in
+   step with the markup, and a link to #wingman still opens on that screen. */
+function setView(name) {
+  if (!name || !document.getElementById(name)) name = "overview";
+  var any = false;
+  [].forEach.call(document.querySelectorAll("[data-view]"), function (el) {
+    var mine = el.dataset.view === name;
+    el.hidden = !mine;
+    if (mine) any = true;
+  });
+  if (!any) { ss("lp-view", "overview"); return setView("overview"); }
+  /* A two-column wrapper holding one visible card would render it at half
+     width, and an empty one would still take its gap. */
+  [].forEach.call(document.querySelectorAll(".cols2, .grid3"), function (w) {
+    var shown = [].filter.call(w.children, function (c) { return !c.hidden; });
+    w.hidden = shown.length === 0;
+    w.classList.toggle("solo", shown.length === 1);
+  });
+  [].forEach.call(document.querySelectorAll(".nav a, .mnav a"), function (a) {
+    a.classList.toggle("active", a.getAttribute("href") === "#" + name);
+  });
+  ss("lp-view", name);
+}
+addEventListener("hashchange", function () {
+  setView(location.hash.replace("#", ""));
+  scrollTo(0, 0);
+});
+setView(location.hash.replace("#", "") || ssGet("lp-view"));
 
 /* ---- live status ---- */
 function agoText() {
@@ -2402,7 +2463,7 @@ try {
 # Section builders
 # --------------------------------------------------------------------------
 
-def _tiles(d: dict, n_systems: int) -> str:
+def _tiles(d: dict, n_systems: int, below: str = "") -> str:
     """A queue summary, not a KPI gallery.
 
     Three of the old five tiles measured documentation health, which is not
@@ -2454,7 +2515,98 @@ def _tiles(d: dict, n_systems: int) -> str:
             f'<div class="row"><div class="v">{value}</div>{spark}</div>'
             f'<div class="s"><span>{sub}</span>{dlt}</div></div>'
         )
-    return f'<section id="overview"><div class="tiles">{"".join(cells)}</div></section>'
+    # Not named "extra": the loop above binds that name for the tile class,
+    # so a parameter called extra is overwritten before it is ever used and
+    # the whole dashboard below silently disappears.
+    return (f'<section id="overview"><div class="tiles">{"".join(cells)}</div>'
+            f'{below}</section>')
+
+
+def _bar(pct: int, tone: str = "g") -> str:
+    pct = max(0, min(100, int(pct)))
+    return (f'<span class="pbar"><i class="{tone}" style="width:{pct}%"></i></span>')
+
+
+def _overview_cards(d: dict) -> str:
+    """The screen that was five numbers and a footer.
+
+    Four questions a person actually opens this page with: where the asking
+    happens, which system is under the most pressure, whether the bot has
+    what was written, and what was answered last.
+    """
+    qs = d["questions"]
+    ch_q: dict = {}
+    for q in qs:
+        ch = q.get("channel") or "other"
+        ch_q[ch] = ch_q.get(ch, 0) + 1
+    ch_p: dict = {}
+    for p in d["people"]:
+        for ch in (p.get("channels") or {}):
+            ch_p[ch] = ch_p.get(ch, 0) + 1
+    total_q = sum(ch_q.values()) or 1
+
+    where = []
+    for ch in sorted(ch_q, key=lambda c: -ch_q[c])[:3]:
+        pct = ch_q[ch] * 100 // total_q
+        where.append(
+            f'<div class="orow"><span class="olabel">{_brand_icon(ch, 15)}'
+            f'{escape(ch)}</span>{_bar(pct, "g" if ch == "discord" else "a")}'
+            f'<span class="ovals"><b>{_fmt(ch_q[ch])}</b> questions<br>'
+            f'<span class="note">{_fmt(ch_p.get(ch, 0))} people</span></span></div>'
+        )
+
+    pressure = []
+    for s in sorted(d["systems"], key=lambda s: -s.get("demand", 0))[:5]:
+        if not s.get("demand"):
+            continue
+        tone = "r" if s["pct"] < 40 else ("a" if s["pct"] < 80 else "g")
+        pressure.append(
+            f'<div class="orow"><span class="olabel">{escape(s["name"])}</span>'
+            f'{_bar(s["pct"], tone)}'
+            f'<span class="ovals"><b>{_fmt(s["demand"])}</b> waiting<br>'
+            f'<span class="note">{s["pct"]}% written</span></span></div>'
+        )
+
+    s = d.get("sync") or {}
+    queue = len(s.get("waiting_out") or [])
+    bot = next((c for c in (s.get("consumers") or []) if c.get("key") == "locoai"), {})
+    with_text = s.get("delivered", 0)
+    empty = s.get("silent", 0)
+    cov = with_text * 100 // max(1, with_text + empty)
+    know = (
+        f'<div class="obig"><b>{_fmt(bot.get("knows", 0))}</b>'
+        f'<span class="note">things the Discord bot can answer from</span></div>'
+        f'<div class="orow"><span class="olabel">notes it has</span>{_bar(cov)}'
+        f'<span class="ovals"><b>{_fmt(with_text)}</b> of {_fmt(with_text + empty)}<br>'
+        f'<span class="note">{_fmt(empty)} still empty</span></span></div>'
+        + (f'<p class="note">{_fmt(queue)} notes edited since the last copy '
+           f'left, going out about {escape(s.get("next_copy") or "?")}.</p>'
+           if queue else '<p class="note">Everything written has been sent.</p>')
+    )
+
+    latest = []
+    for a in (d.get("answers") or [])[:4]:
+        latest.append(
+            f'<div class="orow2"><span class="nm">{escape(a["who"])}</span> '
+            f'{_brand_icon(a.get("channel", ""), 13)}<br>'
+            f'<span class="note">{escape(a["when"])}'
+            f'{" &middot; " + escape(a["system"]) if a.get("system") not in ("", "-") else ""}'
+            f'</span><div class="oq">{escape(" ".join(a["q"].split())[:110])}</div></div>'
+        )
+
+    def card(title, emoji, inner, empty_msg="Nothing yet."):
+        body = inner or f'<p class="empty">{empty_msg}</p>'
+        return (f'<section class="card"><h2><span class="he">{emoji}</span>'
+                f'{title}</h2>{body}</section>')
+
+    return (
+        '<div class="grid2">'
+        + card("Where they ask", "📣", "".join(where))
+        + card("Under the most pressure", "🔥", "".join(pressure))
+        + card("What the bot knows", "🤖", know)
+        + card("Answered last", "✅", "".join(latest))
+        + '</div>'
+    )
 
 
 def _filters(questions: list) -> str:
@@ -3065,6 +3217,24 @@ _NAV = [
 ]
 
 
+def _stamp_views(html: str) -> str:
+    """Tag each card with the screen it belongs to, from its own id.
+
+    Derived rather than declared in ten places: the sidebar already links to
+    #people, so the card with id="people" is the People screen by
+    definition, and a card added later joins a screen by being given an id
+    that a nav entry points at.
+    """
+    known = {sid for sid, _i, _l, _c in _NAV}
+    return re.sub(
+        r'<section((?:\s+class="[^"]*")?)\s+id="([a-z]+)"',
+        lambda m: (f'<section{m.group(1)} id="{m.group(2)}" '
+                   f'data-view="{m.group(2)}"' if m.group(2) in known
+                   else m.group(0)),
+        html,
+    )
+
+
 def _nav_counts(d: dict) -> dict:
     return {"open_q": d["open_q"], "answers": len(d.get("answers") or []),
             # The badge counts the notes delivering nothing, because that is
@@ -3176,19 +3346,13 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 <main class="main">
 {_header(d, live)}
 {_mobile_nav()}
-{_tiles(d, len(d["systems"]))}
-{_questions_card(d)}
+{_stamp_views(_tiles(d, len(d["systems"]), _overview_cards(d)) + _questions_card(d))}
 <div class="cols2">
-{_answers_card(d)}
-{_system_pressure_card(d, facets)}
+{_stamp_views(_answers_card(d) + _system_pressure_card(d, facets))}
 </div>
-{_links_card()}
-{_sync_card(d)}
-{_wingman_card(d)}
+{_stamp_views(_links_card() + _sync_card(d) + _wingman_card(d))}
 <div class="grid3">
-{_people_card(d)}
-{_videos_card(d)}
-{_sources_card(instrumentation)}
+{_stamp_views(_people_card(d) + _videos_card(d) + _sources_card(instrumentation))}
 </div>
 <footer>{diag}</footer>
 </main>
