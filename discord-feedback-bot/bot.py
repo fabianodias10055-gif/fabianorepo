@@ -101,15 +101,15 @@ KB_CHANNEL_IDS = {
     int(c) for c in os.getenv(
         "KB_CHANNEL_IDS",
         # general-chat, general-support, support-hub, welcome,
-        # patreon-support. People ask real questions in the welcome channel
-        # and were getting silence, since it was never on this list.
+        # patreon-support, backup. People ask real questions in the welcome
+        # channel and were getting silence, since it was never on this list.
         #
-        # Not the backup channel: everything in there was posted by this bot
-        # mirroring patreon-support, and bot messages are skipped, so adding
-        # it would answer nothing that is mirrored and would only put replies
-        # into an archive.
+        # backup is the mirror destination for patreon-support, so the copies
+        # in it were posted by this bot and are skipped like any bot message.
+        # It is on the list for what people type there directly, which is
+        # where it is being tested from.
         "1158395982485147692,1459914723330883727,1460338435163164827"
-        ",1158395982485147689,1160715880787869729",
+        ",1158395982485147689,1160715880787869729,1499029543078465696",
     ).replace(" ", "").split(",") if c.strip().isdigit()
 }
 MAX_MESSAGES_PER_CHANNEL = int(os.getenv("MAX_MESSAGES_PER_CHANNEL", "250"))
