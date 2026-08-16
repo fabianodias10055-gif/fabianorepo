@@ -207,7 +207,15 @@ def _safe_url(url: str) -> str:
     fields are hand-editable; a pasted javascript: URL must render inert,
     not become a click-to-execute link inside the panel's origin."""
     u = (url or "").strip()
-    return u if u.lower().startswith(("http://", "https://")) else ""
+    if not u.lower().startswith(("http://", "https://")):
+        return ""
+    # The prefix was the only test and everything after it was free.
+    # A public comment can write a vault field, so a value beginning
+    # https:// and continuing with a quote and an event handler used to
+    # reach an href. None of these characters survive a collector
+    # unencoded inside a real URL, so their presence means it is not one.
+    bad = chr(34) + chr(39) + "<>` " + chr(9) + chr(10) + chr(13)
+    return "" if any(c in u for c in bad) else u
 
 
 # A curated hue set instead of the full circle: random hues produced muddy
@@ -2969,7 +2977,7 @@ function customerProfile(who) {
       + '<div class="cq">' + esc(q.text.slice(0, 260)) + "</div>"
       + (q.reply ? '<div class="ca">' + esc(q.reply.slice(0, 260)) + "</div>"
                  : '<div class="cwait">no reply yet</div>')
-      + (q.link ? ' <a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open where it was asked</a>' : "")
+      + (q.link ? ' <a class="clink" href="' + esc(q.link) + '" target="_blank" rel="noopener">open where it was asked</a>' : "")
       + "</div>";
   });
   if (mine.length > 40) head += '<div class="note">and ' + (mine.length - 40) + " older</div>";
@@ -3154,7 +3162,7 @@ function productProfile(name) {
       + genMarks(q.id)
       + "</span>"
       + '<div class="cq">' + esc(q.text.slice(0, 200)) + "</div>"
-      + (q.link ? '<a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open it</a> ' : "")
+      + (q.link ? '<a class="clink" href="' + esc(q.link) + '" target="_blank" rel="noopener">open it</a> ' : "")
       + '<button class="btn tiny">Answer</button>'
       + "</div></div>";
   });
@@ -3251,7 +3259,7 @@ function videoPanel(name) {
       + esc(q.date) + " &middot; "
       + esc(q.who) + (extra || "") + genMarks(q.id) + "</span>"
       + '<div class="cq">' + esc(q.text.slice(0, 200)) + "</div>"
-      + (q.link ? '<a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open the comment</a> ' : "")
+      + (q.link ? '<a class="clink" href="' + esc(q.link) + '" target="_blank" rel="noopener">open the comment</a> ' : "")
       + '<button class="btn tiny">Answer</button>'
       + "</div></div>";
   }
