@@ -1714,6 +1714,7 @@ function fillRow(tr) {
       + esc(q.video.slice(11) || q.video) + "</span>";
   }
   if (q.sub) meta += '<span class="tag sub">subscriber</span>';
+  meta += genMarks(tr.dataset.id);
 
   var thumb = q.small
     ? '<span class="mthumb" title="' + esc(q.video || "") + '"><img loading="lazy" '
@@ -2297,6 +2298,12 @@ function aiRender(det, mode, s, btn) {
     return;
   }
 
+  /* a finished result is knowledge the whole page can use: the client
+     cache feeds the replay on reopen and the ready marks on rows and
+     panel items, without waiting for the next server build */
+  AI_CACHE[mode + ":" + det.dataset.id] = s;
+  stampGen(det.dataset.id, det);
+
   var conf = typeof s.confidence === "number" ? s.confidence : 0;
   var cls = conf >= 60 ? "ok" : conf >= 30 ? "warn" : "crit";
   var bits = [(mode === "search" ? "found by " : "drafted by ") + (s.model || "claude")];
@@ -2443,20 +2450,46 @@ function runAi(det, mode, force) {
       aiRender(det, mode, { state: "error", error: String(e.message || e) }, btn);
     });
 }
-/* A row whose answer was already generated says so, so cached work is
-   findable without opening every card. */
-Object.keys(AI_CACHE).forEach(function (key) {
-  var qid = key.slice(key.indexOf(":") + 1);
+/* A question whose answer was already generated says so right on the
+   message, wherever the message shows: the queue row (stamped by fillRow,
+   which reaches lazy rows the old load-time pass never saw), the video and
+   product panel items, and live the moment a generation finishes. Only a
+   result that carries an answer earns a mark; an errored run or a search
+   that came back empty would make it say ready when nothing usable
+   exists. */
+function genLabel(mode, s) {
+  if (!s || s.state === "error" || !s.answer) return "";
+  return mode === "draft" ? "draft ready" : "answer found";
+}
+function genMarks(qid) {
+  var out = "";
+  ["search", "draft"].forEach(function (mode) {
+    var lab = genLabel(mode, AI_CACHE[mode + ":" + qid]);
+    if (lab) out += ' <span class="hasai gen-' + mode + '">✦ ' + lab + "</span>";
+  });
+  return out;
+}
+function stampGen(qid, det) {
+  var spots = [];
   var row = rowById(qid);
-  if (row && !row.querySelector(".hasai")) {
-    var mark = document.createElement("span");
-    mark.className = "hasai";
-    mark.title = "An AI result is cached for this question";
-    mark.textContent = "✦ ready";
-    var meta = row.querySelector(".qmeta");
-    if (meta) meta.appendChild(mark);
-  }
-});
+  var meta = row && row.querySelector(".qmeta");
+  if (meta) spots.push(meta);
+  var item = det && det.closest(".cev[data-qid]");
+  var cd = item && item.querySelector(".cdate");
+  if (cd) spots.push(cd);
+  spots.forEach(function (spot) {
+    ["search", "draft"].forEach(function (mode) {
+      var old = spot.querySelector(".gen-" + mode);
+      if (old) old.remove();
+      var lab = genLabel(mode, AI_CACHE[mode + ":" + qid]);
+      if (!lab) return;
+      var mk = document.createElement("span");
+      mk.className = "hasai gen-" + mode;
+      mk.textContent = "✦ " + lab;
+      spot.appendChild(mk);
+    });
+  });
+}
 
 /* ---- a logged answer can be resent or edited ---- */
 function answerRow(el) { return el.closest(".arow"); }
@@ -2748,6 +2781,7 @@ function productProfile(name) {
     out += '<div class="cev open" data-qid="' + esc(q.id) + '"><span class="cdate">'
       + esc(q.date) + " &middot; "
       + esc(q.who) + (p && p.paying ? ' <span class="tag sub">pays</span>' : "")
+      + genMarks(q.id)
       + "</span>"
       + '<div class="cq">' + esc(q.text.slice(0, 200)) + "</div>"
       + (q.link ? '<a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open it</a> ' : "")
@@ -2821,7 +2855,7 @@ function videoPanel(name) {
   open.slice(0, 25).forEach(function (q) {
     out += '<div class="cev open" data-qid="' + esc(q.id) + '"><span class="cdate">'
       + esc(q.date) + " &middot; "
-      + esc(q.who) + "</span>"
+      + esc(q.who) + genMarks(q.id) + "</span>"
       + '<div class="cq">' + esc(q.text.slice(0, 200)) + "</div>"
       + (q.link ? '<a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open the comment</a> ' : "")
       + '<button class="btn tiny">Answer</button>'
