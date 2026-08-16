@@ -2337,7 +2337,10 @@ def fetch_link_telemetry() -> dict:
 # Prefixes the shortener serves. Checked here so a typo becomes a message
 # instead of a link at a path that will never resolve.
 LINK_PREFIXES = ("p", "download", "docs", "free", "freebuild", "root")
-_SLUG_OK = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+# Slugs carry a second segment on most downloads
+# (download/weaponstandard/e4trfhOq), so the slash belongs here.
+# Refusing it made every real download link uncreatable.
+_SLUG_OK = re.compile(r"^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_.-]+)*$")
 
 
 def link_action(action: str, prefix: str, slug: str, url: str) -> dict:
@@ -2380,8 +2383,9 @@ def link_action(action: str, prefix: str, slug: str, url: str) -> dict:
     if prefix not in LINK_PREFIXES:
         return {"ok": False, "error": f"prefix must be one of "
                                       f"{', '.join(LINK_PREFIXES)}"}
-    if not _SLUG_OK.match(slug or ""):
-        return {"ok": False, "error": "slug: letters, digits, - and _ only"}
+    if not _SLUG_OK.match(slug or "") or len(slug) > 120 or ".." in slug:
+        return {"ok": False, "error": "slug: letters, digits, - _ and / "
+                                      "between segments"}
     if not url.startswith(("http://", "https://")):
         return {"ok": False, "error": "the destination must start with http"}
 

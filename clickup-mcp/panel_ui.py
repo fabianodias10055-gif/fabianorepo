@@ -1312,6 +1312,12 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
    and a display:flex here took those rows out of the table's column
    algorithm, so every Customers row sized itself and none lined up with
    the header. Same collision the Products table hit as .prow. */
+/* The slug is the part that may be long, so it is the part that gives
+   way. Without min-width:0 a flex item refuses to shrink below its content
+   and the time on the right was drawn over it. */
+.lrow > span:first-child { min-width:0; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+.lrow .n { flex:none; white-space:nowrap; }
 .lrow { display:flex; justify-content:space-between; gap:var(--s2); padding:var(--s2) 0;
   border-bottom:1px solid var(--line2); font-size:var(--t-sm); align-items:center; }
 .lrow:last-child { border-bottom:0; }
@@ -4163,8 +4169,9 @@ function ltWhere(d) {
   h += ltBars(kinds, kindTotal, "nothing yet");
   h += '<p class="figwhy">A download means someone already bought or is '
     + "taking the free build; a Patreon page means they are still deciding. "
-    + "Anything here that is not one of the six the shortener serves is a "
-    + "typo in the link itself and will not resolve.</p>";
+    + "Anything here outside the usual six prefixes still works, because "
+    + "the shortener serves whatever is in its database; the six are a "
+    + "naming habit, not a gate.</p>";
 
   h += '<p class="lsub">Where in the world</p>';
   h += '<div id="ltcountries">' + ltCountries(d.countries || [], LT_CWIN) + "</div>";
