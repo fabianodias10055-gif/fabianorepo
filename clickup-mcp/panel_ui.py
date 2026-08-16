@@ -691,7 +691,7 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .search { position:relative; }
 .qres { position:absolute; top:calc(100% + 6px); left:0; right:0; z-index:40;
   background:var(--surface); border:1px solid var(--line);
-  border-radius:var(--r-md); box-shadow:var(--el-2); padding:var(--s2);
+  border-radius:var(--r-md); box-shadow:var(--e2); padding:var(--s2);
   max-height:60vh; overflow-y:auto; }
 .qrgroup { padding:var(--s2) 0; border-bottom:1px solid var(--line2); }
 .qrgroup:last-child { border-bottom:0; }
@@ -734,7 +734,7 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
   font:inherit; font-size:var(--t-2xs); font-family:var(--mono); padding:3px 7px;
   cursor:pointer; border-right:1px solid var(--line); }
 .seg button:last-child { border-right:0; }
-.seg button[aria-pressed="true"] { background:var(--accent); color:#fff; }
+.seg button[aria-pressed="true"] { background:var(--accent); color:var(--accent-ink); }
 .seg button:hover:not([aria-pressed="true"]) { background:var(--surface2);
   color:var(--ink); }
 .figlab { font-family:var(--mono); font-size:var(--t-2xs); color:var(--ink3);
@@ -1018,8 +1018,8 @@ select.fchip { appearance:none; max-width:200px; padding-right:28px;
   color:var(--accent); background:var(--accent-bg); border:1px solid var(--accent-line);
   font-family:var(--ui); font-size:var(--t-xs); font-weight:600; cursor:pointer;
   padding:var(--s1) var(--s3); border-radius:var(--r-sm); }
-.fexport:hover { background:var(--accent); color:#fff; border-color:var(--accent); }
-.fexport[aria-expanded="true"] { background:var(--accent); color:#fff; }
+.fexport:hover { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+.fexport[aria-expanded="true"] { background:var(--accent); color:var(--accent-ink); }
 .filters.flash { animation:flash 1.1s var(--ease); }
 @keyframes flash { 0%,55% { box-shadow:0 0 0 3px var(--accent); border-radius:var(--r-md); }
   100% { box-shadow:0 0 0 0 transparent; } }
@@ -1571,7 +1571,7 @@ tbody tr:hover td:first-child { box-shadow:inset 2px 0 0 var(--accent); }
 /* 11. Jumping to a section rings it once, so the eye lands in the right
        place after a click in the sidebar. */
 @keyframes arrive { 0% { box-shadow:0 0 0 2px var(--accent); }
-  100% { box-shadow:var(--el-1); } }
+  100% { box-shadow:var(--e1); } }
 .card:target { animation:arrive 1.1s var(--ease) both; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3050,10 +3050,25 @@ document.addEventListener("click", function (ev) {
   var tr = ev.target.closest("tr.crow");
   if (tr) toggleCustomer(tr);
 });
+/* Everything focusable answers to Enter and Space. Four kinds of row
+   carried tabindex="0" and a click handler and nothing else, so a keyboard
+   could reach them and then do nothing with them: the product row, the
+   short-link row, the video row and the Admin source row. Rather than four
+   twins of this handler, one place fires the click those rows already
+   listen for. */
 document.addEventListener("keydown", function (ev) {
   if (ev.key !== "Enter" && ev.key !== " ") return;
-  var tr = ev.target.closest ? ev.target.closest("tr.crow") : null;
-  if (tr) { ev.preventDefault(); toggleCustomer(tr); }
+  if (!ev.target.closest) return;
+  var tr = ev.target.closest("tr.crow");
+  if (tr) { ev.preventDefault(); toggleCustomer(tr); return; }
+  var row = ev.target.closest(
+    'tr.prodrow, tr.lkrow, .vrow[tabindex], .srow[data-src]');
+  if (!row) return;
+  /* Space scrolls the page by default, and Enter on a row inside a form
+     would submit it. */
+  ev.preventDefault();
+  var target = row.querySelector(".slug, .nm, .t") || row;
+  target.click();
 });
 
 function toggleCustomer(tr) {
@@ -4736,6 +4751,10 @@ function askContext(question, onGo) {
     + '<div class="mbtns"><button class="btn tiny primary mgo">Draft</button>'
     + '<button class="btn tiny mskip">Draft without a note</button>'
     + '<button class="btn tiny mcancel">Cancel</button></div></div>';
+  /* Where the focus was, so it can be given back. A dialog that drops
+     focus on the body leaves a keyboard user at the top of the document,
+     with the row they were working on lost somewhere below. */
+  var prev = document.activeElement;
   document.body.appendChild(back);
   var box = back.querySelector(".mctx");
   box.focus();
@@ -4743,10 +4762,24 @@ function askContext(question, onGo) {
   function close() {
     document.removeEventListener("keydown", onKey, true);
     back.remove();
+    if (prev && prev.isConnected && prev.focus) prev.focus();
   }
   function go(text) { close(); onGo(text); }
   function onKey(ev) {
     if (ev.key === "Escape") { ev.preventDefault(); close(); }
+    /* Tab stays inside. Without this it walked out of the dialog into the
+       page behind it, which is still there and still clickable, so the
+       "modal" was modal only to the mouse. */
+    if (ev.key === "Tab") {
+      var can = [].slice.call(back.querySelectorAll("textarea, button"));
+      if (!can.length) return;
+      var first = can[0], last = can[can.length - 1];
+      if (ev.shiftKey && document.activeElement === first) {
+        ev.preventDefault(); last.focus();
+      } else if (!ev.shiftKey && document.activeElement === last) {
+        ev.preventDefault(); first.focus();
+      }
+    }
     /* Ctrl+Enter sends, plain Enter does not: a note is often two lines and
        losing the second one to a stray Return would be worse than a click. */
     if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
@@ -5181,8 +5214,14 @@ def _tiles(d: dict, n_systems: int, below: str = "") -> str:
     # waiting for an answer" is the same number about the day ahead, and
     # only the second one tells anyone what to do.
     tiles = [
-        ("hero", "chat", "c-blue", "People waiting for an answer",
-         _fmt(len(open_qs)), "nobody has replied to them yet",
+        # Counts questions, so it says questions. It said "People waiting"
+        # over len(open_qs), while the card below said "questions still
+        # open" over a headcount: the two labels were swapped, and the
+        # headcount now rides along here where it belongs.
+        ("hero", "chat", "c-blue", "Questions waiting for an answer",
+         _fmt(len(open_qs)),
+         f"from {_fmt(sum(1 for p in d['people'] if p['open']))} people, "
+         f"nobody has replied yet",
          delta("open", False), _spark(series("open"), "a", "var(--accent)")),
         ("", "alert", "c-red", "Asked for you by name", _fmt(escalated),
          "they used your name, so a reply is expected", "", ""),
@@ -5319,7 +5358,8 @@ def _business_card(d: dict) -> str:
                      f"US$ {pat.get('monthly_cents', 0) / 100:,.0f}")
         rows += line("paid over the years",
                      f"US$ {pat.get('lifetime_cents', 0) / 100:,.0f}")
-    rows += line("questions still open", _fmt(waiting))
+    # waiting is a headcount, not a question count.
+    rows += line("people with an open question", _fmt(waiting))
     if pat.get("read_at"):
         rows += (f'<p class="note">Patreon read {escape(pat["read_at"])}. '
                  f'WhatsApp and website sales are not here: nothing in this '
