@@ -834,6 +834,12 @@ select.fchip { appearance:none; max-width:200px; padding-right:28px;
   font-family:var(--ui); font-size:var(--t-xs); font-weight:600; cursor:pointer;
   padding:var(--s1) var(--s2); border-radius:var(--r-xs); }
 .fclear:hover { color:var(--crit); background:var(--crit-bg); }
+.fexport { display:inline-flex; align-items:center; gap:6px;
+  color:var(--accent); background:var(--accent-bg); border:1px solid var(--accent-line);
+  font-family:var(--ui); font-size:var(--t-xs); font-weight:600; cursor:pointer;
+  padding:var(--s1) var(--s3); border-radius:var(--r-sm); }
+.fexport:hover { background:var(--accent); color:#fff; border-color:var(--accent); }
+.fexport[aria-expanded="true"] { background:var(--accent); color:#fff; }
 .filters.flash { animation:flash 1.1s var(--ease); }
 @keyframes flash { 0%,55% { box-shadow:0 0 0 3px var(--accent); border-radius:var(--r-md); }
   100% { box-shadow:0 0 0 0 transparent; } }
@@ -4712,7 +4718,7 @@ def _filters(questions: list) -> str:
     parts.append('<button class="fclear" id="fclear">clear filters</button>')
     # Export lives with the filters because it exports what they describe.
     parts.append(
-        '<button class="fclear" id="expbtn" aria-expanded="false">export...</button>'
+        '<button class="fexport" id="expbtn" aria-expanded="false">''<svg width="13" height="13" viewBox="0 0 24 24" fill="none" ''stroke="currentColor" stroke-width="2" stroke-linecap="round" ''stroke-linejoin="round" aria-hidden="true">''<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>''<polyline points="7 10 12 15 17 10"/>''<line x1="12" y1="15" x2="12" y2="3"/></svg>Export</button>'
         '<div id="expbox" class="expbox hide" role="group" aria-label="Export">'
         '<label>From<select id="expch"><option value="all">everywhere</option>'
         '<option value="youtube">YouTube</option>'
