@@ -1530,7 +1530,10 @@ AI_SEARCH_SCHEMA = {
 
 # A per-call budget is not a budget: nothing stopped a loop from starting
 # hundreds of jobs, each individually within its dollar cap.
-AI_MAX_CONCURRENT = int(os.getenv("PANEL_AI_MAX_CONCURRENT", "2"))
+# Two was low enough that clicking Suggest anywhere would stall a bulk
+# run. Raising it costs nothing: the same drafts cost the same money,
+# they just wait less. The money guard is AI_DAILY_USD below.
+AI_MAX_CONCURRENT = int(os.getenv("PANEL_AI_MAX_CONCURRENT", "6"))
 AI_DAILY_USD = float(os.getenv("PANEL_AI_DAILY_USD", "10"))
 # The ledger lives on disk: held only in memory, every watcher restart
 # reset the day's spend to zero and the daily ceiling never really held.
@@ -2640,6 +2643,25 @@ _bulk = {
 _bulk_lock = threading.Lock()
 
 
+
+def ai_cost_hint() -> dict:
+    """What a draft has actually cost, and what is left of today.
+
+    Measured from the cache's own booked costs rather than a guess: the
+    median here is what the next one is most likely to be. Without this the
+    ceiling arrives as a stop halfway through a run instead of a number you
+    saw beforehand.
+    """
+    costs = sorted(e["cost"] for e in load_ai_cache().values()
+                   if isinstance(e, dict) and e.get("cost"))
+    median = costs[len(costs) // 2] if costs else 0.0
+    with _ai_lock:
+        spent = _ai_spend["usd"]
+    return {"per_draft": round(median, 3), "samples": len(costs),
+            "spent_today": round(spent, 2), "ceiling": AI_DAILY_USD,
+            "left_today": round(max(0.0, AI_DAILY_USD - spent), 2)}
+
+
 def bulk_state() -> dict:
     """A snapshot the page can poll without holding anything up."""
     with _bulk_lock:
@@ -2654,6 +2676,10 @@ def bulk_state() -> dict:
     st["elapsed"] = round(elapsed)
     st["per_item"] = round(elapsed / st["done"], 1) if st["done"] and elapsed else 0
     st["left"] = round(st["per_item"] * (n - st["done"])) if st["per_item"] else 0
+    todo = sum(1 for i in st["items"] if i["state"] == "waiting")
+    hint = ai_cost_hint()
+    st["cost"] = dict(hint, to_draft=todo,
+                      estimate=round(hint["per_draft"] * todo, 2))
     return st
 
 

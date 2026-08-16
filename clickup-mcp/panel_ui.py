@@ -4418,6 +4418,27 @@ function bulkSpan(secs) {
   return (secs / 3600).toFixed(1) + " hours";
 }
 
+/* What the run will cost, before it is started rather than as a stop
+   halfway through. The per-draft figure is the median of what drafts have
+   actually been billed, not a guess. */
+function bulkMoney(c) {
+  if (!c || !c.per_draft) return "";
+  var over = c.estimate > c.left_today;
+  return '<div class="figstat"><div><span class="k">left of today</span>'
+    + '<span class="v' + (c.left_today < 1 ? " warn" : "") + '">US$ '
+    + c.left_today.toFixed(2) + "</span></div>"
+    + '<div><span class="k">a draft costs</span><span class="v">US$ '
+    + c.per_draft.toFixed(2) + "</span></div>"
+    + (c.to_draft ? '<div><span class="k">' + fmt(c.to_draft)
+        + ' still to write</span><span class="v' + (over ? " warn" : "")
+        + '">US$ ' + c.estimate.toFixed(2) + "</span></div>" : "")
+    + "</div>"
+    + (over ? '<p class="figwhy">That is more than today’s ceiling leaves. '
+        + "The run will draft what fits, stop, and say so; the rest keep their "
+        + "place. Raise it by setting PANEL_AI_DAILY_USD in clickup-mcp/.env "
+        + "and restarting the watcher.</p>" : "");
+}
+
 function bulkRender(st) {
   var box = $("#bulkbody");
   if (!box) return;
@@ -4429,7 +4450,7 @@ function bulkRender(st) {
   if (st.phase === "idle") {
     box.innerHTML = '<p class="figwhy">Pick a system and it drafts an answer '
       + "for every question still waiting under it. Nothing is sent until you "
-      + "have read them.</p>";
+      + "have read them.</p>" + bulkMoney(st.cost);
     return;
   }
 
@@ -4460,6 +4481,7 @@ function bulkRender(st) {
   if (st.waiting)
     h += '<p class="figwhy">Next one goes out in ' + st.waiting + "s.</p>";
   if (st.note) h += '<p class="figwhy">' + esc(st.note) + "</p>";
+  h += bulkMoney(st.cost);
 
   if (st.phase === "ready") {
     var ok = st.items.filter(function (i) { return i.draft; }).length;
