@@ -1947,16 +1947,12 @@ $("#pgsize").addEventListener("change", function () {
    by question id exactly as before, so nothing is lost across a rebuild. */
 var openId = null;
 
-function detailFor(qid) {
+function composerFor(qid) {
   var q = QDATA[qid];
   if (!q) return null;
-  var tr = document.createElement("tr");
-  tr.className = "qdet open";
-  tr.dataset.id = qid;
-  var td = document.createElement("td");
-  td.colSpan = 7;
   var wrap = document.createElement("div");
   wrap.className = "detwrap";
+  wrap.dataset.id = qid;
   var det = document.createElement("div");
   det.className = "det";
 
@@ -2025,8 +2021,6 @@ function detailFor(qid) {
 
   det.innerHTML = parts.join("");
   wrap.appendChild(det);
-  td.appendChild(wrap);
-  tr.appendChild(td);
 
   var vimg = det.querySelector(".vidcard img");
   if (vimg) vimg.addEventListener("error", function () { vimg.classList.add("hide"); });
@@ -2037,14 +2031,14 @@ function detailFor(qid) {
     ss("lp-draft:" + qid, box.value || null);
   });
   box.addEventListener("keydown", function (e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runReply(tr); }
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runReply(wrap); }
   });
   $$("[data-ai]", det).forEach(function (b) {
-    b.addEventListener("click", function () { runAi(tr, b.dataset.ai, false); });
+    b.addEventListener("click", function () { runAi(wrap, b.dataset.ai, false); });
   });
-  det.querySelector("[data-reply]").addEventListener("click", function () { runReply(tr); });
+  det.querySelector("[data-reply]").addEventListener("click", function () { runReply(wrap); });
   det.querySelector("[data-ctx]").addEventListener("click", function () {
-    runContext(tr, det.querySelector("[data-ctx]"));
+    runContext(wrap, det.querySelector("[data-ctx]"));
   });
   /* Not every question is closed by replying from here: some were handled
      in the thread, some are not really questions. Closing one should not
@@ -2077,6 +2071,22 @@ function detailFor(qid) {
         b.disabled = false;
       });
   });
+  return wrap;
+}
+
+/* The same composer, wrapped for the table. Anywhere else it is inserted
+   as it is, which is how a product or a video can carry the real controls
+   rather than a copy of them that drifts. */
+function detailFor(qid) {
+  var wrap = composerFor(qid);
+  if (!wrap) return null;
+  var tr = document.createElement("tr");
+  tr.className = "qdet open";
+  tr.dataset.id = qid;
+  var td = document.createElement("td");
+  td.colSpan = 7;
+  td.appendChild(wrap);
+  tr.appendChild(td);
   return tr;
 }
 
@@ -2163,15 +2173,21 @@ function runReply(det) {
           : "Filed in the vault. Nothing was posted to the platform.",
           s.posted_to_platform ? "good" : "bad");
         var row = rowById(det.dataset.id);
-        var pill = row.querySelector(".pill");
-        pill.className = "pill st-answered";
-        pill.innerHTML = '<i class="pe">✅</i>answered';
-        row.dataset.st = "answered";
+        /* Answering from a product or a video reaches a row whose cells
+           have never been built, and querying inside it would find
+           nothing. */
+        if (row) fillRow(row);
+        var pill = row && row.querySelector(".pill");
+        if (pill) {
+          pill.className = "pill st-answered";
+          pill.innerHTML = '<i class="pe">✅</i>answered';
+        }
+        if (row) row.dataset.st = "answered";
         /* Clearing a backlog means the answered item leaves the queue and
            the next one is ready. Leaving it open with stale counts made
            every reply end in manual cleanup. */
         var wasAt = matchRows.indexOf(row);
-        var answerBtn = row.querySelector(".answerbtn");
+        var answerBtn = row && row.querySelector(".answerbtn");
         if (answerBtn) answerBtn.textContent = "View";
         closeDet();
         var badge = $("#bellbtn .badge"), nav = $(".navcount");
