@@ -129,6 +129,102 @@ DEMAND = {
 # a number pasted here is stale the day after it is verified, which is how
 # three of these rows spent two months claiming channels were blind while
 # the collectors filled the vault twice a day.
+def source_details(questions: list, pat: dict) -> dict:
+    """What opening a source on the Admin screen shows.
+
+    Everything here is computed from what the source leaves behind, at the
+    moment the page is built. The one thing this never does is call the
+    source: a click on a row must stay free, and the honest signal is what
+    arrived, not what a live endpoint says it would send.
+    """
+    out: dict[str, dict] = {}
+    panel_dir = VAULT / "Panel"
+    now = time.time()
+
+    def file_row(path: Path) -> dict | None:
+        try:
+            st = path.stat()
+        except OSError:
+            return None
+        return {"name": path.name, "kb": round(st.st_size / 1024),
+                "age_h": round((now - st.st_mtime) / 3600, 1)}
+
+    def rows(*paths: Path) -> list:
+        return [r for r in (file_row(p) for p in paths) if r]
+
+    by_ch: dict[str, list] = {}
+    for q in questions:
+        by_ch.setdefault(q.get("channel") or "?", []).append(q)
+
+    dc = by_ch.get("discord", [])
+    try:
+        disc_members = len(json.loads((panel_dir / "discord-members.json")
+                                      .read_text(encoding="utf-8")).get("members", {}))
+    except (OSError, ValueError):
+        disc_members = 0
+    out["Discord"] = {
+        "script": "collect_discord.py, every 15 minutes as 'LocoDev Discord Collector'",
+        "files": rows(panel_dir / "discord-members.json"),
+        "counts": [["questions collected", len(dc)],
+                   ["still open", sum(1 for q in dc if q["status"] != "answered")],
+                   ["members in the snapshot", disc_members]],
+        "if_broken": "restart the 'LocoDev Discord Collector' scheduled task",
+    }
+
+    yt = by_ch.get("youtube", [])
+    out["YouTube (LocoDev)"] = {
+        "script": "collect_youtube.py by hand; channel numbers refresh a few times a day",
+        "files": rows(panel_dir / "youtube-channel.json"),
+        "counts": [["comments collected", len(yt)],
+                   ["still open", sum(1 for q in yt if q["status"] != "answered")],
+                   ["videos in the vault",
+                    sum(1 for _ in (VAULT / "YouTube" / "Videos").glob("*/"))
+                    if (VAULT / "YouTube" / "Videos").is_dir() else 0]],
+        "if_broken": "run collect_youtube.py; the API key lives in the credential store",
+    }
+
+    out["Patreon"] = {
+        "script": "collect_patreon.py, twice a day as 'LocoDev Patreon Collector'",
+        "files": rows(panel_dir / "patreon-members.json"),
+        "counts": [["members on the campaign", pat.get("total", 0)],
+                   ["paying right now", pat.get("paying", 0)],
+                   ["with a linked Discord",
+                    sum(1 for p in (patrons_by_handle() or {}).values() if p)]],
+        "if_broken": "patreon_api.py --status says which credential is missing",
+    }
+
+    try:
+        kb = json.loads((panel_dir / "knowledge_base.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        kb = []
+    docs = sum(1 for e in kb if e.get("kind") == "doc")
+    out["Knowledge base"] = {
+        "script": "export_kb.py, every 2 hours as 'LocoDev Bot Knowledge Sync'",
+        "files": rows(panel_dir / "knowledge_base.json", KB_SHIPPED_PATH),
+        "counts": [["pieces the bot can answer from", len(kb)],
+                   ["of them, documentation sections", docs],
+                   ["of them, answers you gave", len(kb) - docs]],
+        "if_broken": "if the Drive copy is old, Google Drive Desktop is not running",
+    }
+
+    out["Short links (locodev.dev)"] = {
+        "script": "read live from the shortener's admin API on Railway",
+        "files": [],
+        "counts": [],
+        "if_broken": "the Links screen says when the API is unreachable; "
+                     "the admin token rotates every 12 hours",
+    }
+
+    for name in ("Wingman: events", "Wingman: diagnostics", "Wingman: conversations"):
+        out[name] = {
+            "script": "written by Wingman itself into Supabase; the panel only lists it",
+            "files": [],
+            "counts": [],
+            "if_broken": "check Supabase; nothing on this machine feeds it",
+        }
+    return out
+
+
 INSTRUMENTATION = [
     ("Wingman: events", "Supabase", "ok",
      "loco_events, including every user prompt, cost and compile result"),
@@ -2803,7 +2899,49 @@ def patreon_summary() -> dict:
     declined = [m for m in members if m.get("status") == "declined_patron"]
     stopped_rows = [m for m in members if m.get("status") == "former_patron"]
 
+    # Twelve months of arrivals, split by whether each person is still here.
+    # Computed from every member's pledge start, so the chart is "who began
+    # that month", which the data can prove, not "revenue that month", which
+    # it cannot: nothing records when a leaver left.
+    def month_shift(base: datetime, back: int) -> str:
+        y, m = base.year, base.month - back
+        while m <= 0:
+            y, m = y - 1, m + 12
+        return f"{y:04d}-{m:02d}"
+
+    now = datetime.now()
+    last12 = [month_shift(now, i) for i in range(11, -1, -1)]
+    joins = {mo: {"m": mo, "total": 0, "still": 0} for mo in last12}
+    for m in members:
+        mo = (m.get("since") or "")[:7]
+        if mo in joins:
+            joins[mo]["total"] += 1
+            if m.get("status") == "active_patron":
+                joins[mo]["still"] += 1
+
+    # When today's patrons joined: a survivors' curve, cumulative. It shows
+    # how much of the current base is old faith versus recent arrivals.
+    cohort: list[dict] = []
+    counts_by_month: dict[str, int] = {}
+    for m in active:
+        mo = (m.get("since") or "")[:7]
+        if mo:
+            counts_by_month[mo] = counts_by_month.get(mo, 0) + 1
+    if counts_by_month:
+        first = min(counts_by_month)
+        y, mth = int(first[:4]), int(first[5:7])
+        cum = 0
+        while f"{y:04d}-{mth:02d}" <= now.strftime("%Y-%m"):
+            mo = f"{y:04d}-{mth:02d}"
+            cum += counts_by_month.get(mo, 0)
+            cohort.append({"m": mo, "cum": cum})
+            mth += 1
+            if mth == 13:
+                y, mth = y + 1, 1
+
     return {
+        "joins": list(joins.values()),
+        "cohort": cohort,
         "recent": recent_rows,
         "by_tier": sorted(by_tier.values(), key=lambda r: -r["monthly_cents"]),
         "new_month_cents": sum(m.get("monthly_cents", 0) for m in active
@@ -2986,7 +3124,8 @@ def scan() -> dict:
     return {
         "md_files": md_files,
         "patrons": patrons_by_handle(),
-        "patreon": patreon_summary(),
+        "patreon": (pat_summary := patreon_summary()),
+        "source_details": source_details(questions, pat_summary),
         "youtube": youtube_channel_stats(),
         "health": integration_health(),
         "pipeline": sales_pipeline(people),

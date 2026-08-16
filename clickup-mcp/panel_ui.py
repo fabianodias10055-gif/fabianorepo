@@ -343,6 +343,8 @@ _DARK_TOKENS = """
     --warn:#e9a83c; --warn-bg:#2b2113; --warn-line:#4a3a1c;
     --crit:#f2645a; --crit-bg:#2d1618; --crit-line:#502428;
     --info:#a98bfa; --info-bg:#221c39; --info-line:#3a2f60;
+    /* chart series, validated for the dark surface (OKLCH band 0.48-0.67) */
+    --ch-main:#6684fa; --ch-warn:#bd8324; --ch-mute:#707b90;
     --mute-bg:#1a2230;
     --av-l:33%; --av-s:52%;
     --e1:0 1px 2px rgba(0,0,0,.4);
@@ -376,6 +378,8 @@ CSS = """
   --warn:#9a600a; --warn-bg:#fdf2df; --warn-line:#f2ddb4;
   --crit:#cc3030; --crit-bg:#fdecec; --crit-line:#f6cfcf;
   --info:#6d3cf0; --info-bg:#f0ebfe; --info-line:#dcd0fb;
+  /* chart series, validated for white (CVD dE >= 16 on every pair) */
+  --ch-main:#365df5; --ch-warn:#9a600a; --ch-mute:#838da1;
   --mute-bg:#eff1f5;
   --av-l:33%; --av-s:56%;
   --e1:0 1px 2px rgba(16,19,25,.05);
@@ -648,6 +652,39 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
   padding:6px var(--s2); border-radius:var(--r-sm); cursor:pointer; }
 .qritem:hover, .qritem:focus-visible { background:var(--accent-bg); color:var(--accent); }
 .qritem .note { color:var(--ink3); font-size:var(--t-xs); }
+
+
+/* ---- charts. Recessive grid, thin marks, text in ink tokens ---- */
+.chart { width:100%; height:auto; display:block; margin-top:var(--s2); }
+.chtitle { font-family:var(--mono); font-size:var(--t-2xs); color:var(--ink3);
+  text-transform:uppercase; letter-spacing:.08em; margin:var(--s4) 0 2px; }
+.chlegend { display:flex; gap:var(--s4); font-size:var(--t-xs);
+  color:var(--ink2); margin:2px 0; }
+.chlegend i { display:inline-block; width:10px; height:10px; border-radius:3px;
+  margin-right:5px; vertical-align:-1px; }
+.chx { font-family:var(--mono); font-size:9px; fill:var(--ink3); }
+.chend { font-family:var(--mono); font-size:10px; font-weight:600; fill:var(--ink); }
+.chgrid { stroke:var(--line2); stroke-width:1; }
+.chaxis { stroke:var(--line); stroke-width:1; }
+.chbar rect { transition:opacity var(--dur) var(--ease); }
+.chbar:hover rect { opacity:.82; }
+.chline { fill:none; stroke:var(--ch-main); stroke-width:2;
+  stroke-linejoin:round; stroke-linecap:round; }
+.charea { fill:var(--ch-main); opacity:.13; }
+.chhit { fill:transparent; }
+.chhit:hover { fill:var(--ch-main); opacity:.25; }
+
+/* ---- a source on Admin opens into its details ---- */
+.srow[data-src] { cursor:pointer; }
+.srow[data-src]:hover .nm { color:var(--accent); }
+.srcdet { background:var(--surface2); border-radius:var(--r-md);
+  padding:var(--s3) var(--s4); margin:0 0 var(--s2); display:grid; gap:var(--s2);
+  font-size:var(--t-sm); }
+.srcdet .clabel { margin-right:var(--s2); }
+.srcdet ul { margin:0; padding:0; list-style:none; }
+.srcdet li { padding:2px 0; color:var(--ink2); }
+.srcdet li b { color:var(--ink); font-family:var(--mono);
+  font-variant-numeric:tabular-nums; }
 
 /* ---- what is owed, at the top of Home ---- */
 #attention { margin-bottom:var(--s4); }
@@ -1353,6 +1390,8 @@ var QDATA = __QDATA__;
    rows rather than the thousand in the table. */
 var PATRONS = __PATRONS__;
 var LOOKUPS = __LOOKUPS__;
+/* what each Admin source shows when opened */
+var SRCDET = __SRCDET__;
 var BRANDS = __BRANDS__;
 /* What you have written about people, and the statuses you can set. The
    ones the facts already state are not offered: they would go stale the
@@ -3190,6 +3229,43 @@ function panelRefresh(wrap) {
     pd.firstElementChild.innerHTML = productProfile(pd.dataset.name);
 }
 
+
+/* ---- a source row on Admin opens into what it actually holds ---- */
+document.addEventListener("click", function (ev) {
+  if (!ev.target.closest) return;
+  var row = ev.target.closest(".srow[data-src]");
+  if (!row || ev.target.closest(".srcdet")) return;
+  var next = row.nextElementSibling;
+  if (next && next.classList.contains("srcdet")) { next.remove(); return; }
+  var open = row.parentNode.querySelector(".srcdet");
+  if (open) open.remove();
+  var det = SRCDET[row.dataset.src];
+  if (!det) return;
+  var out = '<div><span class="clabel">How it runs</span>'
+    + '<span class="note">' + esc(det.script || "") + "</span></div>";
+  if (det.files && det.files.length) {
+    out += '<div><span class="clabel">What it left on disk</span><ul>'
+      + det.files.map(function (f) {
+          return "<li><b>" + esc(f.name) + "</b> · " + fmt(f.kb)
+            + " KB · written " + f.age_h + "h ago</li>";
+        }).join("") + "</ul></div>";
+  }
+  if (det.counts && det.counts.length) {
+    out += '<div><span class="clabel">What is inside</span><ul>'
+      + det.counts.map(function (c) {
+          return "<li><b>" + fmt(c[1]) + "</b> " + esc(c[0]) + "</li>";
+        }).join("") + "</ul></div>";
+  }
+  if (det.if_broken) {
+    out += '<div><span class="clabel">If it stops</span>'
+      + '<span class="note">' + esc(det.if_broken) + "</span></div>";
+  }
+  var box = document.createElement("div");
+  box.className = "srcdet";
+  box.innerHTML = out;
+  row.after(box);
+});
+
 /* ---- gaps and coverage drill into the question table ---- */
 function drillTo(sys) {
   var sel = $("#sysSel");
@@ -3764,6 +3840,95 @@ def _sales_card(d: dict) -> str:
     )
 
 
+def _chart_legend(items: list) -> str:
+    """Colour chips with names, above every two-series chart.
+
+    Identity never rides on colour alone: the grey series in these charts is
+    deliberately grey, so the legend and the per-bar tooltips are what name
+    it, and they are not optional.
+    """
+    return ('<div class="chlegend">'
+            + "".join(f'<span><i style="background:var(--ch-{var})"></i>'
+                      f'{escape(label)}</span>' for var, label in items)
+            + "</div>")
+
+
+def _stack_chart(rows: list, bottom: str, top: str, b_var: str, t_var: str,
+                 tip: str) -> str:
+    """Twelve months as stacked bars, base series anchored to the baseline.
+
+    Plain SVG on the page's own tokens, so it follows the theme like every
+    other element. The 2px gap between segments is the surface showing
+    through, which keeps the two series apart even where their colours
+    cannot (that is what lets the context series be grey).
+    """
+    if not rows:
+        return ""
+    W, H, PAD = 560, 132, 16
+    peak = max((r[bottom] + r[top] for r in rows), default=1) or 1
+    n = len(rows)
+    step = (W - PAD) / n
+    bw = step - 6
+    bars = []
+    for i, r in enumerate(rows):
+        x = PAD + i * step + 3
+        hb = (H - 30) * r[bottom] / peak
+        ht = (H - 30) * r[top] / peak
+        yb = H - 18 - hb
+        yt = yb - (2 if ht else 0) - ht
+        title = tip.format(**r, both=r[bottom] + r[top])
+        bars.append(
+            f'<g class="chbar"><title>{escape(title)}</title>'
+            + (f'<rect x="{x:.1f}" y="{yt:.1f}" width="{bw:.1f}" height="{ht:.1f}" '
+               f'rx="2" fill="var(--ch-{t_var})"/>' if ht > 0.5 else "")
+            + (f'<rect x="{x:.1f}" y="{yb:.1f}" width="{bw:.1f}" height="{hb:.1f}" '
+               f'rx="2" fill="var(--ch-{b_var})"/>' if hb > 0.5 else "")
+            + "</g>")
+        if i % 2 == (n - 1) % 2:
+            bars.append(f'<text x="{x + bw / 2:.1f}" y="{H - 4}" class="chx">'
+                        f'{escape(r["m"][2:])}</text>')
+    grid_y = H - 18 - (H - 30)
+    return (
+        f'<svg viewBox="0 0 {W} {H}" class="chart" role="img">'
+        f'<line x1="{PAD}" y1="{grid_y}" x2="{W}" y2="{grid_y}" class="chgrid"/>'
+        f'<text x="{PAD}" y="{grid_y - 4}" class="chx">{_fmt(peak)}</text>'
+        f'<line x1="{PAD}" y1="{H - 18}" x2="{W}" y2="{H - 18}" class="chaxis"/>'
+        + "".join(bars) + "</svg>")
+
+
+def _area_chart(points: list, key: str, label_last: str) -> str:
+    """One series over time, area under it, endpoint named.
+
+    A single series carries no legend: the card's own heading names it.
+    """
+    if len(points) < 2:
+        return ""
+    W, H, PAD = 560, 110, 16
+    peak = max(p[key] for p in points) or 1
+    n = len(points)
+
+    def xy(i, v):
+        return (PAD + i * (W - PAD - 46) / (n - 1), H - 16 - (H - 30) * v / peak)
+
+    coords = [xy(i, p[key]) for i, p in enumerate(points)]
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
+    lx, ly = coords[-1]
+    hover = "".join(
+        f'<circle cx="{x:.1f}" cy="{y:.1f}" r="9" class="chhit">'
+        f'<title>{escape(p["m"])}: {_fmt(p[key])}</title></circle>'
+        for (x, y), p in zip(coords, points))
+    return (
+        f'<svg viewBox="0 0 {W} {H}" class="chart" role="img">'
+        f'<polygon points="{PAD},{H - 16} {line} {lx:.1f},{H - 16}" class="charea"/>'
+        f'<polyline points="{line}" class="chline"/>'
+        f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="3.5" fill="var(--ch-main)"/>'
+        f'<text x="{lx + 7:.1f}" y="{ly + 4:.1f}" class="chend">{escape(label_last)}</text>'
+        f'<text x="{PAD}" y="{H - 4}" class="chx">{escape(points[0]["m"])}</text>'
+        f'<text x="{lx:.1f}" y="{H - 4}" class="chx" text-anchor="end">'
+        f'{escape(points[-1]["m"])}</text>'
+        + hover + "</svg>")
+
+
 def _business_screen(d: dict) -> str:
     """One screen for the numbers, said as money and people.
 
@@ -3778,6 +3943,26 @@ def _business_screen(d: dict) -> str:
         return ""
     yt = d.get("youtube") or {}
     people = d["people"]
+
+    # Twelve months of questions. "Answered" is their state today, which is
+    # the honest reading: nothing records the day an answer was written.
+    from datetime import datetime as _dt
+    _now = _dt.now()
+    _mo12 = []
+    y, mth = _now.year, _now.month
+    for _ in range(12):
+        _mo12.append(f"{y:04d}-{mth:02d}")
+        mth -= 1
+        if mth == 0:
+            y, mth = y - 1, 12
+    _mo12.reverse()
+    qmonths = [{"m": mo, "answered": 0, "waiting": 0} for mo in _mo12]
+    _qidx = {mo: row for mo, row in zip(_mo12, qmonths)}
+    for q in d["questions"]:
+        row = _qidx.get((q.get("date") or "")[:7])
+        if row is None:
+            continue
+        row["answered" if q["status"] == "answered" else "waiting"] += 1
 
     def line(label, value, sub=""):
         return (f'<div class="orow"><span class="olabel">{escape(label)}</span>'
@@ -3814,6 +3999,16 @@ def _business_screen(d: dict) -> str:
         + line("Stopped over the years", _fmt(pat.get("stopped", 0)),
                f'US$ {pat.get("stopped_lifetime_cents", 0) / 100:,.0f} earned '
                f'while they stayed')
+        + '<p class="chtitle">Pledges started, last 12 months</p>'
+        + _chart_legend([("main", "still paying today"),
+                         ("mute", "since left")])
+        + _stack_chart([{**r, "left": r["total"] - r["still"]}
+                        for r in (pat.get("joins") or [])], "still",
+                       "left", "main", "mute",
+                       "{m}: {both} started, {still} still paying")
+        + '<p class="chtitle">When today\'s patrons joined</p>'
+        + _area_chart(pat.get("cohort") or [], "cum",
+                      _fmt((pat.get("cohort") or [{}])[-1].get("cum", 0)))
         + "</section>")
 
     # Reach, and how much of it pays
@@ -3843,6 +4038,10 @@ def _business_screen(d: dict) -> str:
                "they come first in Customers")
         + line("You have answered", f'{d["answer_rate"]}%',
                "of everything ever asked")
+        + '<p class="chtitle">Questions per month, and what is still waiting</p>'
+        + _chart_legend([("mute", "answered by now"), ("warn", "still waiting")])
+        + _stack_chart(qmonths, "answered", "waiting", "mute", "warn",
+                       "{m}: {both} asked, {waiting} still waiting")
         + "</section>")
 
     return (
@@ -4617,7 +4816,9 @@ def _sources_card(instrumentation: list, d: dict | None = None) -> str:
     rows = [tech]
     for source, vol, state, note in instrumentation:
         rows.append(
-            f'<div class="srow"><span><span class="nm">{escape(source)}</span><br>'
+            f'<div class="srow" data-src="{escape(source, quote=True)}" tabindex="0" '
+            f'title="Open the details">'
+            f'<span><span class="nm">{escape(source)}</span><br>'
             f'<span class="note" title="{escape(note, quote=True)}">{escape(note)}</span></span>'
             f'<span class="vol">{escape(vol)}</span>'
             f'<span class="pill st-{escape(state, quote=True)}">{escape(state)}</span></div>'
@@ -4911,6 +5112,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
             .replace("__AI_CACHE__", embed(d.get("ai_cache") or {}))
             .replace("__QDATA__", embed(_question_payload(d["questions"])))
             .replace("__LOOKUPS__", embed(_row_lookups()))
+            .replace("__SRCDET__", embed(d.get("source_details") or {}))
             .replace("__BRANDS__", embed(list(_BRAND)))
             .replace("__MANUAL_STATUS__", embed(list(manual_status)))
             .replace("__CRM__", embed({
