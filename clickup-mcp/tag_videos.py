@@ -58,12 +58,45 @@ TITLE_PATTERNS = {
 }
 
 
+def _flat(text: str) -> str:
+    """Lowercase, and punctuation reduced to single spaces.
+
+    "Sneak - Cover System Tutorial" is a sneak cover video, and a hyphen
+    was enough to hide that from a plain substring test.
+    """
+    return " " + re.sub(r"[^a-z0-9]+", " ", text.lower()).strip() + " "
+
+
 def match_title(title: str) -> str | None:
-    """Return the slug when exactly one system matches, else None."""
-    low = title.lower()
-    hits = [slug for slug, phrases in TITLE_PATTERNS.items()
-            if any(p in low for p in phrases)]
-    return hits[0] if len(hits) == 1 else None
+    """The system a title names, or None when it genuinely says two.
+
+    Longest phrase wins rather than refusing whenever two match. "Directional
+    Ledge Climbing System" contains both "directional ledge" and "climbing
+    system", and it is plainly a directional ledge video: the more specific
+    phrase is the one the title is about. A refusal is kept only for a real
+    tie, where the title names two systems just as strongly and a guess
+    would misroute every question under it.
+    """
+    low = _flat(title)
+    hits = []
+    for slug, phrases in TITLE_PATTERNS.items():
+        best = None
+        for p in phrases:
+            at = low.find(_flat(p).strip())
+            if at >= 0 and (best is None or at < best[0]):
+                best = (at, -len(p))
+        if best:
+            hits.append((best[0], best[1], slug))
+    if not hits:
+        return None
+    # Earliest wins, because a title leads with its subject: "Ladder
+    # Climbing System" is about ladders, and picking the longer phrase
+    # instead filed it under climbing. Length only breaks a tie at the
+    # same position.
+    hits.sort()
+    if len(hits) > 1 and hits[0][:2] == hits[1][:2]:
+        return None
+    return hits[0][2]
 
 
 def tag_overviews(dry: bool) -> dict[str, str]:
