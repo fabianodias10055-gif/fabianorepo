@@ -2319,12 +2319,15 @@ def fetch_link_telemetry() -> dict:
                      "error": "network" if status == 0 else f"http-{status}"})
 
     _s1, links = _admin_call("/api/links", token=token)
-    _s2, countries = _admin_call("/api/clicks/by-country?window=7d", token=token)
+    _s2, countries = _admin_call("/api/clicks/by-country?window=all", token=token)
 
     return keep({
         "ok": True,
         "stats": stats,
-        "links": links if isinstance(links, list) else [],
+        "links": [dict(l, system=link_system(l.get("prefix", ""),
+                                             l.get("slug", "")),
+                       kind=LINK_KIND.get(l.get("prefix", ""), l.get("prefix", "")))
+                  for l in (links if isinstance(links, list) else [])],
         "countries": countries if isinstance(countries, list) else [],
         "fetched_at": int(now),
     })
@@ -2347,6 +2350,17 @@ def link_action(action: str, prefix: str, slug: str, url: str) -> dict:
     token, err = _admin_token()
     if err:
         return {"ok": False, "error": err}
+
+    if action == "countries":
+        # The window matters more than it looks: 24h and 7d both come back
+        # empty because geo lookup has been answering Unknown, while all
+        # still holds 109 countries from when it worked. Asking for 7d and
+        # reporting "none yet" hid real data behind a broken recent slice.
+        win = slug if slug in ("24h", "7d", "all") else "all"
+        st, rows = _admin_call(f"/api/clicks/by-country?window={win}", token=token)
+        if st != 200 or not isinstance(rows, list):
+            return {"ok": False, "error": f"http-{st}" if st else "network"}
+        return {"ok": True, "window": win, "countries": rows}
 
     if action == "clicks":
         st, data = _admin_call(f"/api/link/{prefix}/{slug}/clicks", token=token)
@@ -2384,6 +2398,52 @@ def link_action(action: str, prefix: str, slug: str, url: str) -> dict:
     _admin["cache"] = None
     _admin["cache_at"] = 0.0
     return {"ok": True, "link": data if isinstance(data, dict) else {}}
+
+
+
+# A short link's slug names the system it sells, in the shortener's own
+# spelling: wallrunstandard, punchcombatstandard, ziplinepremium. Matching
+# it back to the catalog is what turns a list of 88 slugs into "which
+# system are people actually clicking".
+_LINK_TIER = ("premium", "standard", "basic", "free")
+_LINK_NOISE = ("system", "and", "the", "advanced", "simple", "dynamic", "move")
+# Plain words for the six prefixes, so the screen never says "prefix p".
+LINK_KIND = {"p": "Patreon page", "download": "Download", "docs": "Docs",
+             "free": "Free version", "freebuild": "Free build", "root": "Site"}
+
+
+def link_system(prefix: str, slug: str) -> str:
+    """The catalog system a short link sells, or '' when none fits.
+
+    Matching is on word stems, not whole words: the shortener writes
+    grapplingstandard and ziplinepremium where the catalog says grapple-hook
+    and ziplining, and exact containment missed both. The root prefix is
+    excluded outright, because it is the website itself; without that,
+    /_root matched Root Motion on the word "root" and put the site's 8,145
+    clicks under a locomotion system.
+    """
+    if prefix == "root":
+        return ""
+    flat = re.sub(r"[^a-z0-9]+", "", slug.lower())
+    for tier in _LINK_TIER:
+        if flat.endswith(tier):
+            flat = flat[:-len(tier)]
+    best_score, best_name = (0.0, 0), ""
+    for cslug, name, _fam in CATALOG:
+        words = [w for w in re.split(r"[^a-z0-9]+", cslug)
+                 if w and w not in _LINK_NOISE]
+        if not words:
+            continue
+        hit = [w for w in words if (w[:5] if len(w) >= 5 else w) in flat]
+        if not hit:
+            continue
+        score = (len(hit) / len(words),
+                 sum(len(w[:5] if len(w) >= 5 else w) for w in hit))
+        if score > best_score:
+            best_score, best_name = score, name
+    # Half the catalog name's words must appear: one shared word out of
+    # three is a coincidence, not a match.
+    return best_name if best_score[0] >= 0.5 else ""
 
 
 # --------------------------------------------------------------------------

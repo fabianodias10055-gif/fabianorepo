@@ -729,6 +729,21 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 
 
 
+
+/* ---- ranked bars: which system, which kind, which country ---- */
+.bars { display:flex; flex-direction:column; gap:5px; margin:var(--s3) 0; }
+.bar { display:grid; grid-template-columns:minmax(9ch,13ch) 1fr auto;
+  gap:var(--s3); align-items:center; font-size:var(--t-sm); }
+.bl { color:var(--ink2); overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; }
+.bt { background:var(--surface3); border-radius:3px; height:12px;
+  overflow:hidden; }
+.bt i { display:block; height:100%; background:var(--ch-main);
+  border-radius:3px; }
+.bv { font-family:var(--mono); font-size:var(--t-xs); color:var(--ink);
+  font-variant-numeric:tabular-nums; }
+.bar:hover .bt i { opacity:.82; }
+
 /* ---- the short-link manager ---- */
 tr.lkrow { cursor:pointer; }
 tr.lkrow:hover .slug { color:var(--accent); }
@@ -3993,6 +4008,115 @@ document.addEventListener("input", function (ev) {
   });
 });
 
+
+/* ---- where people are clicking ----
+   Eighty-eight rows of slug told you nothing about which system people
+   want. These three rankings answer that in the catalog's own words: by
+   system, by what kind of page it is, and by country.
+
+   Ranked bars rather than a pie or a line: the question is "which is
+   bigger", the categories have no order of their own, and a length against
+   a shared baseline is the one comparison people read accurately. One
+   series, one hue, so no legend is needed and colour carries no meaning
+   the label does not already say. */
+function ltBars(rows, total, empty) {
+  if (!rows.length) return '<div class="empty">' + esc(empty) + "</div>";
+  var top = rows[0][1] || 1;
+  return '<div class="bars">' + rows.map(function (r) {
+    var pct = total ? Math.round(r[1] * 1000 / total) / 10 : 0;
+    return '<div class="bar" title="' + esc(r[0] + ": " + fmt(r[1]) +
+      " clicks, " + pct + "% of " + fmt(total)) + '">' +
+      '<span class="bl">' + esc(r[0]) + "</span>" +
+      '<span class="bt"><i style="width:' +
+      Math.max(1, r[1] * 100 / top).toFixed(1) + '%"></i></span>' +
+      '<span class="bv">' + fmt(r[1]) + "</span></div>";
+  }).join("") + "</div>";
+}
+
+function ltRank(links, key, field) {
+  var by = {};
+  links.forEach(function (l) {
+    var k = l[key];
+    if (!k) return;
+    by[k] = (by[k] || 0) + (l[field] || 0);
+  });
+  return Object.keys(by).map(function (k) { return [k, by[k]]; })
+    .sort(function (a, b) { return b[1] - a[1]; });
+}
+
+var LT_CWIN = "all";
+
+function ltCountries(rows, win) {
+  var total = rows.reduce(function (t, r) { return t + (r.clicks || 0); }, 0);
+  var ranked = rows.map(function (r) {
+    return [(r.country && r.country !== "Unknown") ? r.country
+            : (r.country_code === "??" ? "not recorded" : r.country_code), r.clicks];
+  }).slice(0, 10);
+  var seg = '<span class="seg" role="group">' +
+    [["24h", "24 hours"], ["7d", "7 days"], ["all", "all time"]].map(function (o) {
+      return '<button type="button" class="ltcw" data-win="' + o[0] +
+        '" aria-pressed="' + (o[0] === win) + '">' + o[1] + "</button>";
+    }).join("") + "</span>";
+  var note = "";
+  if (!rows.length && win !== "all") {
+    note = '<p class="figwhy">No click in this window carries a country. ' +
+      "The lookup has been answering Unknown, so recent clicks have no " +
+      "country at all; switch to all time to see the ones recorded while " +
+      "it worked.</p>";
+  } else if (win === "all") {
+    note = '<p class="figwhy">All time, which is the only window with ' +
+      "countries in it: the lookup has stopped resolving lately, so the " +
+      "last few days are missing from this and the newest clicks show as " +
+      "not recorded.</p>";
+  }
+  return '<div class="figbar"><span class="figlab">window</span>' + seg + "</div>" +
+    ltBars(ranked, total, "nothing recorded in this window") + note;
+}
+
+function ltWhere(d) {
+  var links = d.links || [];
+  var withSys = links.filter(function (l) { return l.system; });
+  var noSys = links.filter(function (l) { return !l.system && l.kind !== "Site"; });
+  var sysTotal = withSys.reduce(function (t, l) { return t + (l.total_clicks || 0); }, 0);
+  var kinds = ltRank(links, "kind", "total_clicks");
+  var kindTotal = kinds.reduce(function (t, r) { return t + r[1]; }, 0);
+  var lost = noSys.reduce(function (t, l) { return t + (l.total_clicks || 0); }, 0);
+
+  var h = '<p class="lsub">Which system people click</p>';
+  h += ltBars(ltRank(withSys, "system", "total_clicks").slice(0, 12), sysTotal,
+              "no link matched a catalog system");
+  h += '<p class="figwhy">Clicks on every link that sells a system, all '
+    + "time, added up across its Patreon page, its download and its docs. "
+    + fmt(withSys.length) + " of " + fmt(links.length) + " links matched a "
+    + "system by name. The site's own links are left out on purpose: they "
+    + "are the homepage and the course, not a product."
+    + (noSys.length ? " " + fmt(noSys.length) + " product links (" + fmt(lost)
+       + " clicks) name something the catalog does not have yet, GASP+ALS "
+       + "and push-and-pull among them." : "") + "</p>";
+
+  h += '<p class="lsub">What they click on it</p>';
+  h += ltBars(kinds, kindTotal, "nothing yet");
+  h += '<p class="figwhy">A download means someone already bought or is '
+    + "taking the free build; a Patreon page means they are still deciding. "
+    + "Anything here that is not one of the six the shortener serves is a "
+    + "typo in the link itself and will not resolve.</p>";
+
+  h += '<p class="lsub">Where in the world</p>';
+  h += '<div id="ltcountries">' + ltCountries(d.countries || [], LT_CWIN) + "</div>";
+  return h;
+}
+
+document.addEventListener("click", function (ev) {
+  var b = ev.target.closest(".ltcw");
+  if (!b) return;
+  LT_CWIN = b.dataset.win;
+  var box = $("#ltcountries");
+  box.innerHTML = '<div class="note">reading…</div>';
+  ltPost({ action: "countries", slug: LT_CWIN }).then(function (r) {
+    box.innerHTML = ltCountries(r.ok ? (r.countries || []) : [], LT_CWIN);
+  });
+});
+
 /* ---- gaps and coverage drill into the question table ---- */
 function drillTo(sys) {
   var sel = $("#sysSel");
@@ -4210,6 +4334,7 @@ function renderLinks(d) {
   h += '</div><div class="ltgrid"><div>';
   h += '<p class="lsub">Clicks per hour, last 24h</p>' + ltChart(s.hourly_chart || []);
   var links = d.links || [];
+  h += ltWhere(d);
   h += ltComposer();
   h += '<p class="lsub">All links</p>'
     + '<input class="lfind" placeholder="filter by slug or destination" aria-label="Filter links">'
@@ -4257,13 +4382,6 @@ function renderLinks(d) {
       h += '<div class="lrow"><span>' + esc(r[0]) + '</span><span class="n">' + r[1] + "</span></div>";
     });
   }
-  h += '<p class="lsub" style="margin-top:20px">Countries, 7 days</p>';
-  var cc = (d.countries || []).slice(0, 6);
-  if (!cc.length) h += '<div class="empty">none yet \\u00b7 geo backfill returns after the Railway redeploy</div>';
-  cc.forEach(function (c) {
-    h += '<div class="lrow"><span>' + esc(c.country) + '</span><span class="n">'
-      + fmt(c.clicks) + "</span></div>";
-  });
   h += "</div></div>";
   body.innerHTML = h;
   /* The figure is rebuilt on every refresh, so it has to be drawn again
@@ -4275,16 +4393,27 @@ function scheduleLt() {
 }
 function loadLinks() {
   if (!LIVE) { $("#lt-state").textContent = "needs the live watcher (panel.py --watch)"; return; }
+  /* The catch is split on purpose. It used to wrap the render too, so any
+     exception while drawing this card reported as "local server
+     unreachable" and sent you looking at the network for a bug in the
+     page. A drawing failure now says so, and says which one. */
   fetch("/links.json", { cache: "no-store" })
     .then(function (r) { return r.json(); })
-    .then(function (d) {
-      ltFails = d.ok ? 0 : ltFails + 1;
-      renderLinks(d);
-      scheduleLt();
-    })
     .catch(function () {
       ltFails++;
       $("#lt-state").textContent = "local server unreachable";
+      scheduleLt();
+      return null;
+    })
+    .then(function (d) {
+      if (!d) return;
+      ltFails = d.ok ? 0 : ltFails + 1;
+      try {
+        renderLinks(d);
+      } catch (e) {
+        $("#lt-state").textContent = "could not draw this card: " + e.message;
+        if (window.console) console.error("renderLinks", e);
+      }
       scheduleLt();
     });
 }
