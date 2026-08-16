@@ -1890,7 +1890,21 @@ function syncUrl() {
   try { history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash); } catch (e) {}
 }
 
-var PAIRS = $$("#qtbody tr.qrow").map(function (r) { return { r: r }; });
+/* The haystack each row is searched against, built here from QDATA rather
+   than shipped as a data-txt attribute on all 2,401 shells. That attribute
+   was 467 KB, 10.4% of the page, restating fields QDATA already carries in
+   full; the browser assembles the same string once, at load, for nothing.
+   It hangs off the pair rather than the element so it costs no attribute
+   write and no reflow. */
+var PAIRS = $$("#qtbody tr.qrow").map(function (r) {
+  var q = QDATA[r.dataset.id] || {};
+  /* A plain property, not an attribute: setting 2,401 attributes would
+     write to the DOM and cost a reflow, while this is just a field on an
+     object that already exists. Read by match() and by the Edit jump. */
+  r._txt = [q.code, q.who, q.text, q.system, q.channel, q.status]
+    .join(" ").toLowerCase();
+  return { r: r };
+});
 /* Triage order, the default: whatever was escalated first, then the ones
    the vault can already answer, then oldest first. Sorting by date alone
    put freshly answered questions above four-year-old open ones. */
@@ -1977,7 +1991,7 @@ function match(r) {
      returned far more rows than the chip promised. */
   if (state.df !== "all" && (r.dataset.df !== state.df || r.dataset.st === "answered"))
     return false;
-  if (state.q && r.dataset.txt.indexOf(state.q) === -1) return false;
+  if (state.q && (r._txt || "").indexOf(state.q) === -1) return false;
   if (state.vid) {
     var q = QDATA[r.dataset.id];
     if (!q || q.video !== state.vid) return false;
@@ -2903,7 +2917,7 @@ $$("[data-editans]").forEach(function (b) {
     var text = answerRow(b).dataset.answer || "";
     var target = null;
     $$("#qtbody tr.qrow").forEach(function (r) {
-      if (r.dataset.txt.indexOf(code) !== -1) target = r;
+      if ((r._txt || "").indexOf(code) !== -1) target = r;
     });
     if (!target) {
       answerRow(b).querySelector(".amsg").textContent = "question not in the inbox";
@@ -5837,7 +5851,7 @@ def _question_rows(questions: list) -> str:
             f' data-date="{escape(q["date"], quote=True)}"'
             f' data-who="{escape(q["who"].lower(), quote=True)}"'
             f' data-df="{escape(q.get("difficulty", ""), quote=True)}"'
-            f' data-cov="{q.get("coverage", 0)}" data-txt="{txt}"></tr>'
+            f' data-cov="{q.get("coverage", 0)}"></tr>'
         )
     return "".join(rows)
 

@@ -1416,6 +1416,10 @@ def _all_sections() -> list[tuple[str, Path]]:
     return out
 
 
+# The scoring index and the per-question scores, kept between rebuilds.
+_score_cache: dict = {}
+
+
 def score_questions(questions: list[dict]) -> dict[str, float]:
     """Best weighted coverage per question, for the whole inbox at once.
 
@@ -1429,20 +1433,44 @@ def score_questions(questions: list[dict]) -> dict[str, float]:
     if not sections:
         return {}
 
-    sec_words = [_keywords(s) for s, _p in sections]
-    idf = _idf_table([s for s, _p in sections])
-    default_idf = max(idf.values(), default=1.0)
+    # Both halves are memoised, because the watcher runs this on every file
+    # save and it measured 731 ms with nothing changed. The index is keyed
+    # on the corpus itself, and each question's score on its own text, so
+    # editing one note rebuilds the index once and rescores nobody, while
+    # editing one question rescores that one.
+    corpus_key = hashlib.sha1(
+        chr(31).join(s for s, _p in sections).encode("utf-8", "replace")
+    ).hexdigest()
+    cached = _score_cache.get("index")
+    if cached and cached[0] == corpus_key:
+        sec_words, idf, default_idf, postings = cached[1:]
+    else:
+        sec_words = [_keywords(s) for s, _p in sections]
+        idf = _idf_table([s for s, _p in sections])
+        default_idf = max(idf.values(), default=1.0)
+        postings = {}
+        for i, words in enumerate(sec_words):
+            for w in words:
+                postings.setdefault(w, []).append(i)
+        _score_cache["index"] = (corpus_key, sec_words, idf, default_idf, postings)
+        _score_cache["scores"] = {}
 
-    postings: dict[str, list[int]] = {}
-    for i, words in enumerate(sec_words):
-        for w in words:
-            postings.setdefault(w, []).append(i)
-
+    seen = _score_cache.setdefault("scores", {})
     out: dict[str, float] = {}
+    fresh = 0
     for q in questions:
+        # Keyed on the text, so a question whose wording changed is
+        # rescored and one that merely moved is not.
+        tkey = hashlib.sha1((q["text"] or "").encode("utf-8", "replace")).hexdigest()
+        hit = seen.get(q["id"])
+        if hit and hit[0] == tkey:
+            out[q["id"]] = hit[1]
+            continue
+        fresh += 1
         q_words = _keywords(q["text"])
         if not q_words:
             out[q["id"]] = 0.0
+            seen[q["id"]] = (tkey, 0.0)
             continue
         weight = {w: idf.get(w, default_idf) for w in q_words}
         total = sum(weight.values()) or 1.0
@@ -1460,6 +1488,7 @@ def score_questions(questions: list[dict]) -> dict[str, float]:
             if cov > best:
                 best = cov
         out[q["id"]] = best
+        seen[q["id"]] = (tkey, out[q["id"]])
     return out
 
 
