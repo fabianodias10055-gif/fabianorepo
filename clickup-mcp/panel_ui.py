@@ -1042,6 +1042,7 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
   font-variant-numeric:tabular-nums; }
 .vrow .vbar { flex:none; width:74px; }
 .vtag.miss { background:var(--crit-bg); color:var(--crit); }
+.tag.miss { background:var(--crit-bg); color:var(--crit); }
 .vtag.has { background:var(--ok-bg); color:var(--ok); }
 .vrow[data-video] { cursor:pointer; }
 .vrow[data-video]:hover { background:var(--surface2); }
@@ -3763,6 +3764,34 @@ def _sales_card(d: dict) -> str:
     )
 
 
+def _new_patrons_card(d: dict) -> str:
+    """The people who just started paying, by name.
+
+    The Today tile already counts them; a count says the month went well and
+    leaves nothing to act on. These are the people a welcome still lands
+    for, and whether each one linked their Discord decides whether they show
+    up in Customers as themselves or as a stranger.
+    """
+    rows = []
+    for m in (d.get("patreon") or {}).get("recent") or []:
+        tier = ", ".join(m["tiers"]) or "no tier yet"
+        money = (f'US$ {m["monthly_cents"] / 100:,.0f}/mo'
+                 if m.get("monthly_cents") else "free")
+        linked = ('' if m.get("linked") else
+                  ' <span class="tag miss" title="No Discord linked: their '
+                  'questions in the server cannot be matched to this pledge">'
+                  'no Discord</span>')
+        rows.append(
+            f'<div class="orow2"><span class="nm">{escape(m["name"])}</span>'
+            f'{linked}<br><span class="note">{escape(tier)} &middot; {money}'
+            f' &middot; since {escape(m["since"])}</span></div>'
+        )
+    if not rows:
+        return ""
+    return (f'<section class="card"><h2><span class="he">🎉</span>'
+            f'New patrons</h2>{"".join(rows)}</section>')
+
+
 def _community_card(d: dict) -> str:
     """How many people each channel actually reaches.
 
@@ -3884,6 +3913,7 @@ def _overview_cards(d: dict) -> str:
         + '<div class="grid2">'
         + _today_card(d)
         + _business_card(d)
+        + _new_patrons_card(d)
         + _community_card(d)
         + card("Where they ask", "📣", "".join(where))
         + card("Under the most pressure", "🔥", "".join(pressure))

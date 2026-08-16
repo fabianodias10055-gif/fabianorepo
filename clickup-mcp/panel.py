@@ -2774,7 +2774,22 @@ def patreon_summary() -> dict:
     members = raw.get("members", [])
     active = [m for m in members if m.get("status") == "active_patron"]
     month = datetime.now().strftime("%Y-%m")
+
+    # The newest supporters, by name. A count says the month went well; the
+    # names are who to welcome, and the first weeks are when a welcome
+    # still reads as one.
+    recent = sorted((m for m in active if m.get("since")),
+                    key=lambda m: m["since"], reverse=True)[:8]
+    recent_rows = [{
+        "name": m.get("name") or "(no name on the pledge)",
+        "tiers": [t for t in (m.get("tiers") or []) if t and t != "Free"],
+        "monthly_cents": m.get("monthly_cents", 0),
+        "since": m.get("since", ""),
+        "linked": bool(m.get("discord_id")),
+    } for m in recent]
+
     return {
+        "recent": recent_rows,
         "total": len(members),
         "paying": len(active),
         "monthly_cents": sum(m.get("monthly_cents", 0) for m in active),
