@@ -3430,6 +3430,22 @@ var CHSPEC = {
     why: "Counted by the month each question was asked. 'Answered' is its " +
          "state today, not the month an answer was written, which nothing " +
          "records."
+  },
+  clicks: {
+    kind: "stack", keys: ["cnt"], vars: ["main"], names: ["clicks"],
+    unit: "clicks", ranges: [[6, "6h"], [12, "12h"], [24, "24h"]], defRange: 24,
+    xlab: function (r) { return r.m + "h"; },
+    next: function (last, i) {
+      var h = (parseInt(last, 10) + i) % 24;
+      return (h < 10 ? "0" : "") + h;
+    },
+    per: "h",
+    tip: function (r) {
+      return r.m + ":00 - " + fmt(r.cnt) + (r.cnt === 1 ? " click" : " clicks");
+    },
+    why: "Clicks on your short links, by the hour they happened, live from " +
+         "locodev.dev. Twenty-four hours is all the admin API keeps at this " +
+         "resolution, so the window ends where its memory does."
   }
 };
 
@@ -3443,7 +3459,8 @@ function chLoad() {
   catch (e) { saved = {}; }
   Object.keys(CHSPEC).forEach(function (k) {
     var s = saved[k] || {};
-    chState[k] = { range: s.range || 12, trend: !!s.trend, fc: s.fc || 0 };
+    chState[k] = { range: s.range || CHSPEC[k].defRange || 12,
+                   trend: !!s.trend, fc: s.fc || 0 };
   });
 }
 
@@ -3503,7 +3520,8 @@ function chProject(win, spec, months) {
       lo = Math.max(0, mid - half);
       hi = mid + half;
     }
-    out.push({ m: chNextMonth(win[win.length - 1].m, i), mid: mid, lo: lo, hi: hi });
+    var nxt = (spec.next || chNextMonth)(win[win.length - 1].m, i);
+    out.push({ m: nxt, mid: mid, lo: lo, hi: hi });
   }
   return { points: out, fit: fit, from: last };
 }
@@ -3532,8 +3550,8 @@ function chStats(spec, win, proj) {
 
   if (fit) {
     var per = fit.b, dir = per >= 0.05 ? "rising" : per <= -0.05 ? "falling" : "flat";
-    out.push(cell("Trend", (per >= 0 ? "+" : "") + per.toFixed(1) + "/mo",
-                  per < -0.05));
+    out.push(cell("Trend", (per >= 0 ? "+" : "") + per.toFixed(1) +
+                  "/" + (spec.per || "mo"), per < -0.05));
     out.push(cell("Direction", dir, dir === "falling"));
   }
   if (proj) {
@@ -3555,9 +3573,10 @@ function chStats(spec, win, proj) {
 function chDraw(fig) {
   var name = fig.dataset.chart, spec = CHSPEC[name], rows = CHARTS[name] || [];
   if (!spec) return;
-  var st = chState[name] || (chState[name] = { range: 12, trend: false, fc: 0 });
+  var st = chState[name] ||
+    (chState[name] = { range: spec.defRange || 12, trend: false, fc: 0 });
   var bar = '<div class="figbar"><span class="figlab">show</span>' +
-    chSeg(name, "range", CH_RANGES, st.range) +
+    chSeg(name, "range", spec.ranges || CH_RANGES, st.range) +
     '<span class="figlab">trend</span>' +
     chSeg(name, "trend", [[0, "off"], [1, "on"]], st.trend ? 1 : 0) +
     '<span class="figlab">project</span>' + chSeg(name, "fc", CH_FC, st.fc) +
@@ -3693,7 +3712,8 @@ function chDraw(fig) {
   win.concat(proj ? proj.points : []).forEach(function (r, i) {
     if ((slots - 1 - i) % every) return;
     svg.push('<text x="' + (L + i * step + step / 2).toFixed(1) + '" y="' + (H - 6) +
-             '" class="chx" text-anchor="middle">' + esc(r.m.slice(2)) + "</text>");
+             '" class="chx" text-anchor="middle">' +
+             esc(spec.xlab ? spec.xlab(r) : r.m.slice(2)) + "</text>");
   });
   svg.push("</svg>");
 
@@ -3965,19 +3985,15 @@ function rel(iso) {
   if (s < 86400) return Math.floor(s / 3600) + "h ago";
   return Math.floor(s / 86400) + "d ago";
 }
+/* The hourly clicks go through the same engine as every other chart, so
+   they get an axis, labelled hours, a trend and a projection. The old one
+   was a 240-unit viewBox stretched to the card's full width with
+   preserveAspectRatio none, which squashed every bar by whatever the card
+   happened to measure and left no scale to read them against. */
 function ltChart(hc) {
   if (!hc.length) return '<div class="empty">no hourly data</div>';
-  var max = 1;
-  hc.forEach(function (p) { if (p.cnt > max) max = p.cnt; });
-  var w = 240, bw = w / hc.length;
-  var out = '<svg class="lchart" viewBox="0 0 ' + w + ' 64" preserveAspectRatio="none">';
-  hc.forEach(function (p, i) {
-    var bh = Math.max(1.5, p.cnt * 56 / max);
-    out += '<rect x="' + (i * bw + 1).toFixed(1) + '" y="' + (60 - bh).toFixed(1)
-      + '" width="' + (bw - 2).toFixed(1) + '" height="' + bh.toFixed(1) + '" rx="1.5">'
-      + "<title>" + esc(p.hour) + ":00 \\u00b7 " + fmt(p.cnt) + " clicks</title></rect>";
-  });
-  return out + "</svg>";
+  CHARTS.clicks = hc.map(function (p) { return { m: p.hour, cnt: p.cnt }; });
+  return '<div class="fig" data-chart="clicks"></div>';
 }
 function shortUrl(prefix, slug) {
   if (prefix === "root") return "https://locodev.dev/" + (slug === "_root" ? "" : slug);
@@ -4064,6 +4080,9 @@ function renderLinks(d) {
   });
   h += "</div></div>";
   body.innerHTML = h;
+  /* The figure is rebuilt on every refresh, so it has to be drawn again
+     here: chMountExpand ran once at boot, long before this HTML existed. */
+  $$(".fig", body).forEach(chDraw);
 }
 function scheduleLt() {
   setTimeout(loadLinks, ltFails >= 3 ? 300000 : 60000);
