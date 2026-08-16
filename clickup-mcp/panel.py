@@ -2934,6 +2934,21 @@ def fingerprint() -> tuple:
         except OSError:
             continue
         items.append((str(p), st.st_mtime_ns, st.st_size))
+    # Panel/ is excluded above because build() writes there, but the
+    # collectors drop their output there too, so those inputs are named one
+    # by one. Without this a Patreon or member refresh succeeded and an open
+    # dashboard kept showing the previous snapshot until some note changed.
+    # youtube-channel.json stays out: scan() itself rewrites it during a
+    # build, so watching it would only buy a pointless extra rebuild.
+    for p in (VAULT / "Panel" / "patreon-members.json",
+              VAULT / "Panel" / "discord-members.json",
+              VAULT / "Panel" / "knowledge_base.json",
+              KB_SHIPPED_PATH):
+        try:
+            st = p.stat()
+        except OSError:
+            continue                     # Drive offline, or never written yet
+        items.append((str(p), st.st_mtime_ns, st.st_size))
     return tuple(sorted(items))
 
 
