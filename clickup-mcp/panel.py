@@ -680,6 +680,7 @@ def parse_answers() -> list[dict]:
 
 
 ANSWERS_KB_NAME = "05 - Answered questions.md"
+QUESTIONS_KB_PREFIX = "06 - Open questions"
 GENERAL_KB_DIR = "_general"
 
 # Who was asking. A paying customer's question is a different question: they
@@ -836,6 +837,77 @@ def build_answers_kb() -> int:
         legacy = VAULT / "Systems" / slug / ANSWERS_KB_NAME
         if legacy.is_file():
             legacy.unlink()
+    return written
+
+
+def build_questions_kb() -> int:
+    """Materialize every still-open question into its system's folder, one
+    generated note per system, so drafting an answer starts from what the
+    community is actually asking: how many people hit the same thing, and
+    in their own words, YouTube and Discord together.
+
+    Demand, not knowledge: these notes are excluded from Suggest, coverage
+    scoring and the bot export at the source (_all_sections), and the note
+    itself says no passage from it may be quoted as an answer. Untagged
+    questions stay in the Inbox until a video tag routes them. A file is
+    only written when its content changed, so the watcher sees one rebuild
+    when something new lands and then settles.
+    """
+    by_system: dict[str, list[dict]] = {}
+    totals: dict[str, int] = {}
+    for q in parse_questions():
+        slug = q["system"] if q["system"] in NAME_BY_SLUG else ""
+        if not slug:
+            continue
+        totals[slug] = totals.get(slug, 0) + 1
+        if q["status"] == "answered":
+            continue
+        item = dict(q)
+        item["tier"] = member_tier(q["who"], q["channel"])
+        by_system.setdefault(slug, []).append(item)
+
+    written = 0
+    for slug, name in NAME_BY_SLUG.items():
+        items = by_system.get(slug, [])
+        items.sort(key=lambda p: p["date"], reverse=True)
+        lines = [
+            "---",
+            "tags: [locodev, kb, questions, generated]",
+            f"system: {slug}",
+            "source: panel.build_questions_kb",
+            "---",
+            "",
+            f"# Open questions: {name}",
+            "",
+            "What the community is still asking about this system, on YouTube",
+            "and Discord, newest first. Context for answering with confidence.",
+            "**Do not edit by hand**: regenerated on every build. **Never quote",
+            "this note as an answer**: nothing in it has an answer yet.",
+            "",
+            f"{len(items)} open of {totals.get(slug, 0)} logged for this system.",
+            "",
+        ]
+        for q in items:
+            head = f"{q['date']} · {q['who']} · {q['channel']} · {q['tier']}"
+            if q.get("video"):
+                head += f" · {q['video']}"
+            lines += [f"## {head}", "", q["text"], ""]
+            link = q.get("url", "")
+            if (not link and q["channel"] == "youtube" and q.get("video_id")
+                    and q.get("source", "").startswith("yt:")):
+                link = (f"https://www.youtube.com/watch?v={q['video_id']}"
+                        f"&lc={q['source'][3:]}")
+            if link:
+                lines += [f"[open it]({link})", ""]
+        content = "\n".join(lines) + "\n"
+
+        folder = VAULT / "Systems" / slug
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{QUESTIONS_KB_PREFIX}.md"
+        old = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+        if old != content:
+            path.write_text(content, encoding="utf-8")
+            written += 1
     return written
 
 
@@ -1152,6 +1224,12 @@ def _all_sections() -> list[tuple[str, Path]]:
     """
     out: list[tuple[str, Path]] = []
     for path in sorted((VAULT / "Systems").rglob("*.md")):
+        # The open-questions notes are demand, not knowledge: a question in
+        # there matches its own wording perfectly and would be offered back
+        # as if it were an answer. Nothing that treats sections as
+        # answerable may see them.
+        if path.name.startswith(QUESTIONS_KB_PREFIX):
+            continue
         text = strip_scaffold(path.read_text(encoding="utf-8", errors="replace"))
         for section in re.split(r"(?m)^(?=#{1,6}\s)", text):
             section = section.strip()
@@ -1531,6 +1609,9 @@ Rules:
 - `passage` must be text copied VERBATIM from a file you opened. Never
   paraphrase, summarise or compose. Quote enough to be useful, at most ~200
   words, and keep any Symptom/Cause/Fix structure together.
+- Never quote Systems/<slug>/06 - Open questions.md as a passage: it holds
+  the community's still-unanswered questions, so nothing in it answers
+  anything, however well its wording matches.
 - If nothing in the vault genuinely answers it, set found=false, leave
   passage empty, and use `why` to say what is missing. An empty template
   section does not count as an answer.
@@ -1575,6 +1656,10 @@ Your job: search this vault (the current directory) and draft the reply.
   are free, what each subscription tier includes, and the short links to
   hand out. Answer where-do-I-get-the-assets questions from it, and give
   its locodev.dev short links rather than raw URLs.
+- Systems/<slug>/06 - Open questions.md lists what the community is still
+  asking about that system: use it to see how often and in which words
+  this same problem repeats. It is demand, never a source: nothing in it
+  has an answer, so never quote it as one.
 
 
 Dates matter more than usual here. This catalog has been rebuilt across
@@ -3223,6 +3308,9 @@ def build(live: bool) -> dict:
         _state["building"] = True
         try:
             t0 = time.perf_counter()
+            # Before the scan, so the page's note counts include them. Only
+            # changed files are written; the rebuild this triggers settles.
+            build_questions_kb()
             data = scan()
             data["scan_ms"] = int((time.perf_counter() - t0) * 1000)
             out = VAULT / "Panel"
