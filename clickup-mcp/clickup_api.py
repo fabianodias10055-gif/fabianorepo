@@ -85,9 +85,20 @@ _limiter = _RateLimiter(MAX_REQUESTS_PER_MINUTE)
 def _token() -> str:
     token = os.getenv("CLICKUP_API_TOKEN", "").strip()
     if not token:
-        # Opcional: cofre do sistema (Windows Credential Manager, macOS
-        # Keychain) via keyring. Para guardar la:
-        #   python -m keyring set clickup-mcp api_token
+        # O cofre do painel (Windows Credential Manager, servico
+        # "locodev-panel") e para onde secrets_store.py --migrate levou os
+        # tokens quando o .env foi esvaziado. Procurar so no local antigo
+        # deixou a reconciliacao horaria falhando com "token nao definido"
+        # mesmo com o token guardado.
+        try:
+            from secrets_store import get_secret
+
+            token = get_secret("CLICKUP_API_TOKEN").strip()
+        except ImportError:
+            pass
+    if not token:
+        # Local antigo (python -m keyring set clickup-mcp api_token), para
+        # quem guardou por ele e nunca migrou.
         try:
             import keyring
 
@@ -96,10 +107,10 @@ def _token() -> str:
             pass
     if not token:
         raise ClickUpError(
-            "CLICKUP_API_TOKEN nao definido. Copie .env.example para .env e "
-            "cole seu token pessoal (ClickUp > Settings > Apps > API Token), "
-            "ou guarde no cofre do sistema com: "
-            "python -m keyring set clickup-mcp api_token"
+            "CLICKUP_API_TOKEN nao definido. Guarde no cofre com: "
+            "python secrets_store.py --set CLICKUP_API_TOKEN  (ou copie "
+            ".env.example para .env e cole seu token pessoal de "
+            "ClickUp > Settings > Apps > API Token)"
         )
     return token
 
