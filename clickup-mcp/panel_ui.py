@@ -1027,6 +1027,7 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
   font-variant-numeric:tabular-nums; }
 .vrow .vbar { flex:none; width:74px; }
 .vtag.miss { background:var(--crit-bg); color:var(--crit); }
+.vtag.has { background:var(--ok-bg); color:var(--ok); }
 .vrow[data-video] { cursor:pointer; }
 .vrow[data-video]:hover { background:var(--surface2); }
 .vseen { display:block; margin-top:2px; color:var(--ink3); font-size:var(--t-2xs);
@@ -4108,8 +4109,15 @@ def _videos_card(d: dict) -> str:
         tagged = bool(v.get("system") and v["system"] != "-")
         tag = (f'<span class="vtag">{escape(v["system"])}</span>' if tagged
                else '<span class="vtag miss">no product</span>')
-        if not v["transcript"]:
-            tag += '<span class="vtag miss">no transcript</span>'
+        # Absence-only marking hid the answer to "does this one have its
+        # transcript?" whenever the answer was yes, which for the visible
+        # rows was always. Both states say so now.
+        tag += ('<span class="vtag has" title="The spoken words are in the '
+                'vault: Suggest and the bot can quote this video">'
+                'transcript</span>' if v["transcript"]
+                else '<span class="vtag miss" title="Nothing said in this '
+                'video is in the vault: Suggest and the bot cannot answer '
+                'from it">no transcript</span>')
 
         waiting = open_by.get(v["name"], 0)
         total = total_by.get(v["name"], 0)
