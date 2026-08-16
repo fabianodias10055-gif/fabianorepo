@@ -1257,10 +1257,14 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
 .lchart rect:hover { opacity:1; }
 .lsub { color:var(--ink3); font-family:var(--mono); font-size:var(--t-2xs);
   letter-spacing:.08em; text-transform:uppercase; margin:0 0 var(--s2); font-weight:600; }
-.crow { display:flex; justify-content:space-between; gap:var(--s2); padding:var(--s2) 0;
+/* Named lrow, not crow: the customer table's rows are <tr class="crow">,
+   and a display:flex here took those rows out of the table's column
+   algorithm, so every Customers row sized itself and none lined up with
+   the header. Same collision the Products table hit as .prow. */
+.lrow { display:flex; justify-content:space-between; gap:var(--s2); padding:var(--s2) 0;
   border-bottom:1px solid var(--line2); font-size:var(--t-sm); align-items:center; }
-.crow:last-child { border-bottom:0; }
-.crow .n { font-family:var(--mono); font-size:var(--t-xs); color:var(--ink3);
+.lrow:last-child { border-bottom:0; }
+.lrow .n { font-family:var(--mono); font-size:var(--t-xs); color:var(--ink3);
   text-align:right; font-variant-numeric:tabular-nums; }
 .slug { font-family:var(--mono); font-size:var(--t-sm); color:var(--ink); }
 .host { color:var(--ink3); font-size:var(--t-xs); }
@@ -4012,7 +4016,7 @@ function renderLinks(d) {
   var rc = (s.recent_clicks || []).slice(0, 8);
   if (!rc.length) h += '<div class="empty">none yet</div>';
   rc.forEach(function (c) {
-    h += '<div class="crow"><span class="slug">/' + esc(c.prefix) + "/" + esc(c.slug)
+    h += '<div class="lrow"><span class="slug">/' + esc(c.prefix) + "/" + esc(c.slug)
       + '</span><span class="n">' + esc(c.country_code || "?") + " \\u00b7 "
       + esc(c.referrer || "direct") + " \\u00b7 " + rel(c.clicked_at) + "</span></div>";
   });
@@ -4026,14 +4030,14 @@ function renderLinks(d) {
   if (refList.length) {
     h += '<p class="lsub" style="margin-top:20px">Referrers, last 30 clicks</p>';
     refList.forEach(function (r) {
-      h += '<div class="crow"><span>' + esc(r[0]) + '</span><span class="n">' + r[1] + "</span></div>";
+      h += '<div class="lrow"><span>' + esc(r[0]) + '</span><span class="n">' + r[1] + "</span></div>";
     });
   }
   h += '<p class="lsub" style="margin-top:20px">Countries, 7 days</p>';
   var cc = (d.countries || []).slice(0, 6);
   if (!cc.length) h += '<div class="empty">none yet \\u00b7 geo backfill returns after the Railway redeploy</div>';
   cc.forEach(function (c) {
-    h += '<div class="crow"><span>' + esc(c.country) + '</span><span class="n">'
+    h += '<div class="lrow"><span>' + esc(c.country) + '</span><span class="n">'
       + fmt(c.clicks) + "</span></div>";
   });
   h += "</div></div>";
