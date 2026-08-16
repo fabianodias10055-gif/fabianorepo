@@ -826,6 +826,9 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .mbtns { display:flex; gap:var(--s2); margin-top:var(--s3); flex-wrap:wrap; }
 
 /* ---- answering a whole system ---- */
+.bigmsg { color:var(--warn); font-weight:600; }
+.bulkst.bs-queued { color:var(--ink3); }
+
 .pbar { height:6px; border-radius:3px; background:var(--surface3);
   overflow:hidden; margin:var(--s3) 0 2px; }
 .pbar i { display:block; height:100%; background:var(--accent);
@@ -4540,8 +4543,8 @@ function bulkRender(st) {
       + (BULK_GAP === "twomin") + '">about 2 min</button>'
       + '<button type="button" class="bulkgap" data-gap="wide" aria-pressed="'
       + (BULK_GAP === "wide") + '">50 to 300s</button></span>'
-      + '<span class="note">spaced takes about ' + bulkSpan(avg)
-      + "</span></div>";
+      + '<span class="note">spaced takes about ' + bulkSpan(avg) + "</span>"
+      + '<span class="note bigmsg" id="bulksendmsg"></span></div>';
   }
   if (st.phase === "drafting" || st.phase === "sending")
     h += '<div class="figbar"><button class="btn tiny" id="bulkstop">Stop</button></div>';
@@ -4551,7 +4554,9 @@ function bulkRender(st) {
     h += '<div class="bulkitem" data-id="' + esc(it.id) + '">'
       + '<div class="bulkhead"><span class="slug">' + esc(it.code || "?") + "</span>"
       + '<span class="bulkwho">' + esc(it.who) + " · " + esc(it.channel) + "</span>"
-      + '<span class="bulkst bs-' + esc(it.state) + '">' + esc(it.state)
+      + '<span class="bulkst bs-' + esc(it.state) + '">'
+      + (it.state === "queued" && st.phase === "sending" ? "waiting its turn"
+         : esc(it.state))
       + (it.msg ? " · " + esc(it.msg) : "") + "</span></div>"
       + '<p class="bulkq">' + esc(it.asked) + "</p>"
       + (it.draft || it.state === "drafted"
@@ -4643,11 +4648,22 @@ document.addEventListener("click", function (ev) {
     if (!confirm("Send " + count + " public replies"
                  + (spaced ? ", " + gapWords : ", all at once")
                  + "? This posts under your name and cannot be taken back.")) return;
+    var sm = $("#bulksendmsg");
+    if (sm) sm.textContent = "starting...";
     bulkPost({ action: "send", mode: mode, edits: bulkEdits(), gap: BULK_GAP })
       .then(function (r) {
-      if (!r.ok) { $("#bulkmsg").textContent = r.error; return; }
-      bulkWatch();
-    });
+        if (!r.ok) {
+          /* Beside the button that was pressed. This landed next to the
+             system picker at the top of the card, far above the click, so a
+             refused send looked like nothing happening at all. */
+          if (sm) sm.textContent = "not sent: " + r.error;
+          $("#bulkmsg").textContent = r.error;
+          return;
+        }
+        if (sm) sm.textContent = "";
+        bulkWatch();
+      })
+      .catch(function (e) { if (sm) sm.textContent = "not sent: " + e.message; });
   }
 });
 

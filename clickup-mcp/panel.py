@@ -2687,6 +2687,7 @@ _bulk_lock = threading.Lock()
 
 
 
+
 def ai_cost_hint() -> dict:
     """What a draft has actually cost, and what is left of today.
 
@@ -2707,8 +2708,54 @@ def ai_cost_hint() -> dict:
                           if AI_DAILY_USD > 0 else None}
 
 
+
+# The run outlives the process. Everything above lived in memory only, so
+# restarting the watcher (which every code change here does) silently
+# emptied a queue the open page was still showing: the buttons stayed live
+# and the server had forgotten, so Send answered "draft the answers first"
+# for a list sitting right there on screen. Panel/ is excluded from the
+# watcher fingerprint, so writing here cannot start a rebuild loop.
+BULK_STATE_PATH = VAULT / "Panel" / "bulk-run.json"
+
+
+def _bulk_save() -> None:
+    try:
+        BULK_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        BULK_STATE_PATH.write_text(json.dumps(_bulk), encoding="utf-8")
+    except (OSError, TypeError, ValueError):
+        pass          # a lost snapshot is survivable; a crashed run is not
+
+
+def _bulk_load() -> None:
+    try:
+        kept = json.loads(BULK_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(kept, dict) or not kept.get("items"):
+        return
+    # A run that was mid-flight when the process died is not resumed by
+    # itself: nobody watched it finish, so it comes back as a reviewable
+    # list rather than a sender that starts posting on boot.
+    if kept.get("phase") in ("drafting", "sending"):
+        kept["phase"] = "ready"
+        kept["note"] = ("the panel restarted while this run was going; "
+                        "nothing was lost and nothing is sending")
+        for item in kept["items"]:
+            if item.get("state") == "queued":
+                item["state"] = "drafted" if item.get("draft") else "waiting"
+    kept["stop"] = False
+    _bulk.update(kept)
+
+
+_bulk_loaded = False
+
+
 def bulk_state() -> dict:
     """A snapshot the page can poll without holding anything up."""
+    global _bulk_loaded
+    if not _bulk_loaded:
+        _bulk_loaded = True
+        _bulk_load()
     with _bulk_lock:
         st = {k: v for k, v in _bulk.items() if k != "items"}
         st["items"] = [dict(i) for i in _bulk["items"]]
@@ -2770,6 +2817,7 @@ def bulk_draft(system: str) -> dict:
                          f"nothing new was generated")
         return {"ok": True, "queued": len(queue), "system_name": name,
                 "already": had}
+    _bulk_save()
     threading.Thread(target=_bulk_draft_worker, daemon=True).start()
     return {"ok": True, "queued": len(queue), "system_name": name,
             "already": had}
@@ -2847,6 +2895,7 @@ def bulk_send(mode: str, edits: dict, gap: str = "wide") -> dict:
             return {"ok": False, "error": "no draft has any text in it"}
         _bulk.update(phase="sending", mode=mode, sent=0, failed=0,
                      stop=False, note="", started_at=time.time())
+    _bulk_save()
     threading.Thread(target=_bulk_send_worker, args=(mode, gap), daemon=True).start()
     return {"ok": True, "sending": ready, "mode": mode, "gap": gap}
 
@@ -2930,11 +2979,13 @@ def _mark(idx: int, state: str, msg: str = "", draft: str = "") -> None:
             item["draft"] = draft
         _bulk["done"] = sum(1 for i in _bulk["items"]
                             if i["state"] not in ("waiting", "queued"))
+    _bulk_save()
 
 
 def _finish(phase: str, note: str) -> None:
     with _bulk_lock:
         _bulk.update(phase=phase, note=note, next_at=0.0, stop=False)
+    _bulk_save()
 
 
 def bulk_stop() -> dict:
