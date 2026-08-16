@@ -3309,9 +3309,13 @@ function videoPanel(name) {
     /* The bulk drafter lives on Inbox, next to the system filter. Asked for
        twice from this screen and not found both times, so the way in is
        here too, where the waiting questions actually are. */
-    + (open.length ? '<button class="btn tiny primary" data-vbulk="'
-        + esc(open[0].system || "") + '">Draft answers for all ' + open.length
-        + "</button>" : "")
+    /* Drafting works by system, not by video, so the count here is the
+       system's. Saying "all 70" on a video whose system holds 85 promised
+       a number the run would not match. */
+    + (open.length && open[0].system
+        ? '<button class="btn tiny primary" data-vbulk="'
+          + esc(open[0].system) + '">Draft answers for ' + esc(open[0].system)
+          + "</button>" : "")
     + "</div>";
   if (common.length) {
     out += '<div class="cabout"><span class="clabel">Keeps coming up</span>'
@@ -4318,6 +4322,12 @@ document.addEventListener("click", function (ev) {
       card.scrollIntoView({ block: "start" });
       card.classList.add("flashcard");
       setTimeout(function () { card.classList.remove("flashcard"); }, 1400);
+      /* The button says Draft, so it drafts. It used to only preselect the
+         picker, which left you looking at whatever run was on screen from
+         before: the picker said Weapon System while the list below still
+         said Bow and Arrow, 2 questions. */
+      var run = $("#bulkrun");
+      if (run && !run.disabled && sel && sel.value) run.click();
     }
     if (sel && !sel.value) $("#bulkmsg").textContent =
       "these questions are not filed under a catalog system yet";
@@ -4556,6 +4566,26 @@ function bulkRender(st) {
     return;
   }
 
+  /* A finished run persists, and the picker can have moved on since. Show
+     it as what it is rather than beside a picker naming something else. */
+  var picked = $("#bulksys");
+  /* Any settled phase, not just ready: a stopped run persists too, and it
+     was the stopped one sitting under a picker naming something else. */
+  var settled = st.phase === "ready" || st.phase === "done" ||
+                st.phase === "stopped";
+  var stale = picked && settled && st.system &&
+              picked.value && picked.value !== st.system;
+  if (stale) {
+    box.innerHTML = '<p class="figwhy">The last run was ' + esc(st.system_name)
+      + ", " + fmt(st.done) + " of " + fmt(st.items.length)
+      + " drafted. Press Draft answers to start "
+      + esc(picked.selectedOptions[0] ? picked.selectedOptions[0].textContent
+                                      : picked.value)
+      + "; those drafts are kept and cost nothing to show again.</p>"
+      + bulkMoney(st.cost);
+    return;
+  }
+
   var n = st.items.length;
   h += '<div class="figstat" style="border-top:0;padding-top:0">'
     + '<div><span class="k">system</span><span class="v">' + esc(st.system_name) + "</span></div>"
@@ -4686,6 +4716,12 @@ function bulkEdits() {
   });
   return out;
 }
+
+/* Changing the picker redraws. Without this the card kept showing the
+   previous run until something else happened to poll. */
+document.addEventListener("change", function (ev) {
+  if (ev.target && ev.target.id === "bulksys") bulkTick();
+});
 
 document.addEventListener("click", function (ev) {
   if (ev.target.closest("#bulkrun")) {
