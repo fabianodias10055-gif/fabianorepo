@@ -2369,8 +2369,15 @@ def fetch_link_telemetry() -> dict:
         return keep({"ok": False,
                      "error": "network" if status == 0 else f"http-{status}"})
 
-    _s1, links = _admin_call("/api/links", token=token)
-    _s2, countries = _admin_call("/api/clicks/by-country?window=all", token=token)
+    s_links, links = _admin_call("/api/links", token=token)
+    s_countries, countries = _admin_call("/api/clicks/by-country?window=all",
+                                         token=token)
+    # Stats alone is not the card. When the link list fails, saying ok with
+    # an empty list rendered "88 links" beside no links at all and held that
+    # for two minutes; the page has an honest error state, so use it.
+    if s_links != 200 or not isinstance(links, list):
+        return keep({"ok": False,
+                     "error": "network" if s_links == 0 else f"http-{s_links}"})
 
     return keep({
         "ok": True,
@@ -2380,6 +2387,7 @@ def fetch_link_telemetry() -> dict:
                        kind=LINK_KIND.get(l.get("prefix", ""), l.get("prefix", "")))
                   for l in (links if isinstance(links, list) else [])],
         "countries": countries if isinstance(countries, list) else [],
+        "countries_ok": s_countries == 200,
         "fetched_at": int(now),
     })
 
@@ -2424,6 +2432,12 @@ def link_action(action: str, prefix: str, slug: str, url: str) -> dict:
 
     if action == "clicks":
         st, data = _admin_call(f"/api/link/{prefix}/{slug}/clicks", token=token)
+        if st == 401:
+            _admin["token"] = ""
+            token, err = _admin_token()
+            if not err:
+                st, data = _admin_call(f"/api/link/{prefix}/{slug}/clicks",
+                                       token=token)
         if st != 200 or not isinstance(data, dict):
             return {"ok": False, "error": f"http-{st}" if st else "network"}
         # The API answers with the most recent 500, so anything counted over
@@ -2431,7 +2445,11 @@ def link_action(action: str, prefix: str, slug: str, url: str) -> dict:
         return {"ok": True, "link": data.get("link") or {},
                 "clicks": data.get("clicks") or [], "sample": 500}
 
-    if prefix not in LINK_PREFIXES:
+    # Only when creating. An existing link may sit under a prefix outside
+    # the six (notebooklm, document, and a donwload typo all do, and all
+    # resolve), and refusing to repoint one because of how it was named
+    # would make the panel unable to fix exactly the links that need it.
+    if action == "create" and prefix not in LINK_PREFIXES:
         return {"ok": False, "error": f"prefix must be one of "
                                       f"{', '.join(LINK_PREFIXES)}"}
     if not _SLUG_OK.match(slug or "") or len(slug) > 120 or ".." in slug:
@@ -2440,14 +2458,27 @@ def link_action(action: str, prefix: str, slug: str, url: str) -> dict:
     if not url.startswith(("http://", "https://")):
         return {"ok": False, "error": "the destination must start with http"}
 
-    if action == "create":
-        st, data = _admin_call("/api/links", token=token,
-                               payload={"prefix": prefix, "slug": slug, "url": url})
-    elif action == "edit":
-        st, data = _admin_call(f"/api/link/{prefix}/{slug}", token=token,
-                               payload={"url": url}, method="PUT")
-    else:
+    def write(tok: str):
+        if action == "create":
+            return _admin_call("/api/links", token=tok,
+                               payload={"prefix": prefix, "slug": slug,
+                                        "url": url})
+        return _admin_call(f"/api/link/{prefix}/{slug}", token=tok,
+                           payload={"url": url}, method="PUT")
+
+    if action not in ("create", "edit"):
         return {"ok": False, "error": "unknown action"}
+
+    st, data = write(token)
+    if st == 401:
+        # The reads already do this; the writes did not, so a shortener
+        # restart turned every Create into http-401 until something else
+        # happened to refresh the token.
+        _admin["token"] = ""
+        token, err = _admin_token()
+        if err:
+            return {"ok": False, "error": err}
+        st, data = write(token)
 
     if st not in (200, 201):
         # The bot's own message, when it sent one, beats a status number.
@@ -2640,13 +2671,26 @@ def deliver_reply(qid: str, answer: str, force: bool = False,
         # precondition for the vault to reflect that you replied.
         posted = False
         platform_msg = "This channel cannot be posted to from here."
-        if question["channel"] == "youtube" and question["source"].startswith("yt:"):
-            posted, platform_msg = post_youtube_reply(
-                question["source"][len("yt:"):], answer)
-        else:
-            target = discord_target(question)
-            if target:
-                posted, platform_msg = post_discord_reply(*target, answer)
+        # urllib only wraps h.request() in URLError, so a stall in
+        # getresponse() or json.load() raises TimeoutError,
+        # RemoteDisconnected or IncompleteRead straight through the
+        # posters' except clauses. Caught here rather than left to unwind:
+        # the platform may already have accepted the reply, and the vault
+        # write below is what stops it being sent a second time.
+        try:
+            if question["channel"] == "youtube" and question["source"].startswith("yt:"):
+                posted, platform_msg = post_youtube_reply(
+                    question["source"][len("yt:"):], answer)
+            else:
+                target = discord_target(question)
+                if target:
+                    posted, platform_msg = post_discord_reply(*target, answer)
+        except Exception as exc:                   # noqa: BLE001
+            posted = False
+            platform_msg = (f"the connection broke after the reply was sent "
+                            f"({type(exc).__name__}); it may or may not be "
+                            f"public. Closing it here so it cannot go twice; "
+                            f"reopen it if nothing arrived.")
 
         update_question_status(qid, "answered")
         append_answered_log(question, answer, posted,
@@ -2824,6 +2868,18 @@ def bulk_draft(system: str) -> dict:
 
 
 def _bulk_draft_worker() -> None:
+    """Wrapper that guarantees the phase ends. Without it any raise inside
+    left phase == 'drafting' with no thread alive: Stop set a flag nobody
+    read, Draft and Send both answered "already drafting", and only
+    restarting the panel cleared it."""
+    try:
+        _bulk_draft_body()
+    except Exception as exc:                       # noqa: BLE001
+        _finish("ready", f"drafting stopped on an error: "
+                         f"{type(exc).__name__}: {exc}"[:300])
+
+
+def _bulk_draft_body() -> None:
     """Draft one at a time, reusing the single-question machinery.
 
     start_ai_job and cached_ai_result are the same calls the Suggest button
@@ -2908,13 +2964,18 @@ def bulk_send_one(qid: str, text: str) -> dict:
     for the eighty-eighth. It goes through deliver_reply like every other
     sender, so the already-answered guard and the log are the same.
     """
+    # Held by identity, not by position: the list is rebuilt wholesale by
+    # bulk_draft, and an index resolved before a twenty-second post can name
+    # a different question, or nothing at all, by the time it returns.
     with _bulk_lock:
-        idx = next((i for i, it in enumerate(_bulk["items"])
-                    if it["id"] == qid), -1)
-        if idx < 0:
+        item = next((it for it in _bulk["items"] if it["id"] == qid), None)
+        if item is None:
             return {"ok": False, "error": "not part of this run"}
-        if _bulk["items"][idx]["state"] == "sent":
-            return {"ok": False, "error": "already sent"}
+        if item["state"] in ("sent", "sending"):
+            return {"ok": False, "error": "already going out"}
+        if _bulk["phase"] == "sending" and item["state"] == "queued":
+            return {"ok": False, "error": "the run is about to send this one"}
+        item["state"] = "sending"
     text = (text or "").strip()
     if not text:
         return {"ok": False, "error": "nothing to send"}
@@ -2922,16 +2983,25 @@ def bulk_send_one(qid: str, text: str) -> dict:
     res = deliver_reply(qid, text, offer={"source": "bulk-one",
                                           "system": _bulk["system"]})
     if res.get("ok"):
-        _mark(idx, "sent", "posted" if res.get("posted_to_platform")
-              else res.get("platform_message", "recorded in the vault only"))
+        _mark_id(qid, "sent", "posted" if res.get("posted_to_platform")
+                 else res.get("platform_message", "recorded in the vault only"))
         with _bulk_lock:
             _bulk["sent"] += 1
     else:
-        _mark(idx, "failed", res.get("error", "failed"))
+        _mark_id(qid, "failed", res.get("error", "failed"))
     return res
 
 
 def _bulk_send_worker(mode: str, gap: str = "wide") -> None:
+    """Same guarantee as the drafting worker: the phase always ends."""
+    try:
+        _bulk_send_body(mode, gap)
+    except Exception as exc:                       # noqa: BLE001
+        _finish("ready", f"sending stopped on an error: "
+                         f"{type(exc).__name__}: {exc}"[:300])
+
+
+def _bulk_send_body(mode: str, gap: str = "wide") -> None:
     queued = [i for i, it in enumerate(_bulk["items"]) if it["state"] == "queued"]
     for n, idx in enumerate(queued):
         if _bulk["stop"]:
@@ -2970,8 +3040,19 @@ def _bulk_send_worker(mode: str, gap: str = "wide") -> None:
     build(live=True)
 
 
+def _mark_id(qid: str, state: str, msg: str = "", draft: str = "") -> None:
+    """Same as _mark but finds the row by question id."""
+    with _bulk_lock:
+        idx = next((i for i, it in enumerate(_bulk["items"])
+                    if it["id"] == qid), -1)
+    if idx >= 0:
+        _mark(idx, state, msg, draft)
+
+
 def _mark(idx: int, state: str, msg: str = "", draft: str = "") -> None:
     with _bulk_lock:
+        if idx >= len(_bulk["items"]):
+            return                # the list was replaced while this ran
         item = _bulk["items"][idx]
         item["state"] = state
         item["msg"] = msg
@@ -4404,10 +4485,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 import csv as _csv
                 import io as _io
                 buf = _io.StringIO()
+                # A comment beginning = + - or @ is a formula to Excel, not
+                # text. These are public comments anyone can write, so the
+                # leading character gets a quote in front of it: the cell
+                # then reads as what was typed instead of running.
+                def _safe(v):
+                    t = str(v)
+                    return "'" + t if t[:1] in ("=", "+", "-", "@") else t
+
                 w = _csv.DictWriter(buf, fieldnames=list(rows[0].keys())
                                     if rows else ["code"])
                 w.writeheader()
-                w.writerows(rows)
+                w.writerows([{k: _safe(v) for k, v in r.items()} for r in rows])
                 body = buf.getvalue().encode("utf-8-sig")
                 ctype = "text/csv; charset=utf-8"
 

@@ -804,7 +804,7 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 /* A card with no expand of its own (it is not in a grid) still gets to
    fill the page width when a reply needs the room. */
 .card.fullrow { max-width:none; }
-.card.fullrow .qbox { min-height:220px; }
+.card.fullrow .qbox { min-height:320px; }
 .card.wide .qbox { min-height:200px; }
 
 
@@ -829,9 +829,12 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .bigmsg { color:var(--warn); font-weight:600; }
 .bulkst.bs-queued { color:var(--ink3); }
 
-.pbar { height:6px; border-radius:3px; background:var(--surface3);
+/* Named bulkbar, not pbar: .pbar already exists and is used by the
+   coverage meter in 205 rows of the Products table, where this rule's
+   margin pushed every bar 6px off centre. */
+.bulkbar { height:6px; border-radius:3px; background:var(--surface3);
   overflow:hidden; margin:var(--s3) 0 2px; }
-.pbar i { display:block; height:100%; background:var(--accent);
+.bulkbar i { display:block; height:100%; background:var(--accent);
   border-radius:3px; transition:width var(--dur) var(--ease); }
 .bulkone { display:flex; gap:var(--s3); align-items:center; margin-top:var(--s2); }
 
@@ -3705,8 +3708,12 @@ function chProject(win, spec, months) {
     if (spec.cumulative) {
       run += Math.max(0, step);
       mid = run;
-      lo = Math.max(last, run - half * i);
-      hi = run + half * i;
+      /* half already carries sqrt(i) for the widening horizon. Multiplying
+         by i again made a six-month band six times too wide: 65 to 128
+         where the arithmetic says 91 to 102, and the inflated hi then set
+         the whole chart's peak. */
+      lo = Math.max(last, run - half);
+      hi = run + half;
     } else {
       mid = Math.max(0, step);
       lo = Math.max(0, mid - half);
@@ -3805,7 +3812,12 @@ function chDraw(fig) {
              'aria-label="' + esc(spec.names.join(" and ")) + '">'];
   // Two gridlines only: the peak and the middle. More would compete with
   // the marks for attention and this chart is read for shape, not audit.
-  [peak, peak / 2].forEach(function (v) {
+  /* Only whole steps: the middle line used to sit at peak/2 and carry
+     Math.round(peak/2), so with peak 5 it was drawn at 2.5 and labelled 3,
+     and a bar worth 3 rose above the line claiming to be 3. */
+  var mid2 = Math.round(peak / 2);
+  [peak, mid2].filter(function (v, i) { return i === 0 || (v > 0 && v < peak); })
+    .forEach(function (v) {
     svg.push('<line x1="' + L + '" y1="' + yOf(v).toFixed(1) + '" x2="' + (W - R) +
              '" y2="' + yOf(v).toFixed(1) + '" class="chgrid"/>');
     svg.push('<text x="' + (L - 6) + '" y="' + (yOf(v) + 4).toFixed(1) +
@@ -3825,10 +3837,15 @@ function chDraw(fig) {
         var h = ph * v / peak, y = T + ph - acc - h;
         // 2px of surface between segments, so the two series stay apart
         // where their colours cannot: that is what lets one of them be grey.
-        g.push('<rect x="' + x.toFixed(1) + '" y="' + (y - (ki ? 2 : 0)).toFixed(1) +
-               '" width="' + bw.toFixed(1) + '" height="' + Math.max(1, h).toFixed(1) +
+        /* The 2px gap is taken out of the segment, not added on top of it.
+           Adding it moved the upper segment up 2px and advanced acc by 2
+           more, so a full stack stood 4px above the gridline labelled with
+           its own total. */
+        var hh = ki ? Math.max(1, h - 2) : Math.max(1, h);
+        g.push('<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) +
+               '" width="' + bw.toFixed(1) + '" height="' + hh.toFixed(1) +
                '" rx="2" fill="var(--ch-' + spec.vars[ki] + ')"/>');
-        acc += h + (ki ? 0 : 2);
+        acc += h;
       });
       svg.push(g.join("") + "</g>");
     });
@@ -4515,7 +4532,7 @@ function bulkRender(st) {
 
   if (st.phase === "drafting" || st.phase === "sending") {
     var pct = n ? Math.round(st.done * 100 / n) : 0;
-    h += '<div class="pbar" role="progressbar" aria-valuenow="' + pct
+    h += '<div class="bulkbar" role="progressbar" aria-valuenow="' + pct
       + '" aria-valuemin="0" aria-valuemax="100"><i style="width:' + pct
       + '%"></i></div>'
       + '<p class="figwhy">' + (st.phase === "drafting" ? "Drafting " : "Sending ")
@@ -4677,9 +4694,19 @@ document.addEventListener("click", function (ev) {
   var card = w.closest(".card");
   if (!card) return;
   var ex = card.querySelector(".expand");
-  if (ex && !ex.hidden) { ex.click(); w.textContent = card.classList.contains("wide") ? "narrower" : "wider"; return; }
+  if (ex && !ex.hidden) {
+    ex.click();
+    w.textContent = card.classList.contains("wide") ? "narrower" : "wider";
+    return;
+  }
+  /* A card that already fills its row cannot get wider, so widen the box
+     itself instead of toggling a class with nothing to do. Reporting
+     "narrower" while nothing moved was the actual complaint. */
+  var box = card.querySelector(".qbox");
   var on = card.classList.toggle("fullrow");
-  w.textContent = on ? "narrower" : "wider";
+  if (box) box.style.width = on ? "100%" : "";
+  w.textContent = on ? "taller" : "wider";
+  w.title = on ? "Back to the normal height" : "More room to write";
 });
 
 
@@ -4992,6 +5019,19 @@ function renderLinks(d) {
     });
   }
   h += "</div></div>";
+  /* Not while you are typing in it. The card refreshes every 60 seconds
+     and used to replace the whole body, so a destination half typed into
+     the new-link box, or an edited "Points at", vanished mid-sentence. */
+  var live = body.contains(document.activeElement) &&
+             /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+  var dirty = $$(".lnu, .lns, .lurl", body).some(function (el) {
+    return el.value && el.value !== el.defaultValue;
+  });
+  if (live || dirty) {
+    var st2 = $("#lt-state");
+    if (st2) st2.textContent = "paused while you are editing";
+    return;
+  }
   body.innerHTML = h;
   /* The figure is rebuilt on every refresh, so it has to be drawn again
      here: chMountExpand ran once at boot, long before this HTML existed. */
