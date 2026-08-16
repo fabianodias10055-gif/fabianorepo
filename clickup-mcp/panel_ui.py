@@ -594,6 +594,11 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
   padding-right:var(--s2); }
 .cev { border-left:2px solid var(--line); padding:var(--s2) 0 var(--s2) var(--s3); }
 .cev.open { border-left-color:var(--warn); }
+.cev[data-qid] { cursor:pointer; }
+.cev[data-qid]:hover, .cev.composing { border-left-color:var(--accent); }
+.cev .detwrap { cursor:auto; }
+/* the panel list is capped at 420px; a composer needs the room */
+.ctl.composing { max-height:none; }
 .cdate { font-family:var(--mono); font-size:var(--t-2xs); color:var(--ink3); }
 .cq { font-weight:560; margin-top:2px; }
 .ca { color:var(--ink2); margin-top:3px; padding-left:var(--s3);
@@ -1485,6 +1490,9 @@ var pending = false;     /* a newer build exists but now is a bad moment */
    plainly that it is holding a newer version rather than doing it silently. */
 function busy() {
   if (openId) return true;
+  /* a composer open inside a video or product panel is edit state too,
+     and it has no openId to speak for it */
+  if (document.querySelector(".cev .detwrap")) return true;
   var el = document.activeElement;
   if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) return true;
   return Date.now() - lastTouch < 20000;
@@ -2055,15 +2063,29 @@ function composerFor(qid) {
       .then(function (s) {
         if (!s.ok) { msg.textContent = s.error || "failed"; b.disabled = false; return; }
         holdUntil = Date.now() + 4000;
+        QDATA[qid].status = s.status;
         var row = rowById(qid);
         var done = s.status === "answered";
-        row.dataset.st = s.status;
-        var pill = row.querySelector(".pill");
-        pill.className = "pill " + (done ? "st-answered" : "st-no-source");
-        pill.innerHTML = '<i class="pe">' + (done ? "✅" : "📥") + "</i>"
-          + (done ? "answered" : "unanswered");
+        /* Marking from a video or product panel reaches a queue row whose
+           cells were never built. fillRow first (QDATA already knows the
+           new status), then touch the pill only if it exists, or the
+           querySelector comes back null and the catch below blames the
+           network for a TypeError. */
+        if (row) {
+          fillRow(row);
+          row.dataset.st = s.status;
+          var pill = row.querySelector(".pill");
+          if (pill) {
+            pill.className = "pill " + (done ? "st-answered" : "st-no-source");
+            pill.innerHTML = '<i class="pe">' + (done ? "✅" : "📥") + "</i>"
+              + (done ? "answered" : "unanswered");
+          }
+        }
+        panelRefresh(wrap);
         toast(done ? "Marked answered in the vault." : "Reopened in the vault.", "good");
-        closeDet();
+        /* only close the queue detail when it shows this very question;
+           marking from a panel must not close an unrelated open row */
+        if (openId === qid) closeDet();
         apply();
       })
       .catch(function () {
@@ -2139,6 +2161,9 @@ function runReply(det) {
   var msg = det.querySelector(".msg");
   var btn = det.querySelector(".replybtn");
   var text = box.value.trim();
+  /* decided while the composer is still where the user put it: the queue
+     epilogue below must know where this reply came from */
+  var fromQueue = !!det.closest("tr.qdet");
   msg.className = "msg";
   if (!text) { msg.textContent = "Type the reply first."; msg.classList.add("bad"); return; }
   if (!LIVE) { msg.textContent = "Static file: replying needs the live server (panel.py --watch)."; return; }
@@ -2161,6 +2186,9 @@ function runReply(det) {
       if (s.ok) {
         holdUntil = Date.now() + 6000;
         ss("lp-draft:" + det.dataset.id, null);
+        /* the video/product panels render from QDATA; it learns first */
+        QDATA[det.dataset.id].status = "answered";
+        QDATA[det.dataset.id].reply = text;
         /* Saving to the vault is not the same as the customer receiving it.
            Only a real platform post earns the green. */
         msg.textContent = s.posted_to_platform
@@ -2183,24 +2211,34 @@ function runReply(det) {
           pill.innerHTML = '<i class="pe">✅</i>answered';
         }
         if (row) row.dataset.st = "answered";
-        /* Clearing a backlog means the answered item leaves the queue and
-           the next one is ready. Leaving it open with stale counts made
-           every reply end in manual cleanup. */
-        var wasAt = matchRows.indexOf(row);
+        panelRefresh(det);
         var answerBtn = row && row.querySelector(".answerbtn");
         if (answerBtn) answerBtn.textContent = "View";
-        closeDet();
         var badge = $("#bellbtn .badge"), nav = $(".navcount");
         var left = Math.max(0, (parseInt((badge.textContent || "0").replace(/,/g, ""), 10) || 0) - 1);
         badge.textContent = fmt(left);
         if (nav) nav.textContent = fmt(left);
-        apply();
-        var next = matchRows[Math.min(Math.max(0, wasAt), matchRows.length - 1)];
-        if (next && visRows.indexOf(next) === -1) {
-          page = Math.floor(matchRows.indexOf(next) / size);
+        if (fromQueue) {
+          /* Clearing a backlog means the answered item leaves the queue
+             and the next one is ready. Leaving it open with stale counts
+             made every reply end in manual cleanup. */
+          var wasAt = matchRows.indexOf(row);
+          closeDet();
+          apply();
+          var next = matchRows[Math.min(Math.max(0, wasAt), matchRows.length - 1)];
+          if (next && visRows.indexOf(next) === -1) {
+            page = Math.floor(matchRows.indexOf(next) / size);
+            apply();
+          }
+          if (next) kFocus(visRows.indexOf(next));
+        } else {
+          /* A panel reply leaves the queue's page, focus and open row
+             alone. The queue detail closes only if it shows the very
+             question just answered; anything else open there is the
+             user's own business. */
+          if (openId === det.dataset.id) closeDet();
           apply();
         }
-        if (next) kFocus(visRows.indexOf(next));
       } else {
         msg.textContent = "Failed: " + (s.error || "unknown error");
         msg.classList.add("bad");
@@ -2637,7 +2675,11 @@ var STOP = {the:1,a:1,an:1,is:1,it:1,in:1,of:1,to:1,my:1,me:1,do:1,can:1,be:1,
 
 function productProfile(name) {
   var mine = [];
-  for (var id in QDATA) if (QDATA[id].system === name) mine.push(QDATA[id]);
+  /* the id lives only in the QDATA key; the composer needs it on the item */
+  for (var id in QDATA) if (QDATA[id].system === name) {
+    QDATA[id].id = id;
+    mine.push(QDATA[id]);
+  }
   if (!mine.length) return '<div class="cprofile"><p class="empty">Nobody has '
     + "asked about this one yet.</p></div>";
   mine.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
@@ -2703,11 +2745,13 @@ function productProfile(name) {
   out += '<div class="ctl">';
   open.slice().reverse().slice(0, 25).forEach(function (q) {
     var p = PATRONS[q.who.replace(/^@/, "").split(" ")[0].toLowerCase()];
-    out += '<div class="cev open"><span class="cdate">' + esc(q.date) + " &middot; "
+    out += '<div class="cev open" data-qid="' + esc(q.id) + '"><span class="cdate">'
+      + esc(q.date) + " &middot; "
       + esc(q.who) + (p && p.paying ? ' <span class="tag sub">pays</span>' : "")
       + "</span>"
       + '<div class="cq">' + esc(q.text.slice(0, 200)) + "</div>"
-      + (q.link ? '<a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open it</a>' : "")
+      + (q.link ? '<a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open it</a> ' : "")
+      + '<button class="btn tiny">Answer</button>'
       + "</div>";
   });
   if (!open.length) out += '<div class="note">Nothing open. Everyone who asked got an answer.</div>';
@@ -2722,6 +2766,7 @@ function toggleProduct(tr) {
   if (open) { open.previousElementSibling.classList.remove("copen"); open.remove(); }
   var row = document.createElement("tr");
   row.className = "pdet";
+  row.dataset.name = tr.dataset.name;
   row.innerHTML = '<td colspan="5">' + productProfile(tr.dataset.name) + "</td>";
   tr.after(row);
   tr.classList.add("copen");
@@ -2742,7 +2787,10 @@ document.addEventListener("click", function (ev) {
    inbox in one move. */
 function videoPanel(name) {
   var mine = [];
-  for (var id in QDATA) if (QDATA[id].video === name) mine.push(QDATA[id]);
+  for (var id in QDATA) if (QDATA[id].video === name) {
+    QDATA[id].id = id;
+    mine.push(QDATA[id]);
+  }
   var open = mine.filter(function (q) { return q.status !== "answered"; });
   open.sort(function (a, b) { return a.date < b.date ? -1 : 1; });   /* oldest first */
   if (!mine.length) return '<div class="cprofile"><p class="empty">No questions '
@@ -2771,10 +2819,12 @@ function videoPanel(name) {
   }
   out += '<div class="ctl">';
   open.slice(0, 25).forEach(function (q) {
-    out += '<div class="cev open"><span class="cdate">' + esc(q.date) + " &middot; "
+    out += '<div class="cev open" data-qid="' + esc(q.id) + '"><span class="cdate">'
+      + esc(q.date) + " &middot; "
       + esc(q.who) + "</span>"
       + '<div class="cq">' + esc(q.text.slice(0, 200)) + "</div>"
-      + (q.link ? '<a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open the comment</a>' : "")
+      + (q.link ? '<a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open the comment</a> ' : "")
+      + '<button class="btn tiny">Answer</button>'
       + "</div>";
   });
   if (open.length > 25) out += '<div class="note">and ' + (open.length - 25) + " more</div>";
@@ -2805,9 +2855,64 @@ document.addEventListener("click", function (ev) {
   if (openOne) openOne.remove();
   var box = document.createElement("div");
   box.className = "vdet";
+  box.dataset.video = row.dataset.video;
   box.innerHTML = videoPanel(row.dataset.video);
   row.after(box);
 });
+
+/* ---- the real composer, inside a video or a product ----
+   The waiting lists used to be read-only: every answer meant leaving the
+   panel for the inbox. Clicking a question now puts composerFor(qid) right
+   under it, with the same buttons, drafts and cached generations as the
+   queue. openId/closeDet stay out of this on purpose: they belong to the
+   queue, and opening here must not close what is open there. */
+document.addEventListener("click", function (ev) {
+  if (!ev.target.closest) return;
+  var item = ev.target.closest(".cev[data-qid]");
+  if (!item) return;
+  /* links still leave; clicks inside the composer are the composer's */
+  if (ev.target.closest("a") || ev.target.closest(".detwrap")) return;
+  /* a drag to copy part of the question is not a request to toggle */
+  var sel = window.getSelection ? window.getSelection() : null;
+  if (sel && !sel.isCollapsed) return;
+  var host = item.closest(".ctl");
+  var mine = item.querySelector(".detwrap");
+  if (mine) {
+    mine.remove();
+    item.classList.remove("composing");
+    if (host) host.classList.remove("composing");
+    return;
+  }
+  /* one open composer per panel, like the queue keeps one detail row */
+  var other = host && host.querySelector(".detwrap");
+  if (other) {
+    other.closest(".cev").classList.remove("composing");
+    other.remove();
+  }
+  var wrap = composerFor(item.dataset.qid);
+  if (!wrap) return;
+  item.appendChild(wrap);
+  item.classList.add("composing");
+  if (host) host.classList.add("composing");
+  ["search", "draft"].forEach(function (mode) {
+    var hit = AI_CACHE[mode + ":" + item.dataset.qid];
+    if (hit) aiRender(wrap, mode, hit, aiBtn(wrap, mode));
+  });
+  wrap.querySelector(".qbox").focus();
+});
+
+/* After a reply or a status change lands, the panel holding the composer
+   still says the question is waiting. These panels render from QDATA, so
+   the caller updates QDATA first and this redraw brings the list and the
+   counts back into agreement. A composer in the queue matches neither
+   selector and nothing happens, which is the point. */
+function panelRefresh(wrap) {
+  var vd = wrap.closest(".vdet");
+  if (vd && vd.dataset.video) { vd.innerHTML = videoPanel(vd.dataset.video); return; }
+  var pd = wrap.closest("tr.pdet");
+  if (pd && pd.dataset.name)
+    pd.firstElementChild.innerHTML = productProfile(pd.dataset.name);
+}
 
 /* ---- gaps and coverage drill into the question table ---- */
 function drillTo(sys) {
