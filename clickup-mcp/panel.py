@@ -2814,6 +2814,10 @@ def _session_token() -> str:
 SESSION_TOKEN = _session_token()
 ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 
+# One reply lands at a time. Guards inside /reply serialize check-then-post,
+# which per-request threads otherwise interleave.
+_reply_lock = threading.Lock()
+
 _state = {"epoch": 0, "building": False}
 
 
@@ -3185,32 +3189,39 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not answer:
                 return self._send_json({"ok": False, "error": "empty reply"}, 400)
 
-            question = find_question_by_id(qid)
-            if not question:
-                return self._send_json({"ok": False, "error": "question not found"}, 404)
-            # A repeated or concurrent request used to post the same reply
-            # again. A question already closed is not delivered twice.
-            if question["status"] == "answered" and not payload.get("force"):
-                return self._send_json({
-                    "ok": False,
-                    "error": "already answered; reopen it first to reply again",
-                }, 409)
+            # The answered check below is only honest if the status cannot
+            # flip between the read and the write, and each request runs on
+            # its own thread. Two tabs sending the same reply at once both
+            # used to pass the check and both post to the platform; the lock
+            # spans the external call on purpose, because releasing it any
+            # earlier reopens exactly that window.
+            with _reply_lock:
+                question = find_question_by_id(qid)
+                if not question:
+                    return self._send_json({"ok": False, "error": "question not found"}, 404)
+                # A repeated or concurrent request used to post the same reply
+                # again. A question already closed is not delivered twice.
+                if question["status"] == "answered" and not payload.get("force"):
+                    return self._send_json({
+                        "ok": False,
+                        "error": "already answered; reopen it first to reply again",
+                    }, 409)
 
-            # Vault side always happens: this is the rigid part of the rule.
-            # Posting to the platform is best-effort on top of it, never a
-            # precondition for the vault to reflect that you replied.
-            posted, platform_msg = False, "This channel cannot be posted to from here."
-            if question["channel"] == "youtube" and question["source"].startswith("yt:"):
-                comment_id = question["source"][len("yt:"):]
-                posted, platform_msg = post_youtube_reply(comment_id, answer)
-            else:
-                target = discord_target(question)
-                if target:
-                    posted, platform_msg = post_discord_reply(*target, answer)
+                # Vault side always happens: this is the rigid part of the rule.
+                # Posting to the platform is best-effort on top of it, never a
+                # precondition for the vault to reflect that you replied.
+                posted, platform_msg = False, "This channel cannot be posted to from here."
+                if question["channel"] == "youtube" and question["source"].startswith("yt:"):
+                    comment_id = question["source"][len("yt:"):]
+                    posted, platform_msg = post_youtube_reply(comment_id, answer)
+                else:
+                    target = discord_target(question)
+                    if target:
+                        posted, platform_msg = post_discord_reply(*target, answer)
 
-            update_question_status(qid, "answered")
-            append_answered_log(question, answer, posted,
-                                answer_provenance(question, answer, payload))
+                update_question_status(qid, "answered")
+                append_answered_log(question, answer, posted,
+                                    answer_provenance(question, answer, payload))
             # The reply becomes searchable knowledge immediately: the next
             # Suggest for the same topic finds it.
             build_answers_kb()
