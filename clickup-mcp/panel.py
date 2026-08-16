@@ -2790,9 +2790,17 @@ def render_markdown(d: dict) -> str:
 def render_html(d: dict, live: bool) -> str:
     """The dashboard UI lives in panel_ui.py. This passes the scan through
     together with the static config the layout needs; splitting them keeps
-    the data pipeline (scan/suggest/reply/serve) apart from presentation."""
+    the data pipeline (scan/suggest/reply/serve) apart from presentation.
+
+    The session token is deliberately NOT baked in: the file at rest held a
+    live credential for every posting and paying route, valid across
+    restarts since the token moved to the credential store. _serve_panel
+    substitutes the real one on the way out of the server, which it already
+    did to cover a file written by another process; a page opened straight
+    from disk has no working buttons, which a file share should not have.
+    """
     import panel_ui
-    return panel_ui.render_html(d, live, FACETS, INSTRUMENTATION, SESSION_TOKEN,
+    return panel_ui.render_html(d, live, FACETS, INSTRUMENTATION, "",
                                 MANUAL_STATUS)
 
 
