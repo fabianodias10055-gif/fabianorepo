@@ -4298,7 +4298,8 @@ def _sources_card(instrumentation: list, d: dict | None = None) -> str:
         f'<p class="note">Last read of the vault: {escape(d.get("generated_at", "?"))}, '
         f'{_fmt(d.get("scan_ms", 0))} ms across {_fmt(d.get("md_files", 0))} notes. '
         f'{_fmt(len(d.get("history") or []))} points of history kept. '
-        f'Nothing is stored in this page; close it and nothing is lost.</p>'
+        f'The page is a rendered snapshot of the vault: closing it loses no '
+        f'work, and Panel/panel.html on disk holds whatever it shows.</p>'
     )
     rows = [tech]
     for source, vol, state, note in instrumentation:
@@ -4474,7 +4475,10 @@ def _wingman_card(d: dict) -> str:
 _NAV = [
     ("overview", "home", "Home", ""),
     ("questions", "chat", "Inbox", "open_q"),
-    ("answers", "check", "Answered", "answers"),
+    # Label matches the screen's own heading: this tab counts replies sent
+    # from the panel's log, not the 900-odd vault-wide answered questions
+    # the Home tile counts, and calling both "answered" read as a bug.
+    ("answers", "check", "Answers sent", "answers"),
     ("people", "users", "Customers", ""),
     ("sales", "target", "Sales", ""),
     ("systems", "flame", "Products", ""),
@@ -4613,8 +4617,8 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
     # them is looking for them. On every other screen they were noise at the
     # bottom of a page about people.
     diag = (f'updated {escape(d["generated_at"])} &middot; '
-            f'everything here is read from your vault, and this page keeps no '
-            f'copy of its own')
+            f'everything here is rendered from your vault; edits land there, '
+            f'never only here')
 
     return f"""<!doctype html>
 <html lang="en">

@@ -93,7 +93,9 @@ CATALOG = [
     ("skateboard", "Skateboard", "locomotion"),
     ("spider-man", "Spider-Man", "locomotion"),
     ("swim", "Swim", "locomotion"),
-    ("vault-move", "Vault", "locomotion"),
+    # "Vault" alone read as the Obsidian vault, not the parkour move the
+    # tutorial sells; the display name says which vault this is.
+    ("vault-move", "Vault Move", "locomotion"),
     ("wall-run", "Wall Run", "locomotion"),
     ("ziplining", "Ziplining", "locomotion"),
     ("advanced-combat-punch", "Advanced Combat Punch", "combat"),
@@ -122,25 +124,31 @@ DEMAND = {
     "wall-run": 3,
 }
 
-# Data sources and their real state, verified in Supabase and in the bot code
-# on 2026-08-13.
+# Data sources and how each one reaches this panel. Mechanisms, not counts:
+# a number pasted here is stale the day after it is verified, which is how
+# three of these rows spent two months claiming channels were blind while
+# the collectors filled the vault twice a day.
 INSTRUMENTATION = [
-    ("Wingman: events", "377,394 rows", "ok",
+    ("Wingman: events", "Supabase", "ok",
      "loco_events, including every user prompt, cost and compile result"),
-    ("Wingman: diagnostics", "971,739 rows", "ok",
+    ("Wingman: diagnostics", "Supabase", "ok",
      "loco_diagnostics, ETL to PostHog every 3 minutes"),
-    ("Wingman: conversations", "2,925 rows", "ok",
+    ("Wingman: conversations", "Supabase", "ok",
      "loco_transcripts, prompt and response per turn"),
-    ("Discord", "nothing stored", "blind",
-     "an unanswered question becomes an ephemeral alert; chat history lives in RAM only"),
-    ("YouTube (LocoDev)", "0 comments", "blind",
-     "the collector already runs for 12 competitor videos, never for your own channel"),
-    ("Patreon", "2 manual snapshots", "partial",
-     "from April; the event log drops anything older than 90 days"),
+    ("Discord", "collected to the vault", "ok",
+     "collect_discord.py files questions into Inbox/03 - From Discord.md and "
+     "members into Panel/discord-members.json"),
+    ("YouTube (LocoDev)", "collected to the vault", "ok",
+     "collect_youtube.py reads comments on your own channel into "
+     "Inbox/01 - From YouTube.md; transcripts live under YouTube/Videos/"),
+    ("Patreon", "collected twice a day", "ok",
+     "collect_patreon.py refreshes Panel/patreon-members.json on a schedule "
+     "and renews its own token"),
     ("Short links (locodev.dev)", "SQLite on Railway", "ok",
      "click telemetry behind adminlocoILco; the panel reads its JSON API live"),
-    ("Knowledge base", "hand curated", "partial",
-     "entries only via staff reaction; lives on a Railway volume with no local copy"),
+    ("Knowledge base", "exported from the vault", "ok",
+     "export_kb.py ships Panel/knowledge_base.json to Drive; the bot pulls "
+     "it hourly"),
 ]
 
 
@@ -2740,9 +2748,9 @@ def render_markdown(d: dict) -> str:
 
     lines += [
         "",
-        "> The product has first-class telemetry; the customer has none.",
-        "> Wiring the blind channels is what this panel needs to show real",
-        "> questions instead of only coverage.",
+        "> Product telemetry and customer channels both land somewhere durable",
+        "> now: Wingman in Supabase, the community in the vault, where this",
+        "> panel and the bot read it.",
         "",
         "---",
         "",
@@ -2761,12 +2769,10 @@ def render_markdown(d: dict) -> str:
         "",
         "## Still manual, and what would automate it",
         "",
-        "Discord questions above are typed into `Inbox/00 - Questions.md` by hand.",
-        "YouTube ones are collected automatically by `collect_youtube.py`. What is",
-        "still missing:",
+        "Discord and YouTube questions are collected automatically",
+        "(`collect_discord.py`, `collect_youtube.py`); hand-typed ones land in",
+        "`Inbox/00 - Questions.md`. What is still missing:",
         "",
-        "- **Discord questions**: today they become an ephemeral alert and are",
-        "  never stored. Storing them is a few lines in the bot.",
         "- **Subscriber status**: needs Discord identity matched against the",
         "  Patreon member list, so `subscriber:` stops being a guess.",
         "- **Per-video system tagging**: fill in `system:` on each video's",
