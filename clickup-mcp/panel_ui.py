@@ -2725,7 +2725,7 @@ function runContext(det, btn) {
     });
 }
 
-function runAi(det, mode, force) {
+function runAi(det, mode, force, extra) {
   var out = aiOut(det, mode), btn = aiBtn(det, mode);
   out.style.display = "block";
   if (!LIVE) {
@@ -4418,25 +4418,36 @@ function bulkSpan(secs) {
   return (secs / 3600).toFixed(1) + " hours";
 }
 
-/* What the run will cost, before it is started rather than as a stop
-   halfway through. The per-draft figure is the median of what drafts have
-   actually been billed, not a guess. */
+/* What the CLI reported for the work so far. Shown because a number
+   climbing fast is how a runaway prompt announces itself, and labelled as
+   what it is: these run through the Claude Code subscription, so it is a
+   meter reading, not a bill. It only warns when a ceiling was deliberately
+   set with PANEL_AI_DAILY_USD. */
 function bulkMoney(c) {
   if (!c || !c.per_draft) return "";
-  var over = c.estimate > c.left_today;
-  return '<div class="figstat"><div><span class="k">left of today</span>'
-    + '<span class="v' + (c.left_today < 1 ? " warn" : "") + '">US$ '
-    + c.left_today.toFixed(2) + "</span></div>"
-    + '<div><span class="k">a draft costs</span><span class="v">US$ '
-    + c.per_draft.toFixed(2) + "</span></div>"
+  var over = c.capped && c.estimate > c.left_today;
+  var h = '<div class="figstat"><div><span class="k">a draft reports</span>'
+    + '<span class="v">US$ ' + c.per_draft.toFixed(2) + "</span></div>"
+    + '<div><span class="k">reported today</span><span class="v">US$ '
+    + c.spent_today.toFixed(2) + "</span></div>"
     + (c.to_draft ? '<div><span class="k">' + fmt(c.to_draft)
         + ' still to write</span><span class="v' + (over ? " warn" : "")
         + '">US$ ' + c.estimate.toFixed(2) + "</span></div>" : "")
-    + "</div>"
-    + (over ? '<p class="figwhy">That is more than today’s ceiling leaves. '
-        + "The run will draft what fits, stop, and say so; the rest keep their "
-        + "place. Raise it by setting PANEL_AI_DAILY_USD in clickup-mcp/.env "
-        + "and restarting the watcher.</p>" : "");
+    + (c.capped ? '<div><span class="k">left of today</span><span class="v'
+        + (c.left_today < 1 ? " warn" : "") + '">US$ '
+        + c.left_today.toFixed(2) + "</span></div>" : "")
+    + "</div>";
+  if (over) {
+    h += '<p class="figwhy">That is more than today’s ceiling leaves. The '
+      + "run will draft what fits, stop, and say so; the rest keep their "
+      + "place. Raise it with PANEL_AI_DAILY_USD in clickup-mcp/.env.</p>";
+  } else if (!c.capped) {
+    h += '<p class="figwhy">What the CLI reports, not a bill: these go '
+      + "through the Claude Code subscription. Nothing stops the run on cost. "
+      + "Set PANEL_AI_DAILY_USD above zero if you want a daily ceiling "
+      + "back.</p>";
+  }
+  return h;
 }
 
 function bulkRender(st) {

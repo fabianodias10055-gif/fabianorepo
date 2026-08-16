@@ -1494,7 +1494,10 @@ def suggest_answer(question: dict) -> dict:
 
 AI_MODEL = os.getenv("PANEL_AI_MODEL", "opus")
 AI_EFFORT = os.getenv("PANEL_AI_EFFORT", "xhigh")
-AI_BUDGET = os.getenv("PANEL_AI_BUDGET_USD", "1.50")
+# Per job, handed to the CLI as --max-budget-usd. This one is not
+# accounting: reaching it cuts the job off, so a draft that needs more
+# reading than 1.50 bought used to come back truncated.
+AI_BUDGET = os.getenv("PANEL_AI_BUDGET_USD", "6.00")
 AI_TIMEOUT = int(os.getenv("PANEL_AI_TIMEOUT", "300"))
 
 # The retrieval pass is a different job from drafting: it only has to find
@@ -1503,7 +1506,7 @@ AI_TIMEOUT = int(os.getenv("PANEL_AI_TIMEOUT", "300"))
 # many times a day while "Ask Claude" stays the deliberate, expensive call.
 AI_SEARCH_MODEL = os.getenv("PANEL_AI_SEARCH_MODEL", "sonnet")
 AI_SEARCH_EFFORT = os.getenv("PANEL_AI_SEARCH_EFFORT", "medium")
-AI_SEARCH_BUDGET = os.getenv("PANEL_AI_SEARCH_BUDGET_USD", "0.60")
+AI_SEARCH_BUDGET = os.getenv("PANEL_AI_SEARCH_BUDGET_USD", "2.00")
 
 AI_DRAFT_SCHEMA = {
     "type": "object",
@@ -1534,7 +1537,12 @@ AI_SEARCH_SCHEMA = {
 # run. Raising it costs nothing: the same drafts cost the same money,
 # they just wait less. The money guard is AI_DAILY_USD below.
 AI_MAX_CONCURRENT = int(os.getenv("PANEL_AI_MAX_CONCURRENT", "6"))
-AI_DAILY_USD = float(os.getenv("PANEL_AI_DAILY_USD", "10"))
+# What the CLI reports a job cost. It is worth seeing, because a number
+# climbing fast is how a runaway prompt announces itself, but it is not
+# a bill: these run through the Claude Code subscription, not metered
+# API billing. So it no longer blocks. Set PANEL_AI_DAILY_USD to a
+# number above zero to have it stop the day again.
+AI_DAILY_USD = float(os.getenv("PANEL_AI_DAILY_USD", "0"))
 # The ledger lives on disk: held only in memory, every watcher restart
 # reset the day's spend to zero and the daily ceiling never really held.
 AI_SPEND_PATH = VAULT / "Panel" / "ai-spend.json"
@@ -1561,7 +1569,7 @@ def _spend_room(cost: float = 0.0) -> tuple[bool, str]:
             except OSError:
                 pass                     # the day keeps working from memory
             return True, ""
-        if _ai_spend["usd"] >= AI_DAILY_USD:
+        if AI_DAILY_USD > 0 and _ai_spend["usd"] >= AI_DAILY_USD:
             return False, (f"daily AI ceiling reached "
                            f"(${_ai_spend['usd']:.2f} of ${AI_DAILY_USD:.2f})")
         running = sum(1 for j in _ai_jobs.values() if j.get("state") == "running")
@@ -1953,7 +1961,8 @@ def start_ai_job(question: dict, mode: str = "draft") -> str:
         _ai_jobs[job_id] = {"state": "running", "started": time.time(),
                             "model": cfg["model"], "effort": cfg["effort"],
                             "mode": mode}
-    threading.Thread(target=_run_ai, args=(job_id, question, mode), daemon=True).start()
+    threading.Thread(target=_run_ai, args=(job_id, question, mode, extra),
+                     daemon=True).start()
     return job_id
 
 
@@ -2659,7 +2668,9 @@ def ai_cost_hint() -> dict:
         spent = _ai_spend["usd"]
     return {"per_draft": round(median, 3), "samples": len(costs),
             "spent_today": round(spent, 2), "ceiling": AI_DAILY_USD,
-            "left_today": round(max(0.0, AI_DAILY_USD - spent), 2)}
+            "capped": AI_DAILY_USD > 0,
+            "left_today": round(max(0.0, AI_DAILY_USD - spent), 2)
+                          if AI_DAILY_USD > 0 else None}
 
 
 def bulk_state() -> dict:
@@ -4363,17 +4374,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not question:
                 return self._send_json({"ok": False, "error": "question not found"}, 404)
             mode = "search" if payload.get("mode") == "search" else "draft"
+            extra = str(payload.get("extra", "")).strip()
 
             # A generated draft costs real money; never spend it twice for
             # the same unchanged question unless the user asks to redo it.
-            if not payload.get("force"):
+            # A note is a change, so it never serves from the cache: the
+            # stored draft was written without knowing it.
+            if not payload.get("force") and not extra:
                 hit = cached_ai_result(question, mode)
                 if hit:
                     return self._send_json({"ok": True, "cached": True, **hit})
 
             cfg = _mode_config(mode)
             return self._send_json({
-                "ok": True, "job": start_ai_job(question, mode),
+                "ok": True, "job": start_ai_job(question, mode, extra),
                 "model": cfg["model"], "effort": cfg["effort"], "mode": mode,
             })
 
