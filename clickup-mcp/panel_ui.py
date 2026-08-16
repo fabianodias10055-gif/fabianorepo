@@ -604,6 +604,13 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .cev .detwrap { cursor:auto; }
 /* the panel list is capped at 420px; a composer needs the room */
 .ctl.composing { max-height:none; }
+.vdesc { border:1px solid var(--line); border-radius:var(--r-sm);
+  padding:var(--s3); display:grid; gap:var(--s2); }
+.vdesc .descbox { min-height:200px; font-family:var(--mono);
+  font-size:var(--t-xs); }
+.descdraft pre { white-space:pre-wrap; max-height:320px; overflow-y:auto;
+  border-left:2px solid var(--info-line); padding-left:var(--s3);
+  color:var(--ink2); }
 .cdate { font-family:var(--mono); font-size:var(--t-2xs); color:var(--ink3); }
 .cq { font-weight:560; margin-top:2px; }
 .ca { color:var(--ink2); margin-top:3px; padding-left:var(--s3);
@@ -1501,8 +1508,9 @@ var pending = false;     /* a newer build exists but now is a bad moment */
 function busy() {
   if (openCount()) return true;
   /* a composer open inside a video or product panel is edit state too,
-     and it has no entry in openIds to speak for it */
-  if (document.querySelector(".cev .detwrap")) return true;
+     and it has no entry in openIds to speak for it; same for an open
+     description editor */
+  if (document.querySelector(".cev .detwrap, .vdesc")) return true;
   var el = document.activeElement;
   if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) return true;
   return Date.now() - lastTouch < 20000;
@@ -2960,6 +2968,7 @@ function videoPanel(name) {
   var out = '<div class="cprofile"><div class="cabout">'
     + '<span class="clabel">' + open.length + " waiting</span>"
     + '<button class="btn tiny" data-vall="' + esc(name) + '">Show them all in the inbox</button>'
+    + '<button class="btn tiny" data-vdesc="' + esc(name) + '">Description</button>'
     + "</div>";
   if (common.length) {
     out += '<div class="cabout"><span class="clabel">Keeps coming up</span>'
@@ -3000,6 +3009,8 @@ document.addEventListener("click", function (ev) {
     page = 0; apply(); syncUrl();
     return;
   }
+  var descBtn = ev.target.closest("[data-vdesc]");
+  if (descBtn) { ev.stopPropagation(); toggleVdesc(descBtn); return; }
   if (ev.target.closest("a") || ev.target.closest(".vdet")) return;
   var row = ev.target.closest(".vrow[data-video]");
   if (!row) return;
@@ -3052,6 +3063,118 @@ document.addEventListener("click", function (ev) {
   });
   wrap.querySelector(".qbox").focus();
 });
+
+/* ---- edit the real video's description without leaving the panel ----
+   Reads the live one from YouTube, lets Claude draft a new one from the
+   video's own notes, and Save writes it back to the real video with the
+   previous version filed in the vault first, so it is never a one-way
+   door. The draft lands in a preview, never straight into the textarea:
+   overwriting hand edits with a generation threw work away. */
+function toggleVdesc(btn) {
+  var cab = btn.closest(".cabout");
+  var open = cab.nextElementSibling;
+  if (open && open.classList.contains("vdesc")) { open.remove(); return; }
+  var name = btn.dataset.vdesc;
+  var box = document.createElement("div");
+  box.className = "vdesc";
+  box.innerHTML = '<div class="src">reading the live description from YouTube...</div>'
+    + '<textarea class="qbox descbox" aria-label="Video description"></textarea>'
+    + '<div class="detbtns">'
+    + '<button class="btn tiny ai" data-descai>Draft with Claude</button>'
+    + '<button class="btn tiny primary" data-descsave>Save to YouTube</button>'
+    + '<span class="msg" aria-live="polite"></span>'
+    + '<span class="deliver">saves to the real video; the previous description is filed in the vault first</span>'
+    + "</div>";
+  cab.after(box);
+  var head = box.querySelector(".src");
+  var ta = box.querySelector(".descbox");
+  var msg = box.querySelector(".msg");
+  function count() {
+    head.textContent = (head.dataset.title ? head.dataset.title + " · " : "")
+      + ta.value.length + " / 5000 characters";
+  }
+  ta.addEventListener("input", count);
+  if (!LIVE) { head.textContent = "Static file: this needs the live server."; return; }
+  fetch("/video_desc", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ video: name }) })
+    .then(function (r) { return r.json(); })
+    .then(function (s) {
+      if (!s.ok) { head.textContent = s.error || "could not read the description"; return; }
+      head.dataset.title = s.title;
+      ta.value = s.description || "";
+      count();
+    })
+    .catch(function () { head.textContent = "could not reach the panel server"; });
+  box.querySelector("[data-descai]").addEventListener("click", function () {
+    var b = box.querySelector("[data-descai]");
+    b.disabled = true;
+    b.classList.add("spin");
+    msg.className = "msg";
+    var t0 = Date.now();
+    msg.textContent = "Claude is reading this video's notes...";
+    var timer = setInterval(function () {
+      msg.textContent = "Claude is reading this video's notes... "
+        + Math.round((Date.now() - t0) / 1000) + "s";
+    }, 1000);
+    fetch("/video_desc_ai", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ video: name }) })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        clearInterval(timer);
+        b.disabled = false;
+        b.classList.remove("spin");
+        var old = box.querySelector(".descdraft");
+        if (old) old.remove();
+        if (!s.ok) { msg.textContent = s.error || "failed"; msg.classList.add("bad"); return; }
+        msg.textContent = "drafted" + (typeof s.cost === "number"
+          ? " for $" + s.cost.toFixed(2) : "") + "; review it below";
+        var wrap = document.createElement("div");
+        wrap.className = "descdraft";
+        var pre = document.createElement("pre");
+        pre.textContent = s.description;
+        var use = document.createElement("button");
+        use.className = "btn tiny";
+        use.textContent = "Use this draft";
+        use.addEventListener("click", function () {
+          ta.value = s.description;
+          count();
+          wrap.remove();
+        });
+        wrap.appendChild(pre);
+        wrap.appendChild(use);
+        box.appendChild(wrap);
+      })
+      .catch(function () {
+        clearInterval(timer);
+        b.disabled = false;
+        b.classList.remove("spin");
+        msg.textContent = "could not reach the panel server";
+        msg.classList.add("bad");
+      });
+  });
+  box.querySelector("[data-descsave]").addEventListener("click", function () {
+    var b = box.querySelector("[data-descsave]");
+    b.disabled = true;
+    msg.className = "msg";
+    msg.textContent = "updating the real video...";
+    fetch("/video_desc_save", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ video: name, description: ta.value }) })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        b.disabled = false;
+        if (!s.ok) { msg.textContent = s.error || "failed"; msg.classList.add("bad"); return; }
+        holdUntil = Date.now() + 6000;
+        msg.textContent = s.message || "updated";
+        msg.classList.add("good");
+        toast("Description updated on the real video.", "good");
+      })
+      .catch(function () {
+        b.disabled = false;
+        msg.textContent = "could not reach the panel server";
+        msg.classList.add("bad");
+      });
+  });
+}
 
 /* After a reply or a status change lands, the panel holding the composer
    still says the question is waiting. These panels render from QDATA, so
@@ -4195,6 +4318,7 @@ def _videos_card(d: dict) -> str:
     """
     videos = d["videos"]
     transcripts = sum(1 for v in videos if v["transcript"])
+    assets_n = sum(1 for v in videos if v.get("assets"))
     untagged = sum(1 for v in videos if not v.get("system") or v.get("system") == "-")
 
     # Comments per video, from the questions the scan already read.
@@ -4242,6 +4366,12 @@ def _videos_card(d: dict) -> str:
                 else '<span class="vtag miss" title="Nothing said in this '
                 'video is in the vault: Suggest and the bot cannot answer '
                 'from it">no transcript</span>')
+        # Positive-only while the rollout is one video old: 158 red tags
+        # would say nothing except that the initiative is new.
+        if v.get("assets"):
+            tag += ('<span class="vtag has" title="This video has an assets '
+                    'and access note: free downloads, tier access and short '
+                    'links, ready to answer with">assets</span>')
 
         waiting = open_by.get(v["name"], 0)
         total = total_by.get(v["name"], 0)
@@ -4288,7 +4418,10 @@ def _videos_card(d: dict) -> str:
         f'<p class="note">Most waiting first. {untagged} are not linked to a '
         f'product, so their questions belong to nothing, and '
         f'{len(videos) - transcripts} have no transcript in the vault, so '
-        f'neither Suggest nor the bot can answer from what was said in them.</p>'
+        f'neither Suggest nor the bot can answer from what was said in them. '
+        f'{_fmt(assets_n)} of {_fmt(len(videos))} carry an assets and access '
+        f'note saying what is free, what each tier gets and the short links '
+        f'to hand out.</p>'
         f'{body}{more}</section>'
     )
 

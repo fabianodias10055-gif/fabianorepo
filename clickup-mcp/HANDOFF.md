@@ -48,8 +48,10 @@ Regras que a implementação respeita e que valem para quem mexer depois:
 1. **Railway**: colar o Access Token novo do Patreon na variável
    `PATREON_ACCESS_TOKEN` do bot. Sem isso /top_patrons e /check_patron
    seguem cegos. O token novo está no cofre local (`patreon_api.py --status`).
-2. **Catálogo**: decidir se ragdoll-physics, pickup-and-drop e
-   push-and-pull viram sistemas. 54 perguntas órfãs esperam por isso.
+2. **Catálogo**: ragdoll-physics virou sistema em 2026-08-15 (47
+   perguntas roteadas; nota de assets piloto no vídeo tutorial, com as
+   seções de tier marcadas *Fill in* esperando o dono). Falta decidir
+   pickup-and-drop e push-and-pull.
 3. **79 pagamentos recusados** no Patreon: 34 com email, 17 com Discord,
    os 3 maiores já pagaram US$600/460/278. Oferecido gerar lista com
    contato; usuário ainda não pediu.

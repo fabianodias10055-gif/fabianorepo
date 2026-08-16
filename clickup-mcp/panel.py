@@ -86,6 +86,7 @@ CATALOG = [
     ("motion-matching", "Motion Matching", "locomotion"),
     ("narrow-passage", "Narrow Passage", "locomotion"),
     ("obstacle-avoidance", "Obstacle Avoidance", "locomotion"),
+    ("ragdoll-physics", "Ragdoll Physics", "locomotion"),
     ("roll-dash", "Roll Dash + Pickup Pistols", "locomotion"),
     ("root-motion", "Root Motion", "locomotion"),
     ("rope", "Rope", "locomotion"),
@@ -360,6 +361,40 @@ def _iter_inbox_blocks():
             yield note, raw, start, end, date, who, fields, text, qid
 
 
+_video_systems_cache = {"at": 0.0, "map": {}}
+
+
+def _video_systems() -> dict:
+    """Video folder name -> system slug, from each Overview's frontmatter.
+
+    Cached briefly: parse_questions runs on every request that names a
+    question, and re-reading 159 small files per call would be waste.
+    """
+    now = time.time()
+    if now - _video_systems_cache["at"] < 60:
+        return _video_systems_cache["map"]
+    vmap = {}
+    root = VAULT / "YouTube" / "Videos"
+    try:
+        folders = [p for p in root.iterdir() if p.is_dir()]
+    except OSError:
+        folders = []
+    for folder in folders:
+        for note in folder.glob("*.md"):
+            if "overview" not in note.stem.lower():
+                continue
+            try:
+                m = re.search(r"^system:[ \t]*(\S+)[ \t]*$",
+                              note.read_text(encoding="utf-8", errors="replace"), re.M)
+            except OSError:
+                m = None
+            if m:
+                vmap[folder.name] = m.group(1)
+            break
+    _video_systems_cache.update(at=now, map=vmap)
+    return vmap
+
+
 def parse_questions() -> list[dict]:
     """Read every question logged in Inbox/*.md: hand written and collected.
 
@@ -369,6 +404,12 @@ def parse_questions() -> list[dict]:
     out = []
     for _note, _raw, _start, _end, date, who, fields, text, qid in _iter_inbox_blocks():
         system = fields.get("system", "-")
+        # The Overview note promises that tagging a video routes its
+        # questions to that system. Questions collected before the tag
+        # landed carry "-" in their own block forever, so the video's tag
+        # is the fallback; without it, tagging a video moved nothing.
+        if system in ("-", "", "unknown"):
+            system = _video_systems().get(fields.get("video", ""), system)
         out.append({
             "id": qid,
             "code": short_id(qid),
@@ -1530,6 +1571,10 @@ Your job: search this vault (the current directory) and draft the reply.
   to customers. Systems/_general/ holds licensing, tier and compatibility
   answers that apply to every system.
 - YouTube/Videos/<date title>/ holds each video's description and comments.
+- A video folder's assets note (04 - Assets and access) says which assets
+  are free, what each subscription tier includes, and the short links to
+  hand out. Answer where-do-I-get-the-assets questions from it, and give
+  its locodev.dev short links rather than raw URLs.
 
 
 Dates matter more than usual here. This catalog has been rebuilt across
@@ -1785,6 +1830,209 @@ def post_youtube_reply(comment_id: str, text: str) -> tuple[bool, str]:
         return False, f"YouTube refused the reply ({exc.code}): {detail}"
     except urlerror.URLError as exc:
         return False, f"Could not reach YouTube: {exc.reason}"
+
+
+# --------------------------------------------------------------------------
+# Video descriptions: read the live one, draft one from the vault, write it
+# back to the real video. Same OAuth as replies (youtube.force-ssl covers
+# videos.update), and the previous description is always filed in the vault
+# before the live one changes, so an update is never a one-way door.
+# --------------------------------------------------------------------------
+
+def _video_folder(name: str) -> Path | None:
+    folder = VAULT / "YouTube" / "Videos" / name
+    return folder if folder.is_dir() else None
+
+
+def _video_note(name: str, facet: str) -> Path | None:
+    folder = _video_folder(name)
+    if not folder:
+        return None
+    for note in folder.glob("*.md"):
+        if facet in note.stem.lower():
+            return note
+    return None
+
+
+def _video_id_for(name: str) -> str:
+    note = _video_note(name, "overview")
+    if not note:
+        return ""
+    m = re.search(r"^video_id:[ \t]*(\S+)[ \t]*$",
+                  note.read_text(encoding="utf-8", errors="replace"), re.M)
+    return m.group(1) if m else ""
+
+
+def fetch_video_snippet(video_id: str) -> tuple[dict | None, str]:
+    """(snippet, error). Error categories stay separate: not-configured,
+    refused-with-code, network. A network failure must never read as auth."""
+    token = _youtube_access_token()
+    if not token:
+        return None, ("YouTube OAuth is not set up. Run youtube_oauth_setup.py "
+                      "once to enable reading and updating the real video.")
+    req = urlrequest.Request(
+        f"{YT_API}/videos?part=snippet&id={urlparse.quote(video_id)}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=20) as resp:
+            items = json.load(resp).get("items") or []
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:300]
+        return None, f"YouTube refused the read ({exc.code}): {detail}"
+    except (urlerror.URLError, ValueError) as exc:
+        return None, f"Could not reach YouTube: {exc}"
+    if not items:
+        return None, "YouTube returned no video for this id."
+    return items[0].get("snippet") or {}, ""
+
+
+def _file_description(name: str, description: str, previous: str) -> None:
+    """The vault note mirrors what was applied, previous version included.
+    Same frontmatter and heading the collector writes, so nothing that
+    parses this file has to care who wrote it last."""
+    note = _video_note(name, "description")
+    folder = _video_folder(name)
+    if note is None and folder is not None:
+        note = folder / "01 - Description.md"
+    if note is None:
+        return
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    text = (f"---\nvideo: {name}\nfacet: description\naccess: public\n---\n\n"
+            f"# Published description\n\n{description.rstrip()}\n")
+    if previous.strip() and previous.strip() != description.strip():
+        text += (f"\n---\n\n## Previous, replaced {stamp} from the panel\n\n"
+                 f"{previous.rstrip()}\n")
+    try:
+        note.write_text(text, encoding="utf-8")
+    except OSError:
+        pass                             # the YouTube update already landed
+
+
+def update_video_description(name: str, description: str) -> dict:
+    """videos.update replaces the whole snippet, so the live one is fetched
+    first and only the description changes; sending less blanks the title."""
+    description = description.strip()
+    if not description:
+        return {"ok": False, "error": "The description is empty."}
+    if len(description) > 5000:
+        return {"ok": False, "error": (f"YouTube caps descriptions at 5000 "
+                                       f"characters; this one is {len(description)}.")}
+    video_id = _video_id_for(name)
+    if not video_id:
+        return {"ok": False, "error": "No video_id in this video's Overview note."}
+    snippet, err = fetch_video_snippet(video_id)
+    if err:
+        return {"ok": False, "error": err}
+    previous = snippet.get("description", "")
+    snippet["description"] = description
+    token = _youtube_access_token()
+    if not token:
+        return {"ok": False, "error": ("YouTube OAuth is not set up. Run "
+                                       "youtube_oauth_setup.py once to enable it.")}
+    body = json.dumps({"id": video_id, "snippet": snippet}).encode()
+    req = urlrequest.Request(
+        f"{YT_API}/videos?part=snippet",
+        data=body, method="PUT",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=30) as resp:
+            json.load(resp)
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:300]
+        return {"ok": False, "error": f"YouTube refused the update ({exc.code}): {detail}"}
+    except (urlerror.URLError, ValueError) as exc:
+        return {"ok": False, "error": f"Could not reach YouTube: {exc}"}
+    _file_description(name, description, previous)
+    return {"ok": True, "message": "Updated on YouTube; previous version filed in the vault."}
+
+
+_DESC_SCHEMA = {
+    "type": "object",
+    "properties": {"description": {"type": "string"}},
+    "required": ["description"],
+}
+
+
+def generate_video_description(name: str) -> dict:
+    """One synchronous CLI run that reads the video's own notes and drafts
+    the description. Costs are checked against and booked to the same daily
+    ceiling as every other AI call."""
+    import subprocess
+    if not _video_folder(name):
+        return {"ok": False, "error": "No folder for this video in the vault."}
+    ok, msg = _spend_room()
+    if not ok:
+        return {"ok": False, "error": msg}
+    folder_rel = f"YouTube/Videos/{name}"
+    prompt = f"""You write the YouTube description for one LocoDev video.
+
+The vault is the current directory. Read, in this order:
+- {folder_rel}/00 - Overview.md (which system this video is about)
+- {folder_rel}/01 - Description.md (the current published description; its
+  social and Patreon links must survive into yours)
+- {folder_rel}/02 - Transcript.md (what is actually shown, with timestamps)
+- {folder_rel}/04 - Assets and access.md if it exists (the short links for
+  free assets, documentation and tier access; prefer these links)
+- Systems/<slug>/ notes for that system, for product and documentation links
+
+Write a description that leaves the viewer with the least friction to learn:
+- one or two opening sentences saying what they will be able to do by the end;
+- a chapter list with timestamps where the transcript makes the moments clear;
+- the product, documentation and social links you read in the notes. Never
+  invent a URL: reuse only links you actually read;
+- keep the hashtags line if the current description has one;
+- plain text, no markdown headings (YouTube renders none), under 4800
+  characters.
+
+Return only the JSON object."""
+    cmd = [
+        _claude_exe(), "-p", prompt,
+        "--model", _mode_config("draft")["model"],
+        "--effort", "medium",
+        "--output-format", "json",
+        "--json-schema", json.dumps(_DESC_SCHEMA),
+        "--allowedTools", "Read", "Grep", "Glob",
+        "--disallowedTools", "Bash", "Edit", "Write", "NotebookEdit",
+        "WebFetch", "WebSearch", "Task", "Agent",
+        "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+        "--max-budget-usd", _mode_config("draft")["budget"],
+        "--no-session-persistence",
+        "--exclude-dynamic-system-prompt-sections",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(VAULT), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=AI_TIMEOUT,
+            env=_child_env(),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except FileNotFoundError:
+        return {"ok": False, "error": "The claude CLI is not on PATH for the watcher."}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"Timed out after {AI_TIMEOUT}s."}
+    try:
+        env = json.loads(proc.stdout)
+    except ValueError:
+        detail = (proc.stderr or proc.stdout or "").strip()[:300]
+        return {"ok": False, "error": f"CLI returned no JSON: {detail}"}
+    cost = env.get("total_cost_usd")
+    if isinstance(cost, (int, float)):
+        _spend_room(float(cost))         # booked even when the run failed
+    if env.get("is_error"):
+        errs = env.get("errors") or [env.get("subtype", "unknown error")]
+        return {"ok": False, "error": "; ".join(str(e) for e in errs)[:300]}
+    raw = env.get("result", "")
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return {"ok": False, "error": "Model did not return the requested JSON."}
+    text = str((data or {}).get("description", "")).strip()
+    if not text:
+        return {"ok": False, "error": "Model returned an empty description."}
+    return {"ok": True, "description": text,
+            "cost": cost if isinstance(cost, (int, float)) else None}
 
 
 # --------------------------------------------------------------------------
@@ -2569,6 +2817,8 @@ def scan() -> dict:
                     has["comments"] = useful >= MIN_CONTENT
                 elif "description" in low:
                     has["description"] = useful >= MIN_CONTENT
+                elif "assets" in low:
+                    has["assets"] = useful >= MIN_CONTENT
                 elif "overview" in low:
                     has["overview"] = useful >= MIN_CONTENT
                     # The collector's frontmatter carries the id and url the
@@ -2587,6 +2837,7 @@ def scan() -> dict:
                 "transcript": has.get("transcript", False),
                 "comments": has.get("comments", False),
                 "description": has.get("description", False),
+                "assets": has.get("assets", False),
                 "overview": has.get("overview", False),
             })
 
@@ -3198,6 +3449,32 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/suggest_ai_status":
             payload = self._json_body()
             return self._send_json({"ok": True, **ai_job_status(str(payload.get("job", "")))})
+
+        if self.path == "/video_desc":
+            payload = self._json_body()
+            name = str(payload.get("video", ""))
+            vid = _video_id_for(name)
+            if not vid:
+                return self._send_json({"ok": False,
+                                        "error": "No video_id in this video's Overview note."}, 404)
+            snippet, err = fetch_video_snippet(vid)
+            if err:
+                return self._send_json({"ok": False, "error": err}, 502)
+            return self._send_json({"ok": True, "video_id": vid,
+                                    "title": snippet.get("title", ""),
+                                    "description": snippet.get("description", "")})
+
+        if self.path == "/video_desc_ai":
+            payload = self._json_body()
+            return self._send_json(generate_video_description(str(payload.get("video", ""))))
+
+        if self.path == "/video_desc_save":
+            payload = self._json_body()
+            result = update_video_description(str(payload.get("video", "")),
+                                              str(payload.get("description", "")))
+            if result.get("ok"):
+                build(live=True)   # the vault copy changed with it
+            return self._send_json(result, 200 if result.get("ok") else 400)
 
         if self.path == "/ai_prompt":
             # The exact string Draft or Find sends, so the operator can read
