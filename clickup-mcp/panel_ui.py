@@ -1228,7 +1228,7 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
 .confbar i { display:block; height:100%; border-radius:var(--r-full); background:currentColor; }
 .qbox { width:100%; min-height:84px; border:1px solid var(--line); border-radius:var(--r-md);
   background:var(--surface); color:var(--ink); padding:var(--s3) var(--s4); font:inherit;
-  font-size:var(--t-base); line-height:1.55; resize:vertical;
+  font-size:var(--t-base); line-height:1.55; resize:both; max-width:100%;
   transition:border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
 .qbox::placeholder { color:var(--ink3); }
 .qbox:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-bg); }
@@ -2310,7 +2310,9 @@ function composerFor(qid) {
     + 'placeholder="Write a reply..."></textarea>');
   parts.push('<div class="detbtns"><button class="btn tiny primary replybtn" data-reply>'
     + (q.postable ? "Post to " + esc(q.dest) : "Save answer to vault")
-    + '</button><span class="msg" aria-live="polite"></span>'
+    + '</button><button class="btn tiny qwide" type="button" '
+    + 'title="Give this card the full row">wider</button>'
+    + '<span class="msg" aria-live="polite"></span>'
     + '<span class="deliver">' + (q.postable
         ? "replies to the original message and files it in the vault"
         : "files it in the vault; this channel cannot be posted to from here")
