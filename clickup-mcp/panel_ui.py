@@ -1111,6 +1111,7 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
 .tag { display:inline-block; background:var(--mute-bg); color:var(--ink2);
   border-radius:var(--r-xs); padding:1px 7px; font-size:var(--t-2xs); font-weight:680; }
 .tag.lead { background:var(--warn-bg); color:var(--warn); }
+.tag.req { background:var(--info-bg); color:var(--info); }
 .tag.sub { background:var(--accent-bg); color:var(--accent); }
 .tag.esc { background:var(--warn-bg); color:var(--warn); }
 
@@ -2816,6 +2817,41 @@ document.addEventListener("click", function (ev) {
   if (tr) toggleProduct(tr);
 });
 
+/* A comment is a request when it asks the creator to act rather than asks
+   how something works: make a video, add a feature, fix the system. The
+   only signal is wording, so the section that uses this says it guessed.
+   Word boundaries come from padding with spaces, not from regex escapes:
+   this file is a Python string and a backslash would not survive it. */
+function reqKind(text) {
+  var t = " " + text.toLowerCase().replace(/[^a-z0-9']+/g, " ") + " ";
+  var asks = false;
+  [" can you ", " could you ", " will you ", " would you ", " can u ", " could u "]
+    .forEach(function (s) {
+      var i = -1;
+      while ((i = t.indexOf(s, i + 1)) !== -1) {
+        /* "how can you make X work" asks how, not for */
+        if (t.slice(Math.max(0, i - 4), i + 1) === " how ") continue;
+        [" make ", " create ", " add ", " build ", " do ", " show ", " cover ",
+         " release ", " fix ", " update ", " upgrade ", " support ", " bring "]
+          .forEach(function (v) { if (t.indexOf(v, i) !== -1) asks = true; });
+      }
+    });
+  [" please make ", " please add ", " please create ", " please fix ",
+   " please update ", " any plans ", " any chance ", " make a video ",
+   " make a tutorial ", " do a tutorial ", " tutorial on ", " tutorial about ",
+   " tutorial request ", " would love to see ", " would like to see ",
+   " is there a tutorial "].forEach(function (m) {
+    if (t.indexOf(m) !== -1) asks = true;
+  });
+  if (!asks) return "";
+  var fix = false;
+  [" fix ", " fixed ", " update ", " updated ", " upgrade ", " patch ",
+   " broken ", " bug "].forEach(function (m) {
+    if (t.indexOf(m) !== -1) fix = true;
+  });
+  return fix ? "fix" : "new";
+}
+
 /* ---- one video, and the people still waiting under it ----
    A count tells you where the work is; it does not let you do it. Opening
    a video shows the questions themselves, and hands the whole block to the
@@ -2842,6 +2878,25 @@ function videoPanel(name) {
   var common = Object.keys(freq).filter(function (w) { return freq[w] > 2; })
     .sort(function (a, b) { return freq[b] - freq[a]; }).slice(0, 8);
 
+  function cev(q, extra) {
+    return '<div class="cev open" data-qid="' + esc(q.id) + '"><span class="cdate">'
+      + esc(q.date) + " &middot; "
+      + esc(q.who) + (extra || "") + genMarks(q.id) + "</span>"
+      + '<div class="cq">' + esc(q.text.slice(0, 200)) + "</div>"
+      + (q.link ? '<a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open the comment</a> ' : "")
+      + '<button class="btn tiny">Answer</button>'
+      + "</div>";
+  }
+
+  /* Requests are decisions for you, questions are answers for them; mixed
+     together the requests sank among the how-questions and were never
+     weighed as a group. */
+  var reqs = [], rest = [];
+  open.forEach(function (q) {
+    var k = reqKind(q.text);
+    if (k) reqs.push({ q: q, kind: k }); else rest.push(q);
+  });
+
   var out = '<div class="cprofile"><div class="cabout">'
     + '<span class="clabel">' + open.length + " waiting</span>"
     + '<button class="btn tiny" data-vall="' + esc(name) + '">Show them all in the inbox</button>'
@@ -2852,17 +2907,21 @@ function videoPanel(name) {
           return '<span class="tag">' + esc(w) + " &middot; " + freq[w] + "</span>";
         }).join(" ") + "</div>";
   }
+  if (reqs.length) {
+    out += '<div class="cabout"><span class="clabel">Requests &middot; ' + reqs.length + "</span>"
+      + '<span class="note">asking you to build, cover or fix something; guessed from the wording</span></div>';
+    out += '<div class="ctl">';
+    reqs.slice(0, 25).forEach(function (r) {
+      out += cev(r.q, ' <span class="tag req">' + (r.kind === "fix" ? "fix ask" : "new ask") + "</span>");
+    });
+    if (reqs.length > 25) out += '<div class="note">and ' + (reqs.length - 25) + " more</div>";
+    out += "</div>";
+    if (rest.length) out += '<div class="cabout"><span class="clabel">Questions &middot; '
+      + rest.length + "</span></div>";
+  }
   out += '<div class="ctl">';
-  open.slice(0, 25).forEach(function (q) {
-    out += '<div class="cev open" data-qid="' + esc(q.id) + '"><span class="cdate">'
-      + esc(q.date) + " &middot; "
-      + esc(q.who) + genMarks(q.id) + "</span>"
-      + '<div class="cq">' + esc(q.text.slice(0, 200)) + "</div>"
-      + (q.link ? '<a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open the comment</a> ' : "")
-      + '<button class="btn tiny">Answer</button>'
-      + "</div>";
-  });
-  if (open.length > 25) out += '<div class="note">and ' + (open.length - 25) + " more</div>";
+  rest.slice(0, 25).forEach(function (q) { out += cev(q); });
+  if (rest.length > 25) out += '<div class="note">and ' + (rest.length - 25) + " more</div>";
   if (!open.length) out += '<div class="note">Everyone who asked here got an answer.</div>';
   return out + "</div></div>";
 }
@@ -2910,25 +2969,30 @@ document.addEventListener("click", function (ev) {
   /* a drag to copy part of the question is not a request to toggle */
   var sel = window.getSelection ? window.getSelection() : null;
   if (sel && !sel.isCollapsed) return;
-  var host = item.closest(".ctl");
+  /* uniqueness spans the whole panel, which can hold more than one list
+     (requests and questions); the height release stays per list */
+  var host = item.closest(".cprofile") || item.closest(".ctl");
+  var ctl = item.closest(".ctl");
   var mine = item.querySelector(".detwrap");
   if (mine) {
     mine.remove();
     item.classList.remove("composing");
-    if (host) host.classList.remove("composing");
+    if (ctl) ctl.classList.remove("composing");
     return;
   }
   /* one open composer per panel, like the queue keeps one detail row */
   var other = host && host.querySelector(".detwrap");
   if (other) {
     other.closest(".cev").classList.remove("composing");
+    var octl = other.closest(".ctl");
+    if (octl) octl.classList.remove("composing");
     other.remove();
   }
   var wrap = composerFor(item.dataset.qid);
   if (!wrap) return;
   item.appendChild(wrap);
   item.classList.add("composing");
-  if (host) host.classList.add("composing");
+  if (ctl) ctl.classList.add("composing");
   ["search", "draft"].forEach(function (mode) {
     var hit = AI_CACHE[mode + ":" + item.dataset.qid];
     if (hit) aiRender(wrap, mode, hit, aiBtn(wrap, mode));
