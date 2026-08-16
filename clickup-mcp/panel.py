@@ -1548,6 +1548,16 @@ question you are answering is dated {question['date']}.
 Rules:
 - Ground every claim in what you actually read. Do not invent node names,
   variable names, settings, file paths or links.
+- Leave the reader with the least friction to learn. Whenever the vault
+  gives you them, include:
+  * the LocoDev video that shows it, with the timestamp of the exact moment
+    (transcripts carry a timestamp per paragraph; cite it like 12:34);
+  * documentation links already written in the vault notes (Google Docs and
+    similar), so they can read the full write-up;
+  * for someone who reads as a beginner, the official Unreal Engine
+    documentation for the node or feature involved. Name the exact page or
+    the phrase to search; only give a URL you read in the vault or are
+    completely certain of, never a guessed one.
 - If the vault does not answer it, say that plainly in `missing` and give the
   best partial answer you can; do not fill the gap with plausible guesses.
 - The question may be about a different system than the one tagged. Search
@@ -3188,6 +3198,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/suggest_ai_status":
             payload = self._json_body()
             return self._send_json({"ok": True, **ai_job_status(str(payload.get("job", "")))})
+
+        if self.path == "/ai_prompt":
+            # The exact string Draft or Find sends, so the operator can read
+            # what the model reads. Built fresh from the question, which is
+            # also what a run started right now would send.
+            payload = self._json_body()
+            question = find_question_by_id(str(payload.get("id", "")))
+            if not question:
+                return self._send_json({"ok": False, "error": "question not found"}, 404)
+            mode = str(payload.get("mode", "draft"))
+            prompt = _search_prompt(question) if mode == "search" else _ai_prompt(question)
+            return self._send_json({"ok": True, "prompt": prompt})
 
         if self.path == "/mark":
             payload = self._json_body()
