@@ -1304,7 +1304,16 @@ AI_SEARCH_SCHEMA = {
 # hundreds of jobs, each individually within its dollar cap.
 AI_MAX_CONCURRENT = int(os.getenv("PANEL_AI_MAX_CONCURRENT", "2"))
 AI_DAILY_USD = float(os.getenv("PANEL_AI_DAILY_USD", "10"))
+# The ledger lives on disk: held only in memory, every watcher restart
+# reset the day's spend to zero and the daily ceiling never really held.
+AI_SPEND_PATH = VAULT / "Panel" / "ai-spend.json"
 _ai_spend = {"day": "", "usd": 0.0}
+try:
+    _kept = json.loads(AI_SPEND_PATH.read_text(encoding="utf-8"))
+    _ai_spend.update(day=str(_kept.get("day", "")), usd=float(_kept.get("usd", 0.0)))
+    del _kept
+except (OSError, ValueError, TypeError):
+    pass
 
 
 def _spend_room(cost: float = 0.0) -> tuple[bool, str]:
@@ -1315,6 +1324,11 @@ def _spend_room(cost: float = 0.0) -> tuple[bool, str]:
             _ai_spend.update(day=today, usd=0.0)
         if cost:
             _ai_spend["usd"] += cost
+            try:
+                AI_SPEND_PATH.parent.mkdir(parents=True, exist_ok=True)
+                AI_SPEND_PATH.write_text(json.dumps(_ai_spend), encoding="utf-8")
+            except OSError:
+                pass                     # the day keeps working from memory
             return True, ""
         if _ai_spend["usd"] >= AI_DAILY_USD:
             return False, (f"daily AI ceiling reached "
@@ -1627,6 +1641,13 @@ def _run_ai(job_id: str, question: dict, mode: str = "draft") -> None:
     def finish(**kw):
         payload = dict(elapsed=round(time.time() - started, 1),
                        model=cfg["model"], effort=cfg["effort"], mode=mode, **kw)
+        # Booked here, done or failed alike: the money left either way, and
+        # error paths used to hand the cost over for display only, so failed
+        # calls never counted against the ceiling. Outside the lock below:
+        # _spend_room takes the same lock itself.
+        cost = payload.get("cost")
+        if isinstance(cost, (int, float)):
+            _spend_room(float(cost))
         with _ai_lock:
             _ai_jobs[job_id].update(payload)
         if payload.get("state") == "done":
@@ -1665,8 +1686,6 @@ def _run_ai(job_id: str, question: dict, mode: str = "draft") -> None:
                       cost=env.get("total_cost_usd"))
 
     cost = env.get("total_cost_usd")
-    if isinstance(cost, (int, float)):
-        _spend_room(float(cost))       # book it against today's ceiling
     finish(state="done", cost=cost, **_normalize(mode, data))
 
 
