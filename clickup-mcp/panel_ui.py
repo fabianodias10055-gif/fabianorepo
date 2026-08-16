@@ -1015,6 +1015,17 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
 .vrow { display:flex; gap:var(--s3); align-items:center; padding:var(--s2) 0;
   border-bottom:1px solid var(--line2); }
 .vrow:last-of-type { border-bottom:0; }
+/* The queue columns: what is waiting, and how finished the video is. */
+.vrow .vcount { flex:none; width:12ch; text-align:right; font-size:var(--t-xs);
+  display:grid; gap:1px; }
+.vwait { font-family:var(--mono); font-weight:600; color:var(--warn);
+  font-variant-numeric:tabular-nums; }
+.vrow .vbar { flex:none; width:74px; }
+.vtag.miss { background:var(--crit-bg); color:var(--crit); }
+@media (max-width:720px) {
+  .vrow { flex-wrap:wrap; }
+  .vrow .vcount { width:auto; text-align:left; }
+}
 .vthumb { position:relative; width:68px; height:38px; border-radius:var(--r-xs);
   background:var(--surface3); flex:none; overflow:hidden; }
 .vthumb img { width:100%; height:100%; object-fit:cover; display:block; }
@@ -3786,9 +3797,35 @@ def _pays(p: dict) -> str:
 
 
 def _videos_card(d: dict) -> str:
+    """Videos ordered by how much work each one is still holding.
+
+    A list by date answers which videos exist. Sorted by unanswered
+    comments it answers where half an hour goes furthest, which is a
+    different question and the one somebody opens this page with. One
+    tutorial is holding 73 people; on a date-ordered list it sat between
+    two videos nobody has asked about.
+    """
     videos = d["videos"]
     transcripts = sum(1 for v in videos if v["transcript"])
     untagged = sum(1 for v in videos if not v.get("system") or v.get("system") == "-")
+
+    # Comments per video, from the questions the scan already read.
+    open_by, total_by = {}, {}
+    for q in d["questions"]:
+        name = q.get("video")
+        if not name:
+            continue
+        total_by[name] = total_by.get(name, 0) + 1
+        if q["status"] != "answered":
+            open_by[name] = open_by.get(name, 0) + 1
+
+    # Waiting people first, then the ones missing a piece, then the rest.
+    def rank(v):
+        missing = (0 if v.get("system") and v["system"] != "-" else 1) + \
+                  (0 if v["transcript"] else 1)
+        return (-open_by.get(v["name"], 0), -missing, v["published"])
+    videos = sorted(videos, key=rank)
+
     rows = []
     for i, v in enumerate(videos):
         hid = "" if i < 6 else " xtra hide"
@@ -3805,21 +3842,46 @@ def _videos_card(d: dict) -> str:
                      f'<span class="ph">{_icon("video", 14)}</span></span>')
         else:
             thumb = f'<span class="vthumb"><span class="ph">{_icon("video", 14)}</span></span>'
-        tag = ""
-        if v.get("system") and v["system"] != "-":
-            tag = f'<span class="vtag">{escape(v["system"])}</span>'
+        tagged = bool(v.get("system") and v["system"] != "-")
+        tag = (f'<span class="vtag">{escape(v["system"])}</span>' if tagged
+               else '<span class="vtag miss">no product</span>')
+        if not v["transcript"]:
+            tag += '<span class="vtag miss">no transcript</span>'
+
+        waiting = open_by.get(v["name"], 0)
+        total = total_by.get(v["name"], 0)
+        answered = total - waiting
+        # Three things make a video finished: it is filed under a product,
+        # its words are in the vault, and nobody is still waiting on it.
+        done = (1 if tagged else 0) + (1 if v["transcript"] else 0) \
+            + (1 if total and not waiting else 0)
+        pct = done * 100 // 3
+        tone = "g" if done == 3 else ("a" if done == 2 else "r")
+        count = (f'<span class="vwait">{_fmt(waiting)} waiting</span>'
+                 f'<span class="note">of {_fmt(total)}</span>' if waiting
+                 else (f'<span class="note">all {_fmt(total)} answered</span>'
+                       if total else '<span class="note">no comments</span>'))
         rows.append(
-            f'<div class="vrow{hid}">{thumb}<span class="t">{title}</span>{tag}'
+            f'<div class="vrow{hid}">{thumb}'
+            f'<span class="t">{title}<br>{tag}</span>'
+            f'<span class="vcount">{count}</span>'
+            f'<span class="vbar">{_bar(pct, tone)}</span>'
             f'<span class="d">{escape(v["published"])}</span></div>'
         )
     more = (f'<button class="linkbtn" data-viewall>View all {len(videos)} videos</button>'
             if len(videos) > 6 else "")
     body = "".join(rows) if rows else '<div class="empty">No videos collected yet.</div>'
+    waiting_total = sum(open_by.values())
     return (
-        f'<section class="card" id="videos"><h2><span class="he">🎬</span>Videos'
-        f'<span class="cnt">{_fmt(len(videos))} videos &middot; {untagged} not '
-        f'linked to a product &middot; {len(videos) - transcripts} without their '
-        f'words saved</span></h2>{body}{more}</section>'
+        f'<section class="card" id="videos">'
+        f'<h2><span class="he">🎬</span>Videos, by how much each is holding'
+        f'<span class="cnt">{_fmt(waiting_total)} people waiting across '
+        f'{_fmt(len(videos))} videos</span></h2>'
+        f'<p class="note">Most waiting first. {untagged} are not linked to a '
+        f'product, so their questions belong to nothing, and '
+        f'{len(videos) - transcripts} have no transcript in the vault, so '
+        f'neither Suggest nor the bot can answer from what was said in them.</p>'
+        f'{body}{more}</section>'
     )
 
 
