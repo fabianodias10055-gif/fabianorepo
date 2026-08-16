@@ -2232,9 +2232,15 @@ ADMIN_TOKEN_MAX_AGE = 11 * 3600  # remote invalidates at 12h; stay under it
 _admin = {"token": "", "token_at": 0.0, "cache": None, "cache_at": 0.0}
 
 
-def _admin_call(path: str, token: str = "", payload: dict | None = None):
+def _admin_call(path: str, token: str = "", payload: dict | None = None,
+                method: str = ""):
     """One JSON request to the admin API: (http_status, parsed_or_None).
-    Status 0 means the request never got an HTTP answer (network)."""
+    Status 0 means the request never got an HTTP answer (network).
+
+    method overrides the verb inferred from payload, which only ever
+    produced GET or POST. Editing a link is a PUT with a body, and that
+    combination was unreachable before.
+    """
     # Cloudflare fronting locodev.dev returns 403 for the default
     # 'Python-urllib' User-Agent before the request ever reaches the app;
     # any browser-like UA passes. Verified 2026-08-13.
@@ -2247,7 +2253,7 @@ def _admin_call(path: str, token: str = "", payload: dict | None = None):
     req = urlrequest.Request(
         ADMIN_URL + path,
         data=json.dumps(payload).encode() if payload is not None else None,
-        method="POST" if payload is not None else "GET",
+        method=method or ("POST" if payload is not None else "GET"),
         headers=headers,
     )
     try:
@@ -2322,6 +2328,62 @@ def fetch_link_telemetry() -> dict:
         "countries": countries if isinstance(countries, list) else [],
         "fetched_at": int(now),
     })
+
+
+
+# Prefixes the shortener serves. Checked here so a typo becomes a message
+# instead of a link at a path that will never resolve.
+LINK_PREFIXES = ("p", "download", "docs", "free", "freebuild", "root")
+_SLUG_OK = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def link_action(action: str, prefix: str, slug: str, url: str) -> dict:
+    """Read one link's clicks, create a link, or repoint an existing one.
+
+    Deleting is deliberately absent: it takes the link and its click history
+    with it, and with no volume behind the bot's SQLite there is nothing to
+    restore from. The adminlocoILco panel still has it for the rare case.
+    """
+    token, err = _admin_token()
+    if err:
+        return {"ok": False, "error": err}
+
+    if action == "clicks":
+        st, data = _admin_call(f"/api/link/{prefix}/{slug}/clicks", token=token)
+        if st != 200 or not isinstance(data, dict):
+            return {"ok": False, "error": f"http-{st}" if st else "network"}
+        # The API answers with the most recent 500, so anything counted over
+        # this list is about the sample, never about the link's whole life.
+        return {"ok": True, "link": data.get("link") or {},
+                "clicks": data.get("clicks") or [], "sample": 500}
+
+    if prefix not in LINK_PREFIXES:
+        return {"ok": False, "error": f"prefix must be one of "
+                                      f"{', '.join(LINK_PREFIXES)}"}
+    if not _SLUG_OK.match(slug or ""):
+        return {"ok": False, "error": "slug: letters, digits, - and _ only"}
+    if not url.startswith(("http://", "https://")):
+        return {"ok": False, "error": "the destination must start with http"}
+
+    if action == "create":
+        st, data = _admin_call("/api/links", token=token,
+                               payload={"prefix": prefix, "slug": slug, "url": url})
+    elif action == "edit":
+        st, data = _admin_call(f"/api/link/{prefix}/{slug}", token=token,
+                               payload={"url": url}, method="PUT")
+    else:
+        return {"ok": False, "error": "unknown action"}
+
+    if st not in (200, 201):
+        # The bot's own message, when it sent one, beats a status number.
+        msg = (data or {}).get("error") if isinstance(data, dict) else None
+        return {"ok": False, "error": msg or (f"http-{st}" if st else "network")}
+
+    # The links list is cached for two minutes; after a write that cache is
+    # a lie, so it goes rather than showing the old destination.
+    _admin["cache"] = None
+    _admin["cache_at"] = 0.0
+    return {"ok": True, "link": data if isinstance(data, dict) else {}}
 
 
 # --------------------------------------------------------------------------
@@ -3666,6 +3728,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/rebuild":
             build(live=True)
             return self._send_json({"ok": True})
+
+        if self.path == "/link":
+            payload = self._json_body()
+            return self._send_json(link_action(
+                str(payload.get("action", "")),
+                str(payload.get("prefix", "")).strip(),
+                str(payload.get("slug", "")).strip(),
+                str(payload.get("url", "")).strip()))
 
         if self.path == "/export":
             payload = self._json_body()

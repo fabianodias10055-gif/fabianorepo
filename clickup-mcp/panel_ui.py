@@ -728,6 +728,26 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
   font-variant-numeric:tabular-nums; }
 
 
+
+/* ---- the short-link manager ---- */
+tr.lkrow { cursor:pointer; }
+tr.lkrow:hover .slug { color:var(--accent); }
+tr.lkdet { display:none; }
+tr.lkdet.open { display:table-row; }
+tr.lkdet > td { background:var(--surface2); padding:var(--s3) var(--s4); }
+.lnew, .ledit { display:flex; gap:var(--s2); align-items:center; flex-wrap:wrap;
+  margin:var(--s3) 0; }
+.ledit label { font-family:var(--mono); font-size:var(--t-2xs); color:var(--ink3);
+  text-transform:uppercase; letter-spacing:.06em; }
+.lnew select, .lnew input, .ledit input { font:inherit; font-size:var(--t-sm);
+  color:var(--ink); background:var(--surface); border:1px solid var(--line);
+  border-radius:var(--r-sm); padding:5px 9px; }
+.lnew .lns { width:150px; }
+.lnew .lnu, .ledit input { flex:1; min-width:230px; }
+.lfind { width:100%; font:inherit; font-size:var(--t-sm); color:var(--ink);
+  background:var(--surface); border:1px solid var(--line);
+  border-radius:var(--r-sm); padding:6px 10px; margin-bottom:var(--s2); }
+
 /* ---- the export form ---- */
 .expbox { display:flex; gap:var(--s3); align-items:center; flex-wrap:wrap;
   width:100%; padding:var(--s2) 0; }
@@ -3814,6 +3834,165 @@ chMountExpand();
 chSyncExpand();
 chDrawAll();
 
+
+/* ---- the short-link manager, brought into the panel ----
+   The read half already existed. This adds the two writes worth having
+   locally, creating a link and repointing one, plus the per-link drilldown.
+   Deleting stays in adminlocoILco on purpose: it takes the click history
+   with it and the bot's SQLite has nothing behind it to restore from.
+
+   Every call goes to the local /link route, which holds the admin secret
+   and the bearer token. The page never sees either. */
+var LT_PREFIXES = ["p", "download", "docs", "free", "freebuild", "root"];
+
+function ltPost(body) {
+  return fetch("/link", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Panel-Token": PANEL_TOKEN },
+    body: JSON.stringify(body)
+  }).then(function (r) { return r.json(); });
+}
+
+function ltBrowser(ua) {
+  if (!ua) return "unknown";
+  var has = function (t) { return ua.indexOf(t) >= 0; };
+  if (has("Edg/")) return "Edge";
+  if (has("OPR/")) return "Opera";
+  if (has("Firefox/")) return "Firefox";
+  if (has("Chrome/")) return "Chrome";
+  if (has("Safari/")) return "Safari";
+  var low = ua.toLowerCase();
+  if (low.indexOf("bot") >= 0 || low.indexOf("crawl") >= 0 ||
+      low.indexOf("spider") >= 0) return "bot";
+  return "other";
+}
+
+function ltTop(rows, pick) {
+  var c = {};
+  rows.forEach(function (r) {
+    var k = pick(r);
+    if (k) c[k] = (c[k] || 0) + 1;
+  });
+  var best = Object.keys(c).sort(function (a, b) { return c[b] - c[a]; })[0];
+  return best ? best + " (" + Math.round(c[best] * 100 / rows.length) + "%)" : "-";
+}
+
+/* One link opened: what its clicks say, and the field that repoints it. */
+function ltDetail(box, prefix, slug) {
+  box.innerHTML = '<div class="note">reading this link’s clicks…</div>';
+  ltPost({ action: "clicks", prefix: prefix, slug: slug }).then(function (r) {
+    if (!r.ok) {
+      box.innerHTML = '<div class="note">could not read it: ' + esc(r.error) + "</div>";
+      return;
+    }
+    var cl = r.clicks || [], link = r.link || {};
+    var uniq = {}, h = "";
+    cl.forEach(function (c) { if (c.ip_hash) uniq[c.ip_hash] = 1; });
+    var nuniq = Object.keys(uniq).length;
+    var capped = (link.total_clicks || 0) > cl.length;
+
+    h += '<div class="figstat" style="border-top:0;padding-top:0">'
+      + '<div><span class="k">clicks, all time</span><span class="v">'
+      + fmt(link.total_clicks || 0) + "</span></div>"
+      + '<div><span class="k">people, in this sample</span><span class="v">'
+      + fmt(nuniq) + "</span></div>"
+      + '<div><span class="k">top country</span><span class="v">'
+      + esc(ltTop(cl, function (c) { return c.country_code; })) + "</span></div>"
+      + '<div><span class="k">top browser</span><span class="v">'
+      + esc(ltTop(cl, function (c) { return ltBrowser(c.user_agent); })) + "</span></div>"
+      + '<div><span class="k">came from</span><span class="v">'
+      + esc(ltTop(cl, function (c) { return c.referrer || "direct"; })) + "</span></div>"
+      + "</div>";
+
+    h += '<p class="figwhy">Everything except the all-time count is measured '
+      + "over the " + fmt(cl.length) + " most recent clicks"
+      + (capped ? ", which is all the API returns per link. The rest of the "
+                + fmt(link.total_clicks) + " are not in this sample, so the "
+                + "share of people and countries is about recent traffic, not "
+                + "the link’s whole life." : ".") + "</p>";
+
+    h += '<div class="ledit"><label>Points at</label>'
+      + '<input type="url" class="lurl" value="' + esc(link.url || "") + '">'
+      + '<button class="btn tiny primary lsave">Save</button>'
+      + '<span class="note lmsg"></span></div>';
+
+    h += '<p class="lsub">Most recent clicks</p>';
+    if (!cl.length) h += '<div class="empty">none yet</div>';
+    cl.slice(0, 12).forEach(function (c) {
+      h += '<div class="lrow"><span>' + esc(c.country_code || "??") + " · "
+        + esc(ltBrowser(c.user_agent)) + " · " + esc(c.referrer || "direct")
+        + '</span><span class="n">' + rel(c.clicked_at) + "</span></div>";
+    });
+    box.innerHTML = h;
+    box.dataset.prefix = prefix;
+    box.dataset.slug = slug;
+  }).catch(function (e) {
+    box.innerHTML = '<div class="note">could not read it: ' + esc(e.message) + "</div>";
+  });
+}
+
+function ltComposer() {
+  return '<div class="lnew"><span class="figlab">new link</span>'
+    + '<select class="lnp" aria-label="Prefix">'
+    + LT_PREFIXES.map(function (p) { return '<option value="' + p + '">' + p + "</option>"; }).join("")
+    + '</select><input class="lns" placeholder="slug" aria-label="Slug">'
+    + '<input class="lnu" type="url" placeholder="https://where it should go" aria-label="Destination">'
+    + '<button class="btn tiny primary lncreate">Create</button>'
+    + '<span class="note lnmsg"></span></div>';
+}
+
+document.addEventListener("click", function (ev) {
+  var save = ev.target.closest(".lsave");
+  if (save) {
+    var box = save.closest(".ldet");
+    var url = $(".lurl", box).value.trim();
+    var msg = $(".lmsg", box);
+    msg.textContent = "saving…";
+    ltPost({ action: "edit", prefix: box.dataset.prefix, slug: box.dataset.slug, url: url })
+      .then(function (r) {
+        msg.textContent = r.ok ? "saved · the short link now points there"
+                               : "not saved: " + r.error;
+        if (r.ok) loadLinks();
+      });
+    return;
+  }
+  var mk = ev.target.closest(".lncreate");
+  if (mk) {
+    var wrap = mk.closest(".lnew");
+    var msg2 = $(".lnmsg", wrap);
+    msg2.textContent = "creating…";
+    ltPost({ action: "create", prefix: $(".lnp", wrap).value,
+             slug: $(".lns", wrap).value.trim(), url: $(".lnu", wrap).value.trim() })
+      .then(function (r) {
+        if (!r.ok) { msg2.textContent = "not created: " + r.error; return; }
+        msg2.textContent = "created";
+        $(".lns", wrap).value = "";
+        $(".lnu", wrap).value = "";
+        loadLinks();
+      });
+    return;
+  }
+  var row = ev.target.closest("tr.lkrow");
+  if (row && !ev.target.closest("button")) {
+    var det = row.nextElementSibling;
+    var open = det.classList.toggle("open");
+    row.setAttribute("aria-expanded", String(open));
+    if (open) ltDetail($(".ldet", det), row.dataset.prefix, row.dataset.slug);
+  }
+});
+
+/* Typing filters the whole list rather than the ten that used to show. */
+document.addEventListener("input", function (ev) {
+  if (!ev.target.matches(".lfind")) return;
+  var q = ev.target.value.toLowerCase();
+  $$("tr.lkrow").forEach(function (r) {
+    var hit = !q || r.dataset.find.indexOf(q) >= 0;
+    r.hidden = !hit;
+    if (!hit) r.nextElementSibling.classList.remove("open");
+    r.nextElementSibling.hidden = !hit;
+  });
+});
+
 /* ---- gaps and coverage drill into the question table ---- */
 function drillTo(sys) {
   var sel = $("#sysSel");
@@ -4030,25 +4209,32 @@ function renderLinks(d) {
       + '</div><div class="l">top country \\u00b7 ' + fmt(s.top_country.cnt) + " clicks</div></div>";
   h += '</div><div class="ltgrid"><div>';
   h += '<p class="lsub">Clicks per hour, last 24h</p>' + ltChart(s.hourly_chart || []);
-  h += '<p class="lsub">Top links</p><div class="scroll"><table><thead><tr>'
-    + "<th>Link</th><th>1h</th><th>7d</th><th>Total</th><th></th></tr></thead><tbody>";
   var links = d.links || [];
-  links.slice(0, 10).forEach(function (l) {
+  h += ltComposer();
+  h += '<p class="lsub">All links</p>'
+    + '<input class="lfind" placeholder="filter by slug or destination" aria-label="Filter links">'
+    + '<div class="scroll"><table><thead><tr>'
+    + "<th>Link</th><th>1h</th><th>7d</th><th>Total</th><th></th></tr></thead><tbody>";
+  links.forEach(function (l) {
     var host = "";
     try { host = new URL(l.url).host; } catch (e) {}
-    h += '<tr><td><span class="slug">/' + esc(l.prefix) + "/" + esc(l.slug)
-      + '</span><br><span class="host">' + esc(host) + '</span></td><td class="num">'
-      + fmt(l.clicks_1h) + '</td><td class="num">' + fmt(l.clicks_7d) + '</td><td class="num">'
-      + fmt(l.total_clicks) + '</td><td class="num"><button class="btn tiny" data-copy="'
-      + esc(shortUrl(l.prefix, l.slug)) + '">copy</button></td></tr>';
+    var find = (l.prefix + "/" + l.slug + " " + l.url).toLowerCase();
+    h += '<tr class="lkrow" tabindex="0" aria-expanded="false" data-prefix="'
+      + esc(l.prefix) + '" data-slug="' + esc(l.slug) + '" data-find="' + esc(find) + '">'
+      + '<td><span class="slug">/' + esc(l.prefix) + "/" + esc(l.slug)
+      + '</span><br><span class="host">' + esc(host) + "</span></td>"
+      + '<td class="num">' + fmt(l.clicks_1h) + "</td>"
+      + '<td class="num">' + fmt(l.clicks_7d) + "</td>"
+      + '<td class="num">' + fmt(l.total_clicks) + "</td>"
+      + '<td class="num"><button class="btn tiny" data-copy="'
+      + esc(shortUrl(l.prefix, l.slug)) + '">copy</button></td></tr>'
+      + '<tr class="lkdet"><td colspan="5"><div class="ldet"></div></td></tr>';
   });
   h += "</tbody>";
   var t1 = 0, t7 = 0, tt = 0;
   links.forEach(function (l) { t1 += l.clicks_1h || 0; t7 += l.clicks_7d || 0; tt += l.total_clicks || 0; });
   h += "<tfoot><tr><td>all " + fmt(links.length) + " links</td><td>" + fmt(t1)
     + "</td><td>" + fmt(t7) + "</td><td>" + fmt(tt) + "</td><td></td></tr></tfoot></table></div>";
-  if (links.length > 10)
-    h += '<div class="empty">' + fmt(links.length - 10) + " more links in the admin panel</div>";
   h += "</div><div>";
   h += '<p class="lsub">Recent clicks</p>';
   var rc = (s.recent_clicks || []).slice(0, 8);
