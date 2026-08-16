@@ -2910,8 +2910,20 @@ def patreon_summary() -> dict:
         return f"{y:04d}-{m:02d}"
 
     now = datetime.now()
-    last12 = [month_shift(now, i) for i in range(11, -1, -1)]
-    joins = {mo: {"m": mo, "total": 0, "still": 0} for mo in last12}
+    # Every month from the first pledge to now, not just twelve: the range
+    # control on the chart needs history to range over, and the window is
+    # chosen in the browser. month_shift stays, sales_pipeline uses it.
+    _starts = sorted(mo for mo in ((m.get("since") or "")[:7] for m in members)
+                     if mo)
+    _all_months = []
+    if _starts:
+        y, mth = int(_starts[0][:4]), int(_starts[0][5:7])
+        while f"{y:04d}-{mth:02d}" <= now.strftime("%Y-%m"):
+            _all_months.append(f"{y:04d}-{mth:02d}")
+            mth += 1
+            if mth == 13:
+                y, mth = y + 1, 1
+    joins = {mo: {"m": mo, "total": 0, "still": 0} for mo in _all_months}
     for m in members:
         mo = (m.get("since") or "")[:7]
         if mo in joins:

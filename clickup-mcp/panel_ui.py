@@ -662,8 +662,9 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
   color:var(--ink2); margin:2px 0; }
 .chlegend i { display:inline-block; width:10px; height:10px; border-radius:3px;
   margin-right:5px; vertical-align:-1px; }
-.chx { font-family:var(--mono); font-size:9px; fill:var(--ink3); }
-.chend { font-family:var(--mono); font-size:10px; font-weight:600; fill:var(--ink); }
+.chx { font-family:var(--mono); font-size:11px; fill:var(--ink3); }
+.chend { font-family:var(--mono); font-size:12px; font-weight:600; fill:var(--ink); }
+.chnum { font-family:var(--mono); font-size:11px; font-weight:600; fill:var(--ink2); }
 .chgrid { stroke:var(--line2); stroke-width:1; }
 .chaxis { stroke:var(--line); stroke-width:1; }
 .chbar rect { transition:opacity var(--dur) var(--ease); }
@@ -673,6 +674,46 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .charea { fill:var(--ch-main); opacity:.13; }
 .chhit { fill:transparent; }
 .chhit:hover { fill:var(--ch-main); opacity:.25; }
+
+
+/* ---- chart controls, and the card that grows to hold them ---- */
+.figbar { display:flex; gap:var(--s3); align-items:center; flex-wrap:wrap;
+  margin:var(--s3) 0 2px; }
+.seg { display:inline-flex; border:1px solid var(--line); border-radius:var(--r-sm);
+  overflow:hidden; }
+.seg button { border:0; background:transparent; color:var(--ink3);
+  font:inherit; font-size:var(--t-2xs); font-family:var(--mono); padding:3px 7px;
+  cursor:pointer; border-right:1px solid var(--line); }
+.seg button:last-child { border-right:0; }
+.seg button[aria-pressed="true"] { background:var(--accent); color:#fff; }
+.seg button:hover:not([aria-pressed="true"]) { background:var(--surface2);
+  color:var(--ink); }
+.figlab { font-family:var(--mono); font-size:var(--t-2xs); color:var(--ink3);
+  text-transform:uppercase; letter-spacing:.06em; }
+.figstat { display:flex; gap:var(--s4); flex-wrap:wrap; margin-top:var(--s3);
+  padding-top:var(--s3); border-top:1px solid var(--line2); }
+.figstat div { min-width:0; }
+.figstat .k { display:block; font-size:var(--t-2xs); color:var(--ink3);
+  text-transform:uppercase; letter-spacing:.06em; }
+.figstat .v { font-family:var(--mono); font-size:var(--t-md); color:var(--ink);
+  font-weight:600; }
+.figstat .v.warn { color:var(--warn); }
+.figwhy { font-size:var(--t-xs); color:var(--ink3); margin:var(--s3) 0 0;
+  line-height:1.45; }
+/* The projection is the same series continued, so it keeps the same hue and
+   is told apart by the dash and the band, never by a colour of its own. */
+.chfc { fill:none; stroke:var(--ch-main); stroke-width:2; stroke-dasharray:5 4;
+  stroke-linecap:round; }
+.chband { fill:var(--ch-main); opacity:.12; }
+.chnow { stroke:var(--line); stroke-width:1; stroke-dasharray:2 3; }
+.chlegend i.dash { background:none; border-top:2px dashed var(--ch-main);
+  height:0; border-radius:0; width:14px; vertical-align:2px; }
+.expand { margin-left:auto; border:1px solid var(--line); background:transparent;
+  color:var(--ink3); border-radius:var(--r-sm); font:inherit;
+  font-size:var(--t-2xs); padding:2px 8px; cursor:pointer; }
+.expand:hover { color:var(--ink); border-color:var(--ink3); }
+.card.wide { grid-column:1 / -1; }
+.card h2 { display:flex; align-items:center; }
 
 /* ---- a source on Admin opens into its details ---- */
 .srow[data-src] { cursor:pointer; }
@@ -685,6 +726,7 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .srcdet li { padding:2px 0; color:var(--ink2); }
 .srcdet li b { color:var(--ink); font-family:var(--mono);
   font-variant-numeric:tabular-nums; }
+
 
 /* ---- the export form ---- */
 .expbox { display:flex; gap:var(--s3); align-items:center; flex-wrap:wrap;
@@ -720,7 +762,8 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
   font-size:var(--t-sm); }
 .ovals { text-align:right; font-size:var(--t-xs); color:var(--ink2);
   white-space:nowrap; }
-.ovals b { font-family:var(--mono); font-size:var(--t-base); color:var(--ink);
+.ovals b { font-family:var(--mono); font-size:var(--t-xl); color:var(--ink);
+  letter-spacing:-.02em;
   font-variant-numeric:tabular-nums; }
 .obig { padding:var(--s2) 0 var(--s3); }
 .obig b { display:block; font-family:var(--mono); font-size:var(--t-3xl);
@@ -1401,6 +1444,10 @@ var PATRONS = __PATRONS__;
 var LOOKUPS = __LOOKUPS__;
 /* what each Admin source shows when opened */
 var SRCDET = __SRCDET__;
+/* Full monthly history for every chart. The browser slices the window,
+   fits the trend and extends the projection, so the whole series has to
+   be here rather than the twelve months a server-drawn chart would send. */
+var CHARTS = __CHARTS__;
 var BRANDS = __BRANDS__;
 /* What you have written about people, and the statuses you can set. The
    ones the facts already state are not offered: they would go stale the
@@ -1496,6 +1543,12 @@ function setView(name) {
     a.classList.toggle("active", a.getAttribute("href") === "#" + name);
   });
   ss("lp-view", name);
+  /* A hidden figure measures zero wide, so a chart drawn while its screen
+     was closed would come out empty. Draw on arrival instead. The guard is
+     on the data, not the function: setView runs once before the chart
+     engine's own statements have, and a declaration is hoisted while the
+     specs it reads are not. */
+  if (typeof CHSPEC !== "undefined") chDrawAll();
 }
 /* Anything that acts on another screen has to open it first. Edit lives on
    Answers and drives the Questions table; before this it filtered, opened
@@ -3275,6 +3328,7 @@ document.addEventListener("click", function (ev) {
   row.after(box);
 });
 
+
 /* ---- export what the filters describe ----
    The product list is cloned from the filter select, so the two can never
    disagree about which systems exist. The download goes through fetch with
@@ -3334,6 +3388,385 @@ document.addEventListener("click", function (ev) {
    The projection is the same series continued: same hue, told apart by a
    dashed stroke, a shaded range and its own legend chip, never by a colour
    of its own. That keeps the palette at the three validated series colours. */
+var CHSPEC = {
+  pledges: {
+    kind: "stack", keys: ["still", "left"], vars: ["main", "mute"],
+    names: ["still paying today", "since left"], unit: "pledges",
+    tip: function (r) {
+      return r.m + ": " + fmt(r.still + r.left) + " started, " + fmt(r.still) +
+             " still paying today";
+    },
+    why: "Bars are pledges started that month, split by who still pays. " +
+         "Not revenue, and not who left that month: nothing records the day " +
+         "a leaver left."
+  },
+  cohort: {
+    kind: "area", keys: ["cum"], vars: ["main"],
+    names: ["patrons paying today"], unit: "patrons", cumulative: true,
+    tip: function (r) {
+      return r.m + ": " + fmt(r.cum) + " of today's patrons had joined by then";
+    },
+    why: "Only the people paying right now, each placed in the month they " +
+         "joined. It cannot show how large the base was back then, because " +
+         "everyone who has since left is missing from it."
+  },
+  questions: {
+    kind: "stack", keys: ["answered", "waiting"], vars: ["mute", "warn"],
+    names: ["answered by now", "still waiting"], unit: "questions",
+    tip: function (r) {
+      return r.m + ": " + fmt(r.answered + r.waiting) + " asked, " +
+             fmt(r.waiting) + " still waiting";
+    },
+    why: "Counted by the month each question was asked. 'Answered' is its " +
+         "state today, not the month an answer was written, which nothing " +
+         "records."
+  }
+};
+
+var CH_RANGES = [[6, "6m"], [12, "12m"], [24, "24m"], [9999, "all"]];
+var CH_FC = [[0, "off"], [3, "3m"], [6, "6m"]];
+var chState = {};
+
+function chLoad() {
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem("panel.charts") || "{}"); }
+  catch (e) { saved = {}; }
+  Object.keys(CHSPEC).forEach(function (k) {
+    var s = saved[k] || {};
+    chState[k] = { range: s.range || 12, trend: !!s.trend, fc: s.fc || 0 };
+  });
+}
+
+function chSave() {
+  try { localStorage.setItem("panel.charts", JSON.stringify(chState)); }
+  catch (e) { /* private mode: the controls still work, they just forget */ }
+}
+
+/* Ordinary least squares over the visible window, plus the spread of what
+   it failed to explain. That spread is the honest half of a projection:
+   without it a straight line reads as a promise. */
+function chFit(ys) {
+  var n = ys.length, i, sx = 0, sy = 0, sxx = 0, sxy = 0;
+  if (n < 4) return null;
+  for (i = 0; i < n; i++) { sx += i; sy += ys[i]; sxx += i * i; sxy += i * ys[i]; }
+  var den = n * sxx - sx * sx;
+  if (!den) return null;
+  var b = (n * sxy - sx * sy) / den, a = (sy - b * sx) / n, ss = 0;
+  for (i = 0; i < n; i++) { var e = ys[i] - (a + b * i); ss += e * e; }
+  return { a: a, b: b, sd: Math.sqrt(ss / Math.max(1, n - 2)), n: n };
+}
+
+function chNextMonth(m, k) {
+  var y = parseInt(m.slice(0, 4), 10), mo = parseInt(m.slice(5, 7), 10) + k;
+  y += Math.floor((mo - 1) / 12);
+  mo = ((mo - 1) % 12 + 12) % 12 + 1;
+  return String(y) + "-" + (mo < 10 ? "0" : "") + mo;
+}
+
+/* For a cumulative series the increments are what actually vary, so the fit
+   runs on those and the result is added back up. Fitting the running total
+   itself would model an accounting artefact rather than the arrivals. */
+function chProject(win, spec, months) {
+  if (!months) return null;
+  var totals = win.map(function (r) {
+    return spec.keys.reduce(function (t, k) { return t + (r[k] || 0); }, 0);
+  });
+  var base = spec.cumulative
+    ? totals.slice(1).map(function (v, i) { return v - totals[i]; })
+    : totals;
+  var fit = chFit(base);
+  if (!fit) return null;
+  var out = [], last = totals[totals.length - 1], run = last, i;
+  for (i = 1; i <= months; i++) {
+    var step = fit.a + fit.b * (base.length - 1 + i);
+    // 1.28 standard deviations is an 80% band. Wider would be more nearly
+    // certain and too vague to act on.
+    var half = 1.28 * fit.sd * Math.sqrt(i);
+    var mid, lo, hi;
+    if (spec.cumulative) {
+      run += Math.max(0, step);
+      mid = run;
+      lo = Math.max(last, run - half * i);
+      hi = run + half * i;
+    } else {
+      mid = Math.max(0, step);
+      lo = Math.max(0, mid - half);
+      hi = mid + half;
+    }
+    out.push({ m: chNextMonth(win[win.length - 1].m, i), mid: mid, lo: lo, hi: hi });
+  }
+  return { points: out, fit: fit, from: last };
+}
+
+function chSeg(name, kind, opts, cur) {
+  return '<span class="seg" role="group">' + opts.map(function (o) {
+    return '<button type="button" data-ch="' + name + '" data-set="' + kind +
+      '" data-val="' + o[0] + '" aria-pressed="' + (o[0] === cur) + '">' +
+      esc(o[1]) + "</button>";
+  }).join("") + "</span>";
+}
+
+function chStats(spec, win, proj) {
+  var totals = win.map(function (r) {
+    return spec.keys.reduce(function (t, k) { return t + (r[k] || 0); }, 0);
+  });
+  var base = spec.cumulative
+    ? totals.slice(1).map(function (v, i) { return v - totals[i]; })
+    : totals;
+  var fit = chFit(base), out = [];
+
+  function cell(k, v, warn) {
+    return '<div><span class="k">' + esc(k) + '</span><span class="v' +
+      (warn ? " warn" : "") + '">' + v + "</span></div>";
+  }
+
+  if (fit) {
+    var per = fit.b, dir = per >= 0.05 ? "rising" : per <= -0.05 ? "falling" : "flat";
+    out.push(cell("Trend", (per >= 0 ? "+" : "") + per.toFixed(1) + "/mo",
+                  per < -0.05));
+    out.push(cell("Direction", dir, dir === "falling"));
+  }
+  if (proj) {
+    var p = proj.points[proj.points.length - 1];
+    out.push(cell("Projected " + p.m,
+                  fmt(Math.round(p.mid)) + " <small>(" +
+                  fmt(Math.round(p.lo)) + " to " + fmt(Math.round(p.hi)) + ")</small>"));
+  }
+  if (spec.keys.length > 1) {
+    var a = 0, b = 0;
+    win.forEach(function (r) { a += r[spec.keys[0]] || 0; b += r[spec.keys[1]] || 0; });
+    var pct = a + b ? Math.round(a * 100 / (a + b)) : 0;
+    out.push(cell(esc(spec.names[0]), pct + "% <small>of " + fmt(a + b) + "</small>",
+                  spec.keys[0] === "still" && pct < 25));
+  }
+  return out.length ? '<div class="figstat">' + out.join("") + "</div>" : "";
+}
+
+function chDraw(fig) {
+  var name = fig.dataset.chart, spec = CHSPEC[name], rows = CHARTS[name] || [];
+  if (!spec) return;
+  var st = chState[name] || (chState[name] = { range: 12, trend: false, fc: 0 });
+  var bar = '<div class="figbar"><span class="figlab">show</span>' +
+    chSeg(name, "range", CH_RANGES, st.range) +
+    '<span class="figlab">trend</span>' +
+    chSeg(name, "trend", [[0, "off"], [1, "on"]], st.trend ? 1 : 0) +
+    '<span class="figlab">project</span>' + chSeg(name, "fc", CH_FC, st.fc) +
+    "</div>";
+
+  if (rows.length < 2) {
+    fig.innerHTML = bar + '<p class="note">Not enough months yet to draw.</p>';
+    return;
+  }
+  var win = st.range >= 999 ? rows.slice() : rows.slice(-st.range);
+  var proj = chProject(win, spec, st.fc);
+  var wide = !!fig.closest(".card") && fig.closest(".card").classList.contains("wide");
+
+  // The viewBox maps 1:1 to pixels so the type stays at its real size when
+  // the card grows; only the plot gains room.
+  var W = Math.max(300, Math.round(fig.clientWidth || 520));
+  var H = wide ? 300 : 156;
+  var L = 40, R = spec.kind === "area" ? 54 : 10, T = 14, B = 22;
+  var pw = W - L - R, ph = H - T - B;
+  var n = win.length, fn = proj ? proj.points.length : 0, slots = n + fn;
+
+  var peak = 0;
+  win.forEach(function (r) {
+    var t = spec.keys.reduce(function (a, k) { return a + (r[k] || 0); }, 0);
+    if (t > peak) peak = t;
+  });
+  if (proj) proj.points.forEach(function (p) { if (p.hi > peak) peak = p.hi; });
+  peak = peak || 1;
+
+  function yOf(v) { return T + ph - ph * v / peak; }
+  var step = pw / slots;
+
+  var svg = ['<svg viewBox="0 0 ' + W + " " + H + '" class="chart" role="img" ' +
+             'aria-label="' + esc(spec.names.join(" and ")) + '">'];
+  // Two gridlines only: the peak and the middle. More would compete with
+  // the marks for attention and this chart is read for shape, not audit.
+  [peak, peak / 2].forEach(function (v) {
+    svg.push('<line x1="' + L + '" y1="' + yOf(v).toFixed(1) + '" x2="' + (W - R) +
+             '" y2="' + yOf(v).toFixed(1) + '" class="chgrid"/>');
+    svg.push('<text x="' + (L - 6) + '" y="' + (yOf(v) + 4).toFixed(1) +
+             '" class="chx" text-anchor="end">' + fmt(Math.round(v)) + "</text>");
+  });
+  svg.push('<line x1="' + L + '" y1="' + (T + ph) + '" x2="' + (W - R) +
+           '" y2="' + (T + ph) + '" class="chaxis"/>');
+
+  if (spec.kind === "stack") {
+    var bw = Math.max(2, step - (step > 26 ? 7 : 3));
+    win.forEach(function (r, i) {
+      var x = L + i * step + (step - bw) / 2, acc = 0;
+      var g = ['<g class="chbar"><title>' + esc(spec.tip(r)) + "</title>"];
+      spec.keys.forEach(function (k, ki) {
+        var v = r[k] || 0;
+        if (v <= 0) return;
+        var h = ph * v / peak, y = T + ph - acc - h;
+        // 2px of surface between segments, so the two series stay apart
+        // where their colours cannot: that is what lets one of them be grey.
+        g.push('<rect x="' + x.toFixed(1) + '" y="' + (y - (ki ? 2 : 0)).toFixed(1) +
+               '" width="' + bw.toFixed(1) + '" height="' + Math.max(1, h).toFixed(1) +
+               '" rx="2" fill="var(--ch-' + spec.vars[ki] + ')"/>');
+        acc += h + (ki ? 0 : 2);
+      });
+      svg.push(g.join("") + "</g>");
+    });
+  } else {
+    var pts = win.map(function (r, i) {
+      return [L + i * step + step / 2, yOf(r[spec.keys[0]] || 0)];
+    });
+    var line = pts.map(function (p) { return p[0].toFixed(1) + "," + p[1].toFixed(1); }).join(" ");
+    svg.push('<polygon points="' + L + "," + (T + ph) + " " + line + " " +
+             pts[pts.length - 1][0].toFixed(1) + "," + (T + ph) + '" class="charea"/>');
+    svg.push('<polyline points="' + line + '" class="chline"/>');
+    var lp = pts[pts.length - 1];
+    svg.push('<circle cx="' + lp[0].toFixed(1) + '" cy="' + lp[1].toFixed(1) +
+             '" r="3.5" fill="var(--ch-main)"/>');
+    if (!proj) {
+      svg.push('<text x="' + (lp[0] + 7).toFixed(1) + '" y="' + (lp[1] + 4).toFixed(1) +
+               '" class="chend">' + fmt(win[n - 1][spec.keys[0]] || 0) + "</text>");
+    }
+    win.forEach(function (r, i) {
+      svg.push('<circle cx="' + pts[i][0].toFixed(1) + '" cy="' + pts[i][1].toFixed(1) +
+               '" r="9" class="chhit"><title>' + esc(spec.tip(r)) + "</title></circle>");
+    });
+  }
+
+  if (st.trend) {
+    var totals = win.map(function (r) {
+      return spec.keys.reduce(function (a, k) { return a + (r[k] || 0); }, 0);
+    });
+    var tf = chFit(totals);
+    if (tf) {
+      var x1 = L + step / 2, x2 = L + (n - 1) * step + step / 2;
+      svg.push('<line x1="' + x1.toFixed(1) + '" y1="' + yOf(Math.max(0, tf.a)).toFixed(1) +
+               '" x2="' + x2.toFixed(1) + '" y2="' +
+               yOf(Math.max(0, tf.a + tf.b * (n - 1))).toFixed(1) +
+               '" class="chfc"><title>straight-line trend over the ' + n +
+               ' months shown</title></line>');
+    }
+  }
+
+  if (proj) {
+    var fx = function (i) { return L + (n + i) * step + step / 2; };
+    var startX = L + (n - 1) * step + step / 2;
+    var startY = yOf(proj.from);
+    var up = [startX.toFixed(1) + "," + startY.toFixed(1)];
+    var dn = [];
+    proj.points.forEach(function (p, i) {
+      up.push(fx(i).toFixed(1) + "," + yOf(p.hi).toFixed(1));
+      dn.unshift(fx(i).toFixed(1) + "," + yOf(p.lo).toFixed(1));
+    });
+    svg.push('<polygon points="' + up.concat(dn).join(" ") + '" class="chband"/>');
+    var mid = [startX.toFixed(1) + "," + startY.toFixed(1)];
+    proj.points.forEach(function (p, i) {
+      mid.push(fx(i).toFixed(1) + "," + yOf(p.mid).toFixed(1));
+    });
+    svg.push('<polyline points="' + mid.join(" ") + '" class="chfc"/>');
+    svg.push('<line x1="' + ((startX + fx(0)) / 2).toFixed(1) + '" y1="' + T +
+             '" x2="' + ((startX + fx(0)) / 2).toFixed(1) + '" y2="' + (T + ph) +
+             '" class="chnow"/>');
+    proj.points.forEach(function (p, i) {
+      svg.push('<circle cx="' + fx(i).toFixed(1) + '" cy="' + yOf(p.mid).toFixed(1) +
+               '" r="9" class="chhit"><title>' + esc(p.m + ": projected " +
+               fmt(Math.round(p.mid)) + " " + spec.unit + ", likely between " +
+               fmt(Math.round(p.lo)) + " and " + fmt(Math.round(p.hi))) +
+               "</title></circle>");
+    });
+    var lastP = proj.points[fn - 1];
+    svg.push('<text x="' + Math.min(W - 2, fx(fn - 1) + 6).toFixed(1) + '" y="' +
+             (yOf(lastP.mid) + 4).toFixed(1) + '" class="chend" text-anchor="' +
+             (fn ? "end" : "start") + '">' + fmt(Math.round(lastP.mid)) + "</text>");
+  }
+
+  var every = Math.max(1, Math.ceil(slots * 46 / pw));
+  win.concat(proj ? proj.points : []).forEach(function (r, i) {
+    if ((slots - 1 - i) % every) return;
+    svg.push('<text x="' + (L + i * step + step / 2).toFixed(1) + '" y="' + (H - 6) +
+             '" class="chx" text-anchor="middle">' + esc(r.m.slice(2)) + "</text>");
+  });
+  svg.push("</svg>");
+
+  var chips = spec.names.map(function (nm, i) {
+    return '<span><i style="background:var(--ch-' + spec.vars[i] + ')"></i>' +
+      esc(nm) + "</span>";
+  });
+  if (proj) chips.push('<span><i class="dash"></i>projected, 80% range shaded</span>');
+  var legend = spec.names.length > 1 || proj
+    ? '<div class="chlegend">' + chips.join("") + "</div>" : "";
+
+  fig.innerHTML = bar + legend + svg.join("") + chStats(spec, win, proj) +
+    '<p class="figwhy">' + esc(spec.why) +
+    (proj ? " The projection is a straight line through the months shown, " +
+            "with the shaded range covering how far past months missed that " +
+            "line. It is arithmetic, not a forecast of what people will do." : "") +
+    "</p>";
+}
+
+function chDrawAll() { $$(".fig").forEach(chDraw); }
+
+/* Cards grow on demand. A card holding a chart is the one that most wants
+   the room, but the button goes on every card in the dashboard grids: the
+   right-hand column often ends early and the space is there to be used. */
+function chMountExpand() {
+  $$(".grid2 > .card").forEach(function (card) {
+    var h = card.querySelector("h2");
+    if (!h || h.querySelector(".expand")) return;
+    var key = (h.textContent || "").trim();
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "expand";
+    b.dataset.card = key;
+    card.dataset.card = key;
+    var on = false;
+    try { on = (JSON.parse(localStorage.getItem("panel.wide") || "[]") || [])
+                 .indexOf(key) >= 0; }
+    catch (e) { on = false; }
+    card.classList.toggle("wide", on);
+    b.setAttribute("aria-expanded", String(on));
+    b.textContent = on ? "shrink" : "expand";
+    h.appendChild(b);
+  });
+}
+
+function chWideSave() {
+  try {
+    localStorage.setItem("panel.wide", JSON.stringify(
+      $$(".card.wide").map(function (c) { return c.dataset.card; })));
+  } catch (e) { /* forgetting the layout is survivable */ }
+}
+
+document.addEventListener("click", function (ev) {
+  var seg = ev.target.closest(".seg button[data-ch]");
+  if (seg) {
+    var st = chState[seg.dataset.ch];
+    var v = parseInt(seg.dataset.val, 10);
+    if (seg.dataset.set === "trend") st.trend = !!v; else st[seg.dataset.set] = v;
+    chSave();
+    chDraw($(".fig[data-chart='" + seg.dataset.ch + "']"));
+    return;
+  }
+  var ex = ev.target.closest(".expand");
+  if (ex) {
+    ev.stopPropagation();
+    var card = ex.closest(".card");
+    var on = card.classList.toggle("wide");
+    ex.setAttribute("aria-expanded", String(on));
+    ex.textContent = on ? "shrink" : "expand";
+    chWideSave();
+    $$(".fig", card).forEach(chDraw);
+  }
+});
+
+var chTimer;
+addEventListener("resize", function () {
+  clearTimeout(chTimer);
+  chTimer = setTimeout(chDrawAll, 180);
+});
+
+chLoad();
+chMountExpand();
+chDrawAll();
 
 /* ---- gaps and coverage drill into the question table ---- */
 function drillTo(sys) {
@@ -3909,93 +4342,49 @@ def _sales_card(d: dict) -> str:
     )
 
 
-def _chart_legend(items: list) -> str:
-    """Colour chips with names, above every two-series chart.
 
-    Identity never rides on colour alone: the grey series in these charts is
-    deliberately grey, so the legend and the per-bar tooltips are what name
-    it, and they are not optional.
+def _chart_payload(d: dict) -> dict:
+    """Every chart's full monthly history, for the browser to window.
+
+    Questions are counted by the month they were asked and split by their
+    state today, which is the honest reading: nothing records the day an
+    answer was written, so this is not "answered that month".
     """
-    return ('<div class="chlegend">'
-            + "".join(f'<span><i style="background:var(--ch-{var})"></i>'
-                      f'{escape(label)}</span>' for var, label in items)
-            + "</div>")
+    pat = d.get("patreon") or {}
+    joins = pat.get("joins") or []
+    qm: dict[str, dict] = {}
+    for q in d.get("questions") or []:
+        mo = (q.get("date") or "")[:7]
+        if len(mo) != 7:
+            continue
+        row = qm.setdefault(mo, {"m": mo, "answered": 0, "waiting": 0})
+        row["answered" if q["status"] == "answered" else "waiting"] += 1
+    months = sorted(qm)
+    if months:  # months with no question at all must still occupy the axis
+        y, mth = int(months[0][:4]), int(months[0][5:7])
+        while f"{y:04d}-{mth:02d}" <= months[-1]:
+            qm.setdefault(f"{y:04d}-{mth:02d}",
+                          {"m": f"{y:04d}-{mth:02d}", "answered": 0, "waiting": 0})
+            mth += 1
+            if mth == 13:
+                y, mth = y + 1, 1
+    return {
+        "pledges": [{"m": r["m"], "still": r["still"],
+                     "left": r["total"] - r["still"]} for r in joins],
+        "cohort": pat.get("cohort") or [],
+        "questions": [qm[k] for k in sorted(qm)],
+    }
 
 
-def _stack_chart(rows: list, bottom: str, top: str, b_var: str, t_var: str,
-                 tip: str) -> str:
-    """Twelve months as stacked bars, base series anchored to the baseline.
+def _fig(name: str, title: str) -> str:
+    """The shell a chart is drawn into, with its controls.
 
-    Plain SVG on the page's own tokens, so it follows the theme like every
-    other element. The 2px gap between segments is the surface showing
-    through, which keeps the two series apart even where their colours
-    cannot (that is what lets the context series be grey).
+    Empty on purpose: the marks, the axis, the trend and the projection are
+    all built in the browser, because every control here changes geometry.
     """
-    if not rows:
-        return ""
-    W, H, PAD = 560, 132, 16
-    peak = max((r[bottom] + r[top] for r in rows), default=1) or 1
-    n = len(rows)
-    step = (W - PAD) / n
-    bw = step - 6
-    bars = []
-    for i, r in enumerate(rows):
-        x = PAD + i * step + 3
-        hb = (H - 30) * r[bottom] / peak
-        ht = (H - 30) * r[top] / peak
-        yb = H - 18 - hb
-        yt = yb - (2 if ht else 0) - ht
-        title = tip.format(**r, both=r[bottom] + r[top])
-        bars.append(
-            f'<g class="chbar"><title>{escape(title)}</title>'
-            + (f'<rect x="{x:.1f}" y="{yt:.1f}" width="{bw:.1f}" height="{ht:.1f}" '
-               f'rx="2" fill="var(--ch-{t_var})"/>' if ht > 0.5 else "")
-            + (f'<rect x="{x:.1f}" y="{yb:.1f}" width="{bw:.1f}" height="{hb:.1f}" '
-               f'rx="2" fill="var(--ch-{b_var})"/>' if hb > 0.5 else "")
-            + "</g>")
-        if i % 2 == (n - 1) % 2:
-            bars.append(f'<text x="{x + bw / 2:.1f}" y="{H - 4}" class="chx">'
-                        f'{escape(r["m"][2:])}</text>')
-    grid_y = H - 18 - (H - 30)
-    return (
-        f'<svg viewBox="0 0 {W} {H}" class="chart" role="img">'
-        f'<line x1="{PAD}" y1="{grid_y}" x2="{W}" y2="{grid_y}" class="chgrid"/>'
-        f'<text x="{PAD}" y="{grid_y - 4}" class="chx">{_fmt(peak)}</text>'
-        f'<line x1="{PAD}" y1="{H - 18}" x2="{W}" y2="{H - 18}" class="chaxis"/>'
-        + "".join(bars) + "</svg>")
+    return (f'<p class="chtitle">{escape(title)}</p>'
+            f'<div class="fig" data-chart="{escape(name, quote=True)}"></div>')
 
-
-def _area_chart(points: list, key: str, label_last: str) -> str:
-    """One series over time, area under it, endpoint named.
-
-    A single series carries no legend: the card's own heading names it.
-    """
-    if len(points) < 2:
-        return ""
-    W, H, PAD = 560, 110, 16
-    peak = max(p[key] for p in points) or 1
-    n = len(points)
-
-    def xy(i, v):
-        return (PAD + i * (W - PAD - 46) / (n - 1), H - 16 - (H - 30) * v / peak)
-
-    coords = [xy(i, p[key]) for i, p in enumerate(points)]
-    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
-    lx, ly = coords[-1]
-    hover = "".join(
-        f'<circle cx="{x:.1f}" cy="{y:.1f}" r="9" class="chhit">'
-        f'<title>{escape(p["m"])}: {_fmt(p[key])}</title></circle>'
-        for (x, y), p in zip(coords, points))
-    return (
-        f'<svg viewBox="0 0 {W} {H}" class="chart" role="img">'
-        f'<polygon points="{PAD},{H - 16} {line} {lx:.1f},{H - 16}" class="charea"/>'
-        f'<polyline points="{line}" class="chline"/>'
-        f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="3.5" fill="var(--ch-main)"/>'
-        f'<text x="{lx + 7:.1f}" y="{ly + 4:.1f}" class="chend">{escape(label_last)}</text>'
-        f'<text x="{PAD}" y="{H - 4}" class="chx">{escape(points[0]["m"])}</text>'
-        f'<text x="{lx:.1f}" y="{H - 4}" class="chx" text-anchor="end">'
-        f'{escape(points[-1]["m"])}</text>'
-        + hover + "</svg>")
 
 
 def _business_screen(d: dict) -> str:
@@ -4012,26 +4401,6 @@ def _business_screen(d: dict) -> str:
         return ""
     yt = d.get("youtube") or {}
     people = d["people"]
-
-    # Twelve months of questions. "Answered" is their state today, which is
-    # the honest reading: nothing records the day an answer was written.
-    from datetime import datetime as _dt
-    _now = _dt.now()
-    _mo12 = []
-    y, mth = _now.year, _now.month
-    for _ in range(12):
-        _mo12.append(f"{y:04d}-{mth:02d}")
-        mth -= 1
-        if mth == 0:
-            y, mth = y - 1, 12
-    _mo12.reverse()
-    qmonths = [{"m": mo, "answered": 0, "waiting": 0} for mo in _mo12]
-    _qidx = {mo: row for mo, row in zip(_mo12, qmonths)}
-    for q in d["questions"]:
-        row = _qidx.get((q.get("date") or "")[:7])
-        if row is None:
-            continue
-        row["answered" if q["status"] == "answered" else "waiting"] += 1
 
     def line(label, value, sub=""):
         return (f'<div class="orow"><span class="olabel">{escape(label)}</span>'
@@ -4068,16 +4437,8 @@ def _business_screen(d: dict) -> str:
         + line("Stopped over the years", _fmt(pat.get("stopped", 0)),
                f'US$ {pat.get("stopped_lifetime_cents", 0) / 100:,.0f} earned '
                f'while they stayed')
-        + '<p class="chtitle">Pledges started, last 12 months</p>'
-        + _chart_legend([("main", "still paying today"),
-                         ("mute", "since left")])
-        + _stack_chart([{**r, "left": r["total"] - r["still"]}
-                        for r in (pat.get("joins") or [])], "still",
-                       "left", "main", "mute",
-                       "{m}: {both} started, {still} still paying")
-        + '<p class="chtitle">When today\'s patrons joined</p>'
-        + _area_chart(pat.get("cohort") or [], "cum",
-                      _fmt((pat.get("cohort") or [{}])[-1].get("cum", 0)))
+        + _fig("pledges", "Pledges started each month")
+        + _fig("cohort", "When today\'s patrons joined")
         + "</section>")
 
     # Reach, and how much of it pays
@@ -4107,10 +4468,7 @@ def _business_screen(d: dict) -> str:
                "they come first in Customers")
         + line("You have answered", f'{d["answer_rate"]}%',
                "of everything ever asked")
-        + '<p class="chtitle">Questions per month, and what is still waiting</p>'
-        + _chart_legend([("mute", "answered by now"), ("warn", "still waiting")])
-        + _stack_chart(qmonths, "answered", "waiting", "mute", "warn",
-                       "{m}: {both} asked, {waiting} still waiting")
+        + _fig("questions", "Questions per month, and what is still waiting")
         + "</section>")
 
     return (
@@ -4364,7 +4722,6 @@ def _filters(questions: list) -> str:
         '<option value="json">JSON</option></select></label>'
         '<button class="btn primary tiny" id="exprun">Download</button>'
         '<span class="note" id="expmsg"></span></div>')
-
     parts.append('</div>')
     return "".join(parts)
 
@@ -5199,6 +5556,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
             .replace("__QDATA__", embed(_question_payload(d["questions"])))
             .replace("__LOOKUPS__", embed(_row_lookups()))
             .replace("__SRCDET__", embed(d.get("source_details") or {}))
+            .replace("__CHARTS__", embed(_chart_payload(d)))
             .replace("__BRANDS__", embed(list(_BRAND)))
             .replace("__MANUAL_STATUS__", embed(list(manual_status)))
             .replace("__CRM__", embed({
