@@ -686,6 +686,15 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .srcdet li b { color:var(--ink); font-family:var(--mono);
   font-variant-numeric:tabular-nums; }
 
+/* ---- the export form ---- */
+.expbox { display:flex; gap:var(--s3); align-items:center; flex-wrap:wrap;
+  width:100%; padding:var(--s2) 0; }
+.expbox label { display:inline-flex; gap:6px; align-items:center;
+  font-size:var(--t-xs); color:var(--ink3); }
+.expbox select { font:inherit; font-size:var(--t-sm); color:var(--ink);
+  background:var(--surface); border:1px solid var(--line);
+  border-radius:var(--r-sm); padding:4px 8px; }
+
 /* ---- what is owed, at the top of Home ---- */
 #attention { margin-bottom:var(--s4); }
 .att { display:grid; gap:2px; padding:var(--s3) 0 var(--s3) var(--s4);
@@ -3266,6 +3275,66 @@ document.addEventListener("click", function (ev) {
   row.after(box);
 });
 
+/* ---- export what the filters describe ----
+   The product list is cloned from the filter select, so the two can never
+   disagree about which systems exist. The download goes through fetch with
+   the session token in the header, because a plain link cannot carry a
+   header and putting the token in a URL leaves it in history. */
+(function () {
+  var btn = $("#expbtn");
+  if (!btn) return;
+  btn.addEventListener("click", function () {
+    var box = $("#expbox");
+    var open = box.classList.toggle("hide");
+    btn.setAttribute("aria-expanded", String(!open));
+    if (!open) {
+      var sel = $("#expsys");
+      sel.innerHTML = $("#sysSel").innerHTML.replace("All systems", "all of them");
+      sel.value = state.sys;
+      $("#expch").value = state.ch;
+      $("#expst").value = state.st === "open" ? "open" : state.st === "answered" ? "answered" : "all";
+    }
+  });
+  $("#exprun").addEventListener("click", function () {
+    var msg = $("#expmsg");
+    msg.textContent = "Building...";
+    var params = { channel: $("#expch").value, status: $("#expst").value,
+                   system: $("#expsys").value, format: $("#expfmt").value };
+    fetch("/export", { method: "POST",
+      headers: { "Content-Type": "application/json", "X-Panel-Token": PANEL_TOKEN },
+      body: JSON.stringify(params) })
+      .then(function (r) {
+        if (!r.ok) throw new Error("the server said " + r.status);
+        var n = r.headers.get("X-Row-Count") || "?";
+        return r.blob().then(function (b) { return { blob: b, n: n }; });
+      })
+      .then(function (got) {
+        var ext = params.format === "md" ? "md" : params.format;
+        var stamp = new Date().toISOString().slice(0, 10);
+        var name = ["locodev-questions", params.channel, params.status, stamp]
+          .join("-") + "." + ext;
+        var url = URL.createObjectURL(got.blob);
+        var a = document.createElement("a");
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+        msg.textContent = got.n + " questions in " + name;
+      })
+      .catch(function (e) { msg.textContent = "could not export: " + e.message; });
+  });
+})();
+
+
+/* ---- charts, drawn here rather than baked into the page ----
+   Every control below changes geometry: a range slices the series, a
+   projection extends the x axis, and expanding a card changes the width.
+   A server-drawn SVG could do none of those without a round trip, so the
+   whole monthly history ships in CHARTS and the marks are built here.
+
+   The projection is the same series continued: same hue, told apart by a
+   dashed stroke, a shaded range and its own legend chip, never by a colour
+   of its own. That keeps the palette at the three validated series colours. */
+
 /* ---- gaps and coverage drill into the question table ---- */
 function drillTo(sys) {
   var sel = $("#sysSel");
@@ -4279,6 +4348,23 @@ def _filters(questions: list) -> str:
                      f'{escape(sys_names[slug])} ({sys_counts[slug]})</option>')
     parts.append('</select>')
     parts.append('<button class="fclear" id="fclear">clear filters</button>')
+    # Export lives with the filters because it exports what they describe.
+    parts.append(
+        '<button class="fclear" id="expbtn" aria-expanded="false">export...</button>'
+        '<div id="expbox" class="expbox hide" role="group" aria-label="Export">'
+        '<label>From<select id="expch"><option value="all">everywhere</option>'
+        '<option value="youtube">YouTube</option>'
+        '<option value="discord">Discord</option></select></label>'
+        '<label>Status<select id="expst"><option value="all">with and without answer</option>'
+        '<option value="open">still waiting</option>'
+        '<option value="answered">answered</option></select></label>'
+        '<label>Product<select id="expsys"></select></label>'
+        '<label>As<select id="expfmt"><option value="csv">CSV (Excel)</option>'
+        '<option value="md">Markdown</option>'
+        '<option value="json">JSON</option></select></label>'
+        '<button class="btn primary tiny" id="exprun">Download</button>'
+        '<span class="note" id="expmsg"></span></div>')
+
     parts.append('</div>')
     return "".join(parts)
 

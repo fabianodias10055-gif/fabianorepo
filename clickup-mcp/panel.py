@@ -3655,6 +3655,81 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             build(live=True)
             return self._send_json({"ok": True})
 
+        if self.path == "/export":
+            payload = self._json_body()
+            ch = str(payload.get("channel", "all"))
+            st = str(payload.get("status", "all"))
+            sys_ = str(payload.get("system", "all"))
+            fmt = str(payload.get("format", "csv"))
+
+            # The vault's own word for an open question is "no-source", which
+            # says why it is open and reads as jargon in a spreadsheet. The
+            # screen already translates it; the export uses the same map so
+            # the file says what the panel says.
+            import panel_ui as _ui
+            rows = []
+            for q in parse_questions():
+                if ch != "all" and q.get("channel") != ch:
+                    continue
+                if st == "open" and q["status"] == "answered":
+                    continue
+                if st == "answered" and q["status"] != "answered":
+                    continue
+                if sys_ != "all" and q.get("system") != sys_:
+                    continue
+                url = q.get("url", "")
+                if not url and q.get("channel") == "youtube" and \
+                        q.get("video_id") and q.get("source", "").startswith("yt:"):
+                    url = (f"https://www.youtube.com/watch?v={q['video_id']}"
+                           f"&lc={q['source'][3:]}")
+                rows.append({
+                    "code": q.get("code", ""), "date": q.get("date", ""),
+                    "channel": q.get("channel", ""),
+                    "system": q.get("system_name") if q.get("system") != "-" else "",
+                    "who": q.get("who", ""),
+                    "status": _ui._STATUS_LABEL.get(q["status"], q["status"]),
+                    "question": " ".join((q.get("text") or "").split()),
+                    "answer": " ".join((q.get("reply") or "").split()),
+                    "video": q.get("video", ""), "link": url,
+                })
+
+            if fmt == "json":
+                body = json.dumps(rows, ensure_ascii=False, indent=1).encode("utf-8")
+                ctype = "application/json; charset=utf-8"
+            elif fmt == "md":
+                lines = [f"# Questions export - {len(rows)} items", ""]
+                for r in rows:
+                    lines += [f"## {r['code'] or '?'} - {r['who']} - "
+                              f"{r['date']} - {r['channel']}"
+                              + (f" - {r['system']}" if r["system"] else ""),
+                              "", f"**Q:** {r['question']}", ""]
+                    lines += ([f"**A:** {r['answer']}", ""] if r["answer"]
+                              else ["**A:** (no answer yet)", ""])
+                    if r["link"]:
+                        lines += [f"[open where it was asked]({r['link']})", ""]
+                body = "\n".join(lines).encode("utf-8")
+                ctype = "text/markdown; charset=utf-8"
+            else:
+                # utf-8-sig: without the BOM, Excel on a pt-BR machine reads
+                # the accents as mojibake and the export looks corrupted.
+                import csv as _csv
+                import io as _io
+                buf = _io.StringIO()
+                w = _csv.DictWriter(buf, fieldnames=list(rows[0].keys())
+                                    if rows else ["code"])
+                w.writeheader()
+                w.writerows(rows)
+                body = buf.getvalue().encode("utf-8-sig")
+                ctype = "text/csv; charset=utf-8"
+
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Row-Count", str(len(rows)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == "/customer":
             payload = self._json_body()
             handle = str(payload.get("who", "")).strip()
