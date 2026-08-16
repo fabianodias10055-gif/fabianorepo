@@ -802,6 +802,8 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .bi { vertical-align:-2px; flex:none; }
 
 /* ---- answering a whole system ---- */
+.flashcard { animation:flash 1.3s var(--ease); }
+
 .bulklist { display:flex; flex-direction:column; gap:var(--s3);
   margin-top:var(--s3); max-height:60vh; overflow-y:auto; }
 .bulkitem { border:1px solid var(--line); border-radius:var(--r-md);
@@ -3093,7 +3095,7 @@ function productProfile(name) {
   out += '<div class="cabout"><span class="clabel">Waiting</span>'
     + '<span class="note">oldest first, so the person who has waited longest is at the top</span></div>';
   out += '<div class="ctl">';
-  open.slice().reverse().slice(0, 25).forEach(function (q) {
+  open.slice().reverse().forEach(function (q) {
     var p = PATRONS[q.who.replace(/^@/, "").split(" ")[0].toLowerCase()];
     /* each question here came from a different video; the thumbnail is how
        the eye tells them apart before reading a word */
@@ -3111,7 +3113,7 @@ function productProfile(name) {
       + "</div></div>";
   });
   if (!open.length) out += '<div class="note">Nothing open. Everyone who asked got an answer.</div>';
-  if (open.length > 25) out += '<div class="note">and ' + (open.length - 25) + " more</div>";
+
   return out + "</div></div>";
 }
 
@@ -3221,6 +3223,12 @@ function videoPanel(name) {
     + '<span class="clabel">' + open.length + " waiting</span>"
     + '<button class="btn tiny" data-vall="' + esc(name) + '">Show them all in the inbox</button>'
     + '<button class="btn tiny" data-vdesc="' + esc(name) + '">Description</button>'
+    /* The bulk drafter lives on Inbox, next to the system filter. Asked for
+       twice from this screen and not found both times, so the way in is
+       here too, where the waiting questions actually are. */
+    + (open.length ? '<button class="btn tiny primary" data-vbulk="'
+        + esc(open[0].system || "") + '">Draft answers for all ' + open.length
+        + "</button>" : "")
     + "</div>";
   if (common.length) {
     out += '<div class="cabout"><span class="clabel">Keeps coming up</span>'
@@ -3232,17 +3240,18 @@ function videoPanel(name) {
     out += '<div class="cabout"><span class="clabel">Requests &middot; ' + reqs.length + "</span>"
       + '<span class="note">asking you to build, cover or fix something; guessed from the wording</span></div>';
     out += '<div class="ctl">';
-    reqs.slice(0, 25).forEach(function (r) {
+    reqs.forEach(function (r) {
       out += cev(r.q, ' <span class="tag req">' + (r.kind === "fix" ? "fix ask" : "new ask") + "</span>");
     });
-    if (reqs.length > 25) out += '<div class="note">and ' + (reqs.length - 25) + " more</div>";
     out += "</div>";
     if (rest.length) out += '<div class="cabout"><span class="clabel">Questions &middot; '
       + rest.length + "</span></div>";
   }
   out += '<div class="ctl">';
-  rest.slice(0, 25).forEach(function (q) { out += cev(q); });
-  if (rest.length > 25) out += '<div class="note">and ' + (rest.length - 25) + " more</div>";
+  /* Every question, not the first twenty-five. "and 43 more" named the
+     ones you could not reach, which on a video with 68 waiting is most of
+     the work; the list scrolls instead. */
+  rest.forEach(function (q) { out += cev(q); });
   if (!open.length) out += '<div class="note">Everyone who asked here got an answer.</div>';
   return out + "</div></div>";
 }
@@ -4193,6 +4202,30 @@ document.addEventListener("keydown", function (ev) {
 });
 
 document.addEventListener("click", function (ev) {
+  var vb = ev.target.closest("[data-vbulk]");
+  if (vb) {
+    /* A question carries its system's display name, not its slug, and the
+       picker is keyed by slug. Matching on the label is what makes the two
+       meet without shipping the slug into every question in the payload. */
+    var sys = vb.dataset.vbulk;
+    goView("questions");
+    var sel = $("#bulksys");
+    if (sel && sys) {
+      var hit = [].filter.call(sel.options, function (o) {
+        return o.textContent.indexOf(sys + " (") === 0;
+      })[0];
+      if (hit) sel.value = hit.value;
+    }
+    var card = $("#bulkanswer");
+    if (card) {
+      card.scrollIntoView({ block: "start" });
+      card.classList.add("flashcard");
+      setTimeout(function () { card.classList.remove("flashcard"); }, 1400);
+    }
+    if (sel && !sel.value) $("#bulkmsg").textContent =
+      "these questions are not filed under a catalog system yet";
+    return;
+  }
   var sug = ev.target.closest(".lsuggest");
   if (sug) { ltSuggest(sug.closest(".lask")); return; }
   var save = ev.target.closest(".lsave");
@@ -6383,10 +6416,11 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 <main class="main">
 {_header(d, live)}
 {_mobile_nav()}
-{_stamp_views(_tiles(d, len(d["systems"]), _overview_cards(d)) + _questions_card(d))}
+{_stamp_views(_tiles(d, len(d["systems"]), _overview_cards(d)))}
+{_bulk_card(d)}
+{_stamp_views(_questions_card(d))}
 <div class="cols2">
 {_stamp_views(_answers_card(d) + _system_pressure_card(d, facets))}
-{_bulk_card(d)}
 </div>
 {_stamp_views(_sales_card(d) + _business_screen(d) + _links_card() + _sync_card(d) + _wingman_card(d))}
 <div class="grid3">
