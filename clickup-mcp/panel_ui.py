@@ -802,6 +802,12 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .bi { vertical-align:-2px; flex:none; }
 
 /* ---- answering a whole system ---- */
+.pbar { height:6px; border-radius:3px; background:var(--surface3);
+  overflow:hidden; margin:var(--s3) 0 2px; }
+.pbar i { display:block; height:100%; background:var(--accent);
+  border-radius:3px; transition:width var(--dur) var(--ease); }
+.bulkone { display:flex; gap:var(--s3); align-items:center; margin-top:var(--s2); }
+
 .flashcard { animation:flash 1.3s var(--ease); }
 
 .bulklist { display:flex; flex-direction:column; gap:var(--s3);
@@ -4396,6 +4402,7 @@ document.addEventListener("click", function (ev) {
    the list between the two steps is editable and is the point of the
    feature, not a formality. */
 var BULK_POLL = null;
+var BULK_GAP = "twomin";
 
 function bulkPost(body) {
   return fetch("/bulk", {
@@ -4437,21 +4444,36 @@ function bulkRender(st) {
          + '">' + fmt(st.failed) + "</span></div>" : "")
     + "</div>";
 
-  if (st.phase === "drafting")
-    h += '<p class="figwhy">Drafting ' + fmt(st.done) + " of " + fmt(n)
-      + ". Each one is a billed model call, and any already drafted today "
-      + "costs nothing again.</p>";
+  if (st.phase === "drafting" || st.phase === "sending") {
+    var pct = n ? Math.round(st.done * 100 / n) : 0;
+    h += '<div class="pbar" role="progressbar" aria-valuenow="' + pct
+      + '" aria-valuemin="0" aria-valuemax="100"><i style="width:' + pct
+      + '%"></i></div>'
+      + '<p class="figwhy">' + (st.phase === "drafting" ? "Drafting " : "Sending ")
+      + fmt(st.done) + " of " + fmt(n) + " · " + pct + "%"
+      + (st.per_item ? " · about " + bulkSpan(st.left) + " left, at "
+          + st.per_item + "s each" : "")
+      + (st.phase === "drafting"
+         ? ". Each one is a billed model call, and any already drafted today "
+           + "costs nothing again." : ".") + "</p>";
+  }
   if (st.waiting)
     h += '<p class="figwhy">Next one goes out in ' + st.waiting + "s.</p>";
   if (st.note) h += '<p class="figwhy">' + esc(st.note) + "</p>";
 
   if (st.phase === "ready") {
     var ok = st.items.filter(function (i) { return i.draft; }).length;
-    var avg = (50 + 300) / 2 * Math.max(0, ok - 1);
+    var mid = BULK_GAP === "twomin" ? 120 : 175;
+    var avg = mid * Math.max(0, ok - 1);
     h += '<div class="figbar"><button class="btn tiny primary" id="bulknow">'
       + "Send all " + fmt(ok) + " now</button>"
-      + '<button class="btn tiny" id="bulkspaced">Send one at a time, 50 to 300s apart'
-      + "</button>" + '<span class="note">spaced takes about ' + bulkSpan(avg)
+      + '<button class="btn tiny" id="bulkspaced">Send one at a time</button>'
+      + '<span class="figlab">gap</span><span class="seg" role="group">'
+      + '<button type="button" class="bulkgap" data-gap="twomin" aria-pressed="'
+      + (BULK_GAP === "twomin") + '">about 2 min</button>'
+      + '<button type="button" class="bulkgap" data-gap="wide" aria-pressed="'
+      + (BULK_GAP === "wide") + '">50 to 300s</button></span>'
+      + '<span class="note">spaced takes about ' + bulkSpan(avg)
       + "</span></div>";
   }
   if (st.phase === "drafting" || st.phase === "sending")
@@ -4466,8 +4488,12 @@ function bulkRender(st) {
       + (it.msg ? " · " + esc(it.msg) : "") + "</span></div>"
       + '<p class="bulkq">' + esc(it.asked) + "</p>"
       + (it.draft || it.state === "drafted"
-         ? '<textarea class="bulkdraft" ' + (st.phase === "ready" ? "" : "readonly")
-           + ">" + esc(it.draft) + "</textarea>" : "")
+         ? '<textarea class="bulkdraft" ' + (st.phase === "sending" ? "readonly" : "")
+           + ">" + esc(it.draft) + "</textarea>"
+           + (it.state === "sent" ? ""
+              : '<div class="bulkone"><button class="btn tiny bulksend1">'
+                + "Send this one</button>"
+                + '<span class="note b1msg"></span></div>') : "")
       + "</div>";
   });
   box.innerHTML = h + "</div>";
@@ -4521,14 +4547,37 @@ document.addEventListener("click", function (ev) {
     bulkPost({ action: "stop" }).then(bulkTick);
     return;
   }
+  var g = ev.target.closest(".bulkgap");
+  if (g) { BULK_GAP = g.dataset.gap; bulkTick(); return; }
+
+  var one = ev.target.closest(".bulksend1");
+  if (one) {
+    var item = one.closest(".bulkitem");
+    var txt = $(".bulkdraft", item).value.trim();
+    var m1 = $(".b1msg", item);
+    if (!confirm("Send this reply publicly? It cannot be taken back.")) return;
+    m1.textContent = "sending…";
+    one.disabled = true;
+    bulkPost({ action: "send_one", id: item.dataset.id, text: txt })
+      .then(function (r) {
+        m1.textContent = r.ok ? "sent" : "not sent: " + r.error;
+        one.disabled = false;
+        bulkTick();
+      });
+    return;
+  }
+
   var now = ev.target.closest("#bulknow"), spaced = ev.target.closest("#bulkspaced");
   if (now || spaced) {
     var mode = spaced ? "spaced" : "now";
     var count = $$(".bulkdraft").filter(function (t) { return t.value.trim(); }).length;
+    var gapWords = BULK_GAP === "twomin" ? "one about every 2 minutes"
+                                        : "one every 50 to 300 seconds";
     if (!confirm("Send " + count + " public replies"
-                 + (spaced ? ", one every 50 to 300 seconds" : ", all at once")
+                 + (spaced ? ", " + gapWords : ", all at once")
                  + "? This posts under your name and cannot be taken back.")) return;
-    bulkPost({ action: "send", mode: mode, edits: bulkEdits() }).then(function (r) {
+    bulkPost({ action: "send", mode: mode, edits: bulkEdits(), gap: BULK_GAP })
+      .then(function (r) {
       if (!r.ok) { $("#bulkmsg").textContent = r.error; return; }
       bulkWatch();
     });

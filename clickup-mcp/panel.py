@@ -2627,14 +2627,15 @@ def deliver_reply(qid: str, answer: str, force: bool = False,
 # people get an answer.
 # --------------------------------------------------------------------------
 
-BULK_MIN_GAP = 50    # seconds, the user's own floor
-BULK_MAX_GAP = 300   # and ceiling
+# How far apart a spaced run puts each reply. Both are random inside their
+# range, so the rhythm never looks mechanical.
+BULK_GAPS = {"wide": (50, 300), "twomin": (90, 150)}
 
 _bulk = {
     "phase": "idle",      # idle | drafting | ready | sending | done | stopped
     "system": "", "system_name": "", "mode": "",
     "items": [], "done": 0, "sent": 0, "failed": 0,
-    "next_at": 0.0, "stop": False, "note": "",
+    "next_at": 0.0, "stop": False, "note": "", "started_at": 0.0,
 }
 _bulk_lock = threading.Lock()
 
@@ -2645,6 +2646,14 @@ def bulk_state() -> dict:
         st = {k: v for k, v in _bulk.items() if k != "items"}
         st["items"] = [dict(i) for i in _bulk["items"]]
     st["waiting"] = max(0, round(st["next_at"] - time.time())) if st["next_at"] else 0
+    # Rate and time left, measured rather than guessed: a draft here takes
+    # about 25 seconds and eighty-eight of them take half an hour, which a
+    # bare "2 of 88" does not tell anybody.
+    n = len(st["items"])
+    elapsed = time.time() - st["started_at"] if st["started_at"] else 0
+    st["elapsed"] = round(elapsed)
+    st["per_item"] = round(elapsed / st["done"], 1) if st["done"] and elapsed else 0
+    st["left"] = round(st["per_item"] * (n - st["done"])) if st["per_item"] else 0
     return st
 
 
@@ -2663,17 +2672,36 @@ def bulk_draft(system: str) -> dict:
     if not queue:
         return {"ok": False, "error": f"nothing unanswered under {name}"}
 
+    # Whatever was already written is filled in before the first model call,
+    # so the list opens showing every answer that exists rather than an
+    # empty queue that fills over half an hour. These cost nothing: they
+    # are the same cache the Suggest button writes to.
+    items, had = [], 0
+    for q in queue:
+        hit = cached_ai_result(q, "draft") or {}
+        draft = (hit.get("answer") or "").strip()
+        if draft:
+            had += 1
+        items.append({"id": q["id"], "code": q.get("code", ""),
+                      "who": q.get("who", ""),
+                      "asked": " ".join((q.get("text") or "").split())[:400],
+                      "channel": q.get("channel", ""),
+                      "draft": draft,
+                      "state": "drafted" if draft else "waiting",
+                      "msg": "written earlier, no new cost" if draft else ""})
+
     with _bulk_lock:
         _bulk.update(phase="drafting", system=system, system_name=name, mode="",
-                     done=0, sent=0, failed=0, next_at=0.0, stop=False, note="",
-                     items=[{"id": q["id"], "code": q.get("code", ""),
-                             "who": q.get("who", ""),
-                             "asked": " ".join((q.get("text") or "").split())[:400],
-                             "channel": q.get("channel", ""),
-                             "draft": "", "state": "waiting", "msg": ""}
-                            for q in queue])
+                     done=had, sent=0, failed=0, next_at=0.0, stop=False,
+                     note="", started_at=time.time(), items=items)
+    if had == len(items):
+        _finish("ready", f"every answer here was already written; "
+                         f"nothing new was generated")
+        return {"ok": True, "queued": len(queue), "system_name": name,
+                "already": had}
     threading.Thread(target=_bulk_draft_worker, daemon=True).start()
-    return {"ok": True, "queued": len(queue), "system_name": name}
+    return {"ok": True, "queued": len(queue), "system_name": name,
+            "already": had}
 
 
 def _bulk_draft_worker() -> None:
@@ -2687,15 +2715,11 @@ def _bulk_draft_worker() -> None:
         if _bulk["stop"]:
             _finish("stopped", "stopped while drafting")
             return
+        if item["state"] == "drafted":
+            continue          # filled from the cache when the run was queued
         question = find_question_by_id(item["id"])
         if not question:
             _mark(idx, "failed", "question no longer in the vault")
-            continue
-
-        hit = cached_ai_result(question, "draft")
-        if hit and hit.get("answer"):
-            _mark(idx, "drafted", "already drafted earlier, no new cost",
-                  hit["answer"])
             continue
 
         room, why = _spend_room()
@@ -2726,7 +2750,7 @@ def _bulk_draft_worker() -> None:
     _finish("ready", "")
 
 
-def bulk_send(mode: str, edits: dict) -> dict:
+def bulk_send(mode: str, edits: dict, gap: str = "wide") -> dict:
     """Send the drafts. mode is 'now' or 'spaced'.
 
     edits carries whatever you changed in the review list, keyed by question
@@ -2751,12 +2775,43 @@ def bulk_send(mode: str, edits: dict) -> dict:
         if not ready:
             return {"ok": False, "error": "no draft has any text in it"}
         _bulk.update(phase="sending", mode=mode, sent=0, failed=0,
-                     stop=False, note="")
-    threading.Thread(target=_bulk_send_worker, args=(mode,), daemon=True).start()
-    return {"ok": True, "sending": ready, "mode": mode}
+                     stop=False, note="", started_at=time.time())
+    threading.Thread(target=_bulk_send_worker, args=(mode, gap), daemon=True).start()
+    return {"ok": True, "sending": ready, "mode": mode, "gap": gap}
 
 
-def _bulk_send_worker(mode: str) -> None:
+
+def bulk_send_one(qid: str, text: str) -> dict:
+    """Send a single reply out of the reviewed list.
+
+    Allowed while the rest is still drafting: the good ones need not wait
+    for the eighty-eighth. It goes through deliver_reply like every other
+    sender, so the already-answered guard and the log are the same.
+    """
+    with _bulk_lock:
+        idx = next((i for i, it in enumerate(_bulk["items"])
+                    if it["id"] == qid), -1)
+        if idx < 0:
+            return {"ok": False, "error": "not part of this run"}
+        if _bulk["items"][idx]["state"] == "sent":
+            return {"ok": False, "error": "already sent"}
+    text = (text or "").strip()
+    if not text:
+        return {"ok": False, "error": "nothing to send"}
+
+    res = deliver_reply(qid, text, offer={"source": "bulk-one",
+                                          "system": _bulk["system"]})
+    if res.get("ok"):
+        _mark(idx, "sent", "posted" if res.get("posted_to_platform")
+              else res.get("platform_message", "recorded in the vault only"))
+        with _bulk_lock:
+            _bulk["sent"] += 1
+    else:
+        _mark(idx, "failed", res.get("error", "failed"))
+    return res
+
+
+def _bulk_send_worker(mode: str, gap: str = "wide") -> None:
     queued = [i for i, it in enumerate(_bulk["items"]) if it["state"] == "queued"]
     for n, idx in enumerate(queued):
         if _bulk["stop"]:
@@ -2777,12 +2832,13 @@ def _bulk_send_worker(mode: str) -> None:
                 _bulk["failed"] += 1
 
         if mode == "spaced" and n < len(queued) - 1:
-            gap = random.randint(BULK_MIN_GAP, BULK_MAX_GAP)
+            lo, hi = BULK_GAPS.get(gap, BULK_GAPS["wide"])
+            wait = random.randint(lo, hi)
             with _bulk_lock:
-                _bulk["next_at"] = time.time() + gap
+                _bulk["next_at"] = time.time() + wait
             # Slept a second at a time so Stop lands within a second rather
             # than up to five minutes later.
-            for _ in range(gap):
+            for _ in range(wait):
                 if _bulk["stop"]:
                     _finish("stopped", f"stopped after {_bulk['sent']} sent")
                     return
@@ -4374,7 +4430,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(bulk_draft(str(payload.get("system", ""))))
             if act == "send":
                 mode = "spaced" if payload.get("mode") == "spaced" else "now"
-                return self._send_json(bulk_send(mode, payload.get("edits") or {}))
+                return self._send_json(bulk_send(
+                    mode, payload.get("edits") or {},
+                    str(payload.get("gap", "wide"))))
+            if act == "send_one":
+                return self._send_json(bulk_send_one(
+                    str(payload.get("id", "")), str(payload.get("text", ""))))
             return self._send_json({"ok": False, "error": "unknown action"}, 400)
 
         if self.path == "/reply":
