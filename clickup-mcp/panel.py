@@ -544,6 +544,33 @@ def parse_questions() -> list[dict]:
     return out
 
 
+
+def post_to_platform(question: dict, answer: str) -> tuple[bool, str]:
+    """Send one reply to wherever it was asked. The only dispatch.
+
+    resend_answer used to carry its own copy of this without the guard
+    below, which made it the one public-posting path that could raise.
+
+    urllib wraps only h.request() in URLError, so a stall in getresponse()
+    or json.load() raises TimeoutError, RemoteDisconnected or IncompleteRead
+    straight through the posters' except clauses. Caught here because by
+    then the platform may already have accepted the reply, and every caller
+    needs to record something rather than unwind.
+    """
+    try:
+        source = question.get("source", "")
+        if question.get("channel") == "youtube" and source.startswith("yt:"):
+            return post_youtube_reply(source[len("yt:"):], answer)
+        target = discord_target(question)
+        if target:
+            return post_discord_reply(*target, answer)
+        return False, "This channel cannot be posted to from here."
+    except Exception as exc:                       # noqa: BLE001
+        return False, (f"the connection broke around the send "
+                       f"({type(exc).__name__}); it may or may not have "
+                       f"arrived")
+
+
 def find_question_by_code(code: str) -> dict | None:
     for q in parse_questions():
         if q["code"] == code:
@@ -580,21 +607,36 @@ def resend_answer(code: str, when: str) -> dict:
         question = find_question_by_code(code)
         if not question:
             return {"ok": False, "error": "question no longer in the inbox"}
-        source = question.get("source", "")
-        if question["channel"] == "youtube" and source.startswith("yt:"):
-            posted, msg = post_youtube_reply(source[len("yt:"):], answer)
-        else:
-            target = discord_target(question)
-            if not target:
-                return {"ok": False,
-                        "error": "this channel cannot be posted to from here"}
-            posted, msg = post_discord_reply(*target, answer)
+        posted, msg = post_to_platform(question, answer)
         if not posted:
             return {"ok": False, "error": msg}
 
-        new_block = re.sub(r"^posted_to_platform:\s*no\s*$",
-                           "posted_to_platform: yes", block, count=1, flags=re.M)
-        path.write_text(raw[:m.end()] + new_block + raw[end:], encoding="utf-8")
+        # Re-read and re-locate before writing. raw was taken before a
+        # network call that can last twenty seconds, and the log is
+        # appended to by every other sender; writing that snapshot back
+        # erased any reply filed in the meantime, and there is no way to
+        # recover one, because the collector skips blocks already marked
+        # answered.
+        with _reply_lock:
+            fresh = path.read_text(encoding="utf-8", errors="replace")
+            hit = None
+            for fm in ANSWER_HEAD.finditer(fresh):
+                nxt = ANSWER_HEAD.search(fresh, fm.end())
+                fend = nxt.start() if nxt else len(fresh)
+                fblock = fresh[fm.end():fend]
+                if fm.group(1) == when and f"question: {code}" in fblock:
+                    hit = (fm.end(), fend, fblock)
+                    break
+            if hit is None:
+                return {"ok": False, "message": msg,
+                        "error": "posted, but the log entry moved before it "
+                                 "could be marked; mark it by hand"}
+            start, fend, fblock = hit
+            new_block = re.sub(r"^posted_to_platform:\s*no\s*$",
+                               "posted_to_platform: yes", fblock, count=1,
+                               flags=re.M)
+            path.write_text(fresh[:start] + new_block + fresh[fend:],
+                            encoding="utf-8")
         return {"ok": True, "message": msg}
 
     return {"ok": False, "error": "answer not found in the log"}
@@ -1124,12 +1166,26 @@ KB_EXPORT_PATH = "Panel/knowledge_base.json"
 KB_SHIPPED_PATH = Path(r"G:\My Drive\LocoDev Bot KB\knowledge_base.json")
 
 
-def _kb_file(path: Path) -> tuple[list, float]:
+def _kb_file(path: Path) -> tuple[list, float, bool]:
+    """(entries, mtime, reachable).
+
+    An unreadable file and an unreachable drive both used to come back as an
+    empty list, so a Drive folder that is simply not mounted read as "the
+    bot has been sent nothing", which is a claim about the bot rather than
+    about this machine. reachable is False only when the folder itself
+    cannot be seen; a missing or broken file inside a mounted folder is
+    still an honest empty.
+    """
+    try:
+        if not path.parent.exists():
+            return [], 0.0, False
+    except OSError:
+        return [], 0.0, False
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return (data if isinstance(data, list) else []), path.stat().st_mtime
+        return (data if isinstance(data, list) else []), path.stat().st_mtime, True
     except (OSError, ValueError):
-        return [], 0.0
+        return [], 0.0, True
 
 
 def doc_backlog(rows: list[dict]) -> list[dict]:
@@ -1181,8 +1237,8 @@ def sync_report() -> dict:
         rel = sec["path"].relative_to(VAULT / "Systems").as_posix()
         eligible[rel] = eligible.get(rel, 0) + 1
 
-    exported, exp_stamp = _kb_file(VAULT / KB_EXPORT_PATH)
-    shipped, ship_stamp = _kb_file(KB_SHIPPED_PATH)
+    exported, exp_stamp, _exp_ok = _kb_file(VAULT / KB_EXPORT_PATH)
+    shipped, ship_stamp, ship_ok = _kb_file(KB_SHIPPED_PATH)
     shipped_by_source: dict[str, int] = {}
     for e in shipped:
         src = e.get("source") or ""
@@ -1204,6 +1260,12 @@ def sync_report() -> dict:
             state = "generated"
         elif n_ship:
             state = "delivered"
+        elif not ship_ok:
+            # The Drive folder is not mounted, so nothing here can be told
+            # apart from nothing delivered. Say unknown rather than pick
+            # one, the way member_tier reports Unknown instead of folding
+            # somebody into the free tier.
+            state = "unknown"
         elif n_elig:
             state = "pending"
         else:
@@ -2047,17 +2109,20 @@ def ai_job_status(job_id: str) -> dict:
 # only API key. See youtube_oauth_setup.py.
 # --------------------------------------------------------------------------
 
-def _youtube_access_token() -> str | None:
+def _youtube_access_token() -> tuple[str | None, str]:
     """Exchange the stored refresh token for a short-lived access token.
 
-    Returns None when OAuth has never been set up; the caller treats that as
-    "cannot post", not as an error, and says so plainly instead of pretending.
+    Returns (token, error). Every failure used to return a bare None and
+    every caller read that as "OAuth was never set up", so an offline
+    laptop, a Google outage and a genuinely revoked token all produced the
+    same advice: run youtube_oauth_setup.py. Two of those three make that
+    advice wrong, and the third is the only one it fixes.
     """
     refresh = get_secret("YOUTUBE_REFRESH_TOKEN")
     client_id = get_secret("YOUTUBE_OAUTH_CLIENT_ID")
     client_secret = get_secret("YOUTUBE_OAUTH_CLIENT_SECRET")
     if not (refresh and client_id and client_secret):
-        return None
+        return None, "not-configured"
 
     body = urlparse.urlencode({
         "client_id": client_id, "client_secret": client_secret,
@@ -2066,18 +2131,39 @@ def _youtube_access_token() -> str | None:
     req = urlrequest.Request(YT_OAUTH_TOKEN_URL, data=body, method="POST")
     try:
         with urlrequest.urlopen(req, timeout=15) as resp:
-            return json.load(resp)["access_token"]
-    except (urlerror.URLError, KeyError, ValueError):
-        return None
+            return json.load(resp)["access_token"], ""
+    except urlerror.HTTPError as exc:
+        # Google says no. A revoked or expired refresh token lands here, and
+        # it is the one case where "set OAuth up again" is the right advice.
+        return None, ("auth" if exc.code in (400, 401) else f"http-{exc.code}")
+    except (urlerror.URLError, TimeoutError, OSError):
+        return None, "network"
+    except (KeyError, ValueError):
+        return None, "bad-answer"
+
+
+YT_TOKEN_MSG = {
+    "not-configured": ("YouTube reply-posting is not set up. The vault was "
+                       "still updated. Run youtube_oauth_setup.py once to "
+                       "enable posting for real."),
+    "auth": ("YouTube refused the stored login: the refresh token has been "
+             "revoked or expired. The vault was still updated. Run "
+             "youtube_oauth_setup.py again to reconnect."),
+    "network": ("Could not reach Google to refresh the login. The vault was "
+                "still updated. Nothing is wrong with your setup; try again "
+                "when the connection is back."),
+    "bad-answer": ("Google answered the refresh with something unreadable. "
+                   "The vault was still updated. Try again; if it repeats, "
+                   "run youtube_oauth_setup.py."),
+}
 
 
 def post_youtube_reply(comment_id: str, text: str) -> tuple[bool, str]:
-    token = _youtube_access_token()
+    token, terr = _youtube_access_token()
     if not token:
-        return False, (
-            "YouTube reply-posting is not set up. The vault was still updated. "
-            "Run youtube_oauth_setup.py once to enable posting for real."
-        )
+        return False, YT_TOKEN_MSG.get(
+            terr, f"YouTube login failed ({terr}). The vault was still "
+                  f"updated.")
     body = json.dumps({"snippet": {"parentId": comment_id, "textOriginal": text}}).encode()
     req = urlrequest.Request(
         f"{YT_API}/comments?part=snippet",
@@ -2129,10 +2215,10 @@ def _video_id_for(name: str) -> str:
 def fetch_video_snippet(video_id: str) -> tuple[dict | None, str]:
     """(snippet, error). Error categories stay separate: not-configured,
     refused-with-code, network. A network failure must never read as auth."""
-    token = _youtube_access_token()
+    token, terr = _youtube_access_token()
     if not token:
-        return None, ("YouTube OAuth is not set up. Run youtube_oauth_setup.py "
-                      "once to enable reading and updating the real video.")
+        return None, YT_TOKEN_MSG.get(
+            terr, f"YouTube login failed ({terr}).")
     req = urlrequest.Request(
         f"{YT_API}/videos?part=snippet&id={urlparse.quote(video_id)}",
         headers={"Authorization": f"Bearer {token}"},
@@ -2189,10 +2275,11 @@ def update_video_description(name: str, description: str) -> dict:
         return {"ok": False, "error": err}
     previous = snippet.get("description", "")
     snippet["description"] = description
-    token = _youtube_access_token()
+    token, terr = _youtube_access_token()
     if not token:
-        return {"ok": False, "error": ("YouTube OAuth is not set up. Run "
-                                       "youtube_oauth_setup.py once to enable it.")}
+        return {"ok": False,
+                "error": YT_TOKEN_MSG.get(
+                    terr, f"YouTube login failed ({terr}).")}
     body = json.dumps({"id": video_id, "snippet": snippet}).encode()
     req = urlrequest.Request(
         f"{YT_API}/videos?part=snippet",
@@ -2708,20 +2795,7 @@ def deliver_reply(qid: str, answer: str, force: bool = False,
         # posters' except clauses. Caught here rather than left to unwind:
         # the platform may already have accepted the reply, and the vault
         # write below is what stops it being sent a second time.
-        try:
-            if question["channel"] == "youtube" and question["source"].startswith("yt:"):
-                posted, platform_msg = post_youtube_reply(
-                    question["source"][len("yt:"):], answer)
-            else:
-                target = discord_target(question)
-                if target:
-                    posted, platform_msg = post_discord_reply(*target, answer)
-        except Exception as exc:                   # noqa: BLE001
-            posted = False
-            platform_msg = (f"the connection broke after the reply was sent "
-                            f"({type(exc).__name__}); it may or may not be "
-                            f"public. Closing it here so it cannot go twice; "
-                            f"reopen it if nothing arrived.")
+        posted, platform_msg = post_to_platform(question, answer)
 
         update_question_status(qid, "answered")
         append_answered_log(question, answer, posted,

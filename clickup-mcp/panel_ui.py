@@ -4608,7 +4608,36 @@ function bulkRender(st) {
                 + '<span class="note b1msg"></span></div>') : "")
       + "</div>";
   });
+  /* Keep what you typed. The poll rebuilds this whole card every two
+     seconds while the rest of the queue drafts, so an edit made to a
+     finished draft was thrown away by the next tick and "Send this one"
+     posted the model's original text publicly. The Links card already
+     guards its forms this way; the card that posts under your name was the
+     one without it.
+
+     Edits win over the server's copy, since the server's copy is what you
+     were correcting. */
+  var mine = {};
+  $$(".bulkitem", box).forEach(function (el) {
+    var t = $(".bulkdraft", el);
+    if (t && t.value !== t.defaultValue) mine[el.dataset.id] = t.value;
+  });
+  var focused = box.contains(document.activeElement) &&
+                document.activeElement.classList.contains("bulkdraft")
+                ? document.activeElement.closest(".bulkitem").dataset.id : "";
+  var caret = focused ? [document.activeElement.selectionStart,
+                         document.activeElement.selectionEnd] : null;
+
   box.innerHTML = h + "</div>";
+
+  $$(".bulkitem", box).forEach(function (el) {
+    var t = $(".bulkdraft", el);
+    if (t && mine[el.dataset.id] !== undefined) t.value = mine[el.dataset.id];
+    if (t && el.dataset.id === focused) {
+      t.focus();
+      if (caret) t.setSelectionRange(caret[0], caret[1]);
+    }
+  });
 }
 
 function bulkTick() {
@@ -6339,6 +6368,13 @@ _SYNC_STATE = {
                "the note is empty, so there is nothing for the bot to learn"),
     "generated": ("no-source", "Sent as answers",
                   "this file is written for you from answers you already gave"),
+    # The Drive folder the export lands in is not mounted, so from this
+    # machine nothing delivered and nothing sent look identical. Saying
+    # "Nothing to send" there would be a claim about the bot made from a
+    # missing drive letter.
+    "unknown": ("no-source", "Cannot tell",
+                "Google Drive is not mounted here, so the copy the bot "
+                "reads cannot be checked from this machine"),
 }
 
 
