@@ -1022,6 +1022,12 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
   font-variant-numeric:tabular-nums; }
 .vrow .vbar { flex:none; width:74px; }
 .vtag.miss { background:var(--crit-bg); color:var(--crit); }
+.vrow[data-video] { cursor:pointer; }
+.vrow[data-video]:hover { background:var(--surface2); }
+.vseen { display:block; margin-top:2px; color:var(--ink3); font-size:var(--t-2xs);
+  font-family:var(--mono); }
+.vdet { background:var(--surface2); border-radius:var(--r-md);
+  margin:0 0 var(--s3); }
 @media (max-width:720px) {
   .vrow { flex-wrap:wrap; }
   .vrow .vcount { width:auto; text-align:left; }
@@ -1534,6 +1540,10 @@ var params = new URLSearchParams(location.search);
    covering unanswered and escalated. Seeing the 433 already-answered rows
    by default made half the queue irrelevant to the job at hand. */
 var state = {
+  /* Set when a video hands its block to the queue. Not part of the
+     text search: the question text never mentions the video it came
+     from, so searching the title found nothing at all. */
+  vid: "",
   ch: params.get("ch") || "all",
   st: params.get("st") || "open",
   sys: params.get("sys") || "all",
@@ -1644,6 +1654,10 @@ function match(r) {
   if (state.df !== "all" && (r.dataset.df !== state.df || r.dataset.st === "answered"))
     return false;
   if (state.q && r.dataset.txt.indexOf(state.q) === -1) return false;
+  if (state.vid) {
+    var q = QDATA[r.dataset.id];
+    if (!q || q.video !== state.vid) return false;
+  }
   return true;
 }
 /* ---- rows built when they are about to be seen ----
@@ -1908,6 +1922,7 @@ function clearFilters() {
   state.sys = "all";
   $("#sysSel").value = "all";
   state.q = "";
+  state.vid = "";
   $("#q").value = "";
   page = 0;
   apply();
@@ -2703,6 +2718,79 @@ document.addEventListener("click", function (ev) {
       || ev.target.closest(".sysdrill")) return;
   var tr = ev.target.closest("tr.prodrow");
   if (tr) toggleProduct(tr);
+});
+
+/* ---- one video, and the people still waiting under it ----
+   A count tells you where the work is; it does not let you do it. Opening
+   a video shows the questions themselves, and hands the whole block to the
+   inbox in one move. */
+function videoPanel(name) {
+  var mine = [];
+  for (var id in QDATA) if (QDATA[id].video === name) mine.push(QDATA[id]);
+  var open = mine.filter(function (q) { return q.status !== "answered"; });
+  open.sort(function (a, b) { return a.date < b.date ? -1 : 1; });   /* oldest first */
+  if (!mine.length) return '<div class="cprofile"><p class="empty">No questions '
+    + "came from this video.</p></div>";
+
+  var freq = {};
+  mine.forEach(function (q) {
+    var seen = {};
+    (q.text.toLowerCase().match(/[a-z]{4,}/g) || []).forEach(function (w) {
+      if (STOP[w] || seen[w]) return;
+      seen[w] = 1; freq[w] = (freq[w] || 0) + 1;
+    });
+  });
+  var common = Object.keys(freq).filter(function (w) { return freq[w] > 2; })
+    .sort(function (a, b) { return freq[b] - freq[a]; }).slice(0, 8);
+
+  var out = '<div class="cprofile"><div class="cabout">'
+    + '<span class="clabel">' + open.length + " waiting</span>"
+    + '<button class="btn tiny" data-vall="' + esc(name) + '">Show them all in the inbox</button>'
+    + "</div>";
+  if (common.length) {
+    out += '<div class="cabout"><span class="clabel">Keeps coming up</span>'
+      + common.map(function (w) {
+          return '<span class="tag">' + esc(w) + " &middot; " + freq[w] + "</span>";
+        }).join(" ") + "</div>";
+  }
+  out += '<div class="ctl">';
+  open.slice(0, 25).forEach(function (q) {
+    out += '<div class="cev open"><span class="cdate">' + esc(q.date) + " &middot; "
+      + esc(q.who) + "</span>"
+      + '<div class="cq">' + esc(q.text.slice(0, 200)) + "</div>"
+      + (q.link ? '<a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open the comment</a>' : "")
+      + "</div>";
+  });
+  if (open.length > 25) out += '<div class="note">and ' + (open.length - 25) + " more</div>";
+  if (!open.length) out += '<div class="note">Everyone who asked here got an answer.</div>';
+  return out + "</div></div>";
+}
+
+document.addEventListener("click", function (ev) {
+  if (!ev.target.closest) return;
+  var all = ev.target.closest("[data-vall]");
+  if (all) {
+    /* The whole block, in the queue, ready to work through. */
+    ev.stopPropagation();
+    goView("questions");
+    setGroup("st", "open");
+    state.vid = all.dataset.vall;
+    state.q = "";
+    $("#q").value = "";
+    page = 0; apply(); syncUrl();
+    return;
+  }
+  if (ev.target.closest("a") || ev.target.closest(".vdet")) return;
+  var row = ev.target.closest(".vrow[data-video]");
+  if (!row) return;
+  var next = row.nextElementSibling;
+  if (next && next.classList.contains("vdet")) { next.remove(); return; }
+  var openOne = row.parentNode.querySelector(".vdet");
+  if (openOne) openOne.remove();
+  var box = document.createElement("div");
+  box.className = "vdet";
+  box.innerHTML = videoPanel(row.dataset.video);
+  row.after(box);
 });
 
 /* ---- gaps and coverage drill into the question table ---- */
@@ -3881,9 +3969,22 @@ def _videos_card(d: dict) -> str:
                  f'<span class="note">of {_fmt(total)}</span>' if waiting
                  else (f'<span class="note">all {_fmt(total)} answered</span>'
                        if total else '<span class="note">no comments</span>'))
+        views = v.get("views", "")
+        seen = ""
+        if str(views).isdigit():
+            n = int(views)
+            # One question per so many viewers says more than either number
+            # alone: a video nobody asks about is either clear or ignored,
+            # and the ratio tells you which.
+            per = f" &middot; one question per {n // total:,} viewers" if total else ""
+            seen = (f'<span class="vseen">{_fmt(n)} views{per}</span>')
+        if not v.get("description"):
+            tag += '<span class="vtag miss">no description</span>'
+
         rows.append(
-            f'<div class="vrow{hid}">{thumb}'
-            f'<span class="t">{title}<br>{tag}</span>'
+            f'<div class="vrow{hid}" data-video="{escape(v["name"], quote=True)}" '
+            f'tabindex="0" title="Open the questions from this video">{thumb}'
+            f'<span class="t">{title}<br>{tag}{seen}</span>'
             f'<span class="vcount">{count}</span>'
             f'<span class="vbar">{_bar(pct, tone)}</span>'
             f'<span class="d">{escape(v["published"])}</span></div>'
@@ -3951,7 +4052,10 @@ def _health_card(d: dict) -> str:
         )
     if not rows:
         return ""
-    return (f'<section class="card" id="health">'
+    # Stamped by hand: the screen a card belongs to is derived from its id,
+    # and this one has no nav entry of its own, so it was showing on every
+    # screen instead of on Admin.
+    return (f'<section class="card" id="health" data-view="sources">'
             f'<h2><span class="he">🩺</span>Is everything still arriving?</h2>'
             f'<p class="note">Read from what each collector last wrote, not by '
             f'calling anything: what matters is whether the data arrived.</p>'

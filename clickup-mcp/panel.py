@@ -2785,7 +2785,33 @@ def render_html(d: dict, live: bool) -> str:
 # POST to 127.0.0.1 without reading the response, so requiring a value it
 # cannot read is what closes cross-site request forgery against /reply,
 # /rebuild and the paid AI routes.
-SESSION_TOKEN = secrets.token_urlsafe(24)
+def _session_token() -> str:
+    """One token, kept across restarts in the credential store.
+
+    Minting a new one per launch meant every restart silently invalidated
+    every open tab: the page looked fine and answered "not authorised" to
+    each button, which reads as a permissions bug and is really two
+    processes holding different secrets. Restarting the server should not
+    log you out of a page you are looking at.
+
+    Keeping it does not weaken what it defends against. The point is that a
+    malicious page in the browser can POST to 127.0.0.1 without being able
+    to read the response, so it cannot learn a value it must send; a stored
+    secret is no more readable to that page than a fresh one. The store is
+    encrypted under this Windows account, like every other credential here.
+    """
+    try:
+        from secrets_store import get_secret, set_secret
+        kept = get_secret("PANEL_SESSION_TOKEN")
+        if kept:
+            return kept
+        fresh = secrets.token_urlsafe(24)
+        return fresh if set_secret("PANEL_SESSION_TOKEN", fresh) else fresh
+    except Exception:  # noqa: BLE001 - no store, no persistence, still works
+        return secrets.token_urlsafe(24)
+
+
+SESSION_TOKEN = _session_token()
 ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 
 _state = {"epoch": 0, "building": False}
