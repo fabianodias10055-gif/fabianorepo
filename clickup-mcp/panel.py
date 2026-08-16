@@ -2889,6 +2889,32 @@ def _check_js(html: str) -> None:
 _build_lock = threading.Lock()
 
 
+def _write_atomic(path: Path, text: str) -> None:
+    """Write-temp-then-replace, so a GET never reads a half-written file.
+
+    The build lock serializes writers against each other, but the HTTP
+    threads read these files per request and never take it; a direct
+    write_text truncates first and streams in chunks, and a large page
+    leaves that window open for many reads. On Windows the replace can hit
+    a sharing violation while a request thread still holds the old file
+    open; those reads are short, so brief retries cover them, and the last
+    resort is the old in-place write rather than a failed build.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    for _ in range(6):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.05)
+    path.write_text(text, encoding="utf-8")
+    try:
+        tmp.unlink()
+    except OSError:
+        pass
+
+
 def build(live: bool) -> dict:
     """Serialized: the /reply handler and the watcher thread can both ask for
     a rebuild inside the same 2s window; unserialized, their interleaved
@@ -2907,11 +2933,11 @@ def build(live: bool) -> dict:
             (out / "00 - Operations Center.md").write_text(render_markdown(data), encoding="utf-8")
             html = render_html(data, live)
             _check_js(html)
-            (out / "panel.html").write_text(html, encoding="utf-8")
-            (out / "status.json").write_text(
+            _write_atomic(out / "panel.html", html)
+            _write_atomic(
+                out / "status.json",
                 json.dumps({"epoch": data["epoch"], "generated_at": data["generated_at"],
-                            "building": False}),
-                encoding="utf-8")
+                            "building": False}))
             _state["epoch"] = data["epoch"]
         finally:
             _state["building"] = False
