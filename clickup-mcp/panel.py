@@ -21,6 +21,7 @@ import hashlib
 import http.server
 import json
 import os
+import random
 import re
 import secrets
 import socketserver
@@ -2555,6 +2556,261 @@ def link_suggest(phrase: str, links: list) -> dict:
     }
 
 
+
+def deliver_reply(qid: str, answer: str, force: bool = False,
+                  offer: dict | None = None) -> dict:
+    """Post one answer and record it. The single path for every sender.
+
+    Extracted from the /reply route so the bulk runner cannot grow a second
+    copy: the lock, the already-answered guard, the vault write and the log
+    are the parts that must never differ between answering one question and
+    answering forty.
+    """
+    if not answer:
+        return {"ok": False, "error": "empty reply", "code": 400}
+
+    # The answered check below is only honest if the status cannot flip
+    # between the read and the write, and each request runs on its own
+    # thread. Two tabs sending the same reply at once both used to pass the
+    # check and both post to the platform; the lock spans the external call
+    # on purpose, because releasing it any earlier reopens exactly that
+    # window.
+    with _reply_lock:
+        question = find_question_by_id(qid)
+        if not question:
+            return {"ok": False, "error": "question not found", "code": 404}
+        # A repeated or concurrent request used to post the same reply
+        # again. A question already closed is not delivered twice.
+        if question["status"] == "answered" and not force:
+            return {"ok": False, "code": 409,
+                    "error": "already answered; reopen it first to reply again"}
+
+        # Vault side always happens: this is the rigid part of the rule.
+        # Posting to the platform is best-effort on top of it, never a
+        # precondition for the vault to reflect that you replied.
+        posted = False
+        platform_msg = "This channel cannot be posted to from here."
+        if question["channel"] == "youtube" and question["source"].startswith("yt:"):
+            posted, platform_msg = post_youtube_reply(
+                question["source"][len("yt:"):], answer)
+        else:
+            target = discord_target(question)
+            if target:
+                posted, platform_msg = post_discord_reply(*target, answer)
+
+        update_question_status(qid, "answered")
+        append_answered_log(question, answer, posted,
+                            answer_provenance(question, answer, offer or {}))
+    # The reply becomes searchable knowledge immediately: the next Suggest
+    # for the same topic finds it.
+    build_answers_kb()
+    return {"ok": True, "posted_to_platform": posted,
+            "platform_message": platform_msg}
+
+
+
+# --------------------------------------------------------------------------
+# Answering a whole system at once.
+#
+# Two phases on purpose, and they are never joined into one button. Drafting
+# costs money and produces text a model wrote; sending publishes that text
+# under your name to people who are waiting. Between them sits a list you
+# can read and edit, because forty replies posted publicly is not an action
+# to take on trust.
+#
+# The sending itself runs here rather than in the browser: a spaced run can
+# last two hours and a closed tab must not decide whether the last twenty
+# people get an answer.
+# --------------------------------------------------------------------------
+
+BULK_MIN_GAP = 50    # seconds, the user's own floor
+BULK_MAX_GAP = 300   # and ceiling
+
+_bulk = {
+    "phase": "idle",      # idle | drafting | ready | sending | done | stopped
+    "system": "", "system_name": "", "mode": "",
+    "items": [], "done": 0, "sent": 0, "failed": 0,
+    "next_at": 0.0, "stop": False, "note": "",
+}
+_bulk_lock = threading.Lock()
+
+
+def bulk_state() -> dict:
+    """A snapshot the page can poll without holding anything up."""
+    with _bulk_lock:
+        st = {k: v for k, v in _bulk.items() if k != "items"}
+        st["items"] = [dict(i) for i in _bulk["items"]]
+    st["waiting"] = max(0, round(st["next_at"] - time.time())) if st["next_at"] else 0
+    return st
+
+
+def _bulk_busy() -> bool:
+    return _bulk["phase"] in ("drafting", "sending")
+
+
+def bulk_draft(system: str) -> dict:
+    """Draft an answer for every unanswered question of one system."""
+    if _bulk_busy():
+        return {"ok": False, "error": f"already {_bulk['phase']}; stop it first"}
+
+    name = next((n for s, n, _f in CATALOG if s == system), system)
+    queue = [q for q in parse_questions()
+             if q.get("system") == system and q["status"] != "answered"]
+    if not queue:
+        return {"ok": False, "error": f"nothing unanswered under {name}"}
+
+    with _bulk_lock:
+        _bulk.update(phase="drafting", system=system, system_name=name, mode="",
+                     done=0, sent=0, failed=0, next_at=0.0, stop=False, note="",
+                     items=[{"id": q["id"], "code": q.get("code", ""),
+                             "who": q.get("who", ""),
+                             "asked": " ".join((q.get("text") or "").split())[:400],
+                             "channel": q.get("channel", ""),
+                             "draft": "", "state": "waiting", "msg": ""}
+                            for q in queue])
+    threading.Thread(target=_bulk_draft_worker, daemon=True).start()
+    return {"ok": True, "queued": len(queue), "system_name": name}
+
+
+def _bulk_draft_worker() -> None:
+    """Draft one at a time, reusing the single-question machinery.
+
+    start_ai_job and cached_ai_result are the same calls the Suggest button
+    makes, so a question already drafted today costs nothing again and the
+    daily ceiling is accounted for in one place rather than two.
+    """
+    for idx, item in enumerate(list(_bulk["items"])):
+        if _bulk["stop"]:
+            _finish("stopped", "stopped while drafting")
+            return
+        question = find_question_by_id(item["id"])
+        if not question:
+            _mark(idx, "failed", "question no longer in the vault")
+            continue
+
+        hit = cached_ai_result(question, "draft")
+        if hit and hit.get("answer"):
+            _mark(idx, "drafted", "already drafted earlier, no new cost",
+                  hit["answer"])
+            continue
+
+        room, why = _spend_room()
+        if not room:
+            # Out of budget is not a failure of this question; say so and
+            # leave the rest untouched rather than marking them broken.
+            _finish("ready", f"stopped drafting: {why}")
+            return
+
+        job = start_ai_job(question, "draft")
+        waited = 0.0
+        while waited < 180:
+            time.sleep(1.0)
+            waited += 1.0
+            if _bulk["stop"]:
+                _finish("stopped", "stopped while drafting")
+                return
+            st = ai_job_status(job)
+            if st.get("state") == "done":
+                _mark(idx, "drafted", "", (st.get("answer") or "").strip())
+                break
+            if st.get("state") in ("error", "unknown"):
+                _mark(idx, "failed", st.get("error") or "the model call failed")
+                break
+        else:
+            _mark(idx, "failed", "the model took longer than three minutes")
+
+    _finish("ready", "")
+
+
+def bulk_send(mode: str, edits: dict) -> dict:
+    """Send the drafts. mode is 'now' or 'spaced'.
+
+    edits carries whatever you changed in the review list, keyed by question
+    id, so what goes out is what you read, not what the model first wrote.
+    """
+    if _bulk_busy():
+        return {"ok": False, "error": f"already {_bulk['phase']}; stop it first"}
+    if _bulk["phase"] != "ready":
+        return {"ok": False, "error": "draft the answers first"}
+
+    with _bulk_lock:
+        ready = 0
+        for item in _bulk["items"]:
+            text = (edits or {}).get(item["id"], item["draft"])
+            item["draft"] = (text or "").strip()
+            if item["state"] in ("drafted", "failed") and item["draft"]:
+                item["state"] = "queued"
+                ready += 1
+            elif not item["draft"]:
+                item["state"] = "skipped"
+                item["msg"] = "no text to send"
+        if not ready:
+            return {"ok": False, "error": "no draft has any text in it"}
+        _bulk.update(phase="sending", mode=mode, sent=0, failed=0,
+                     stop=False, note="")
+    threading.Thread(target=_bulk_send_worker, args=(mode,), daemon=True).start()
+    return {"ok": True, "sending": ready, "mode": mode}
+
+
+def _bulk_send_worker(mode: str) -> None:
+    queued = [i for i, it in enumerate(_bulk["items"]) if it["state"] == "queued"]
+    for n, idx in enumerate(queued):
+        if _bulk["stop"]:
+            _finish("stopped", f"stopped after {_bulk['sent']} sent")
+            return
+        item = _bulk["items"][idx]
+        res = deliver_reply(item["id"], item["draft"],
+                            offer={"source": "bulk", "system": _bulk["system"]})
+        if res.get("ok"):
+            msg = ("posted" if res.get("posted_to_platform")
+                   else res.get("platform_message", "recorded in the vault only"))
+            _mark(idx, "sent", msg)
+            with _bulk_lock:
+                _bulk["sent"] += 1
+        else:
+            _mark(idx, "failed", res.get("error", "failed"))
+            with _bulk_lock:
+                _bulk["failed"] += 1
+
+        if mode == "spaced" and n < len(queued) - 1:
+            gap = random.randint(BULK_MIN_GAP, BULK_MAX_GAP)
+            with _bulk_lock:
+                _bulk["next_at"] = time.time() + gap
+            # Slept a second at a time so Stop lands within a second rather
+            # than up to five minutes later.
+            for _ in range(gap):
+                if _bulk["stop"]:
+                    _finish("stopped", f"stopped after {_bulk['sent']} sent")
+                    return
+                time.sleep(1.0)
+            with _bulk_lock:
+                _bulk["next_at"] = 0.0
+
+    _finish("done", "")
+    build(live=True)
+
+
+def _mark(idx: int, state: str, msg: str = "", draft: str = "") -> None:
+    with _bulk_lock:
+        item = _bulk["items"][idx]
+        item["state"] = state
+        item["msg"] = msg
+        if draft:
+            item["draft"] = draft
+        _bulk["done"] = sum(1 for i in _bulk["items"]
+                            if i["state"] not in ("waiting", "queued"))
+
+
+def _finish(phase: str, note: str) -> None:
+    with _bulk_lock:
+        _bulk.update(phase=phase, note=note, next_at=0.0, stop=False)
+
+
+def bulk_stop() -> dict:
+    with _bulk_lock:
+        _bulk["stop"] = True
+    return {"ok": True}
+
 # --------------------------------------------------------------------------
 # Replying on Discord, as the bot. The collector already reads with this
 # token; posting uses the same one, so the answer arrives from the LocoAI
@@ -4103,54 +4359,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 build(live=True)   # the log changed: the page must show it
             return self._send_json(result, 200 if result.get("ok") else 400)
 
+        if self.path == "/bulk":
+            payload = self._json_body()
+            act = str(payload.get("action", ""))
+            if act == "status":
+                return self._send_json({"ok": True, **bulk_state()})
+            if act == "stop":
+                return self._send_json(bulk_stop())
+            if act == "draft":
+                return self._send_json(bulk_draft(str(payload.get("system", ""))))
+            if act == "send":
+                mode = "spaced" if payload.get("mode") == "spaced" else "now"
+                return self._send_json(bulk_send(mode, payload.get("edits") or {}))
+            return self._send_json({"ok": False, "error": "unknown action"}, 400)
+
         if self.path == "/reply":
             payload = self._json_body()
-            qid = str(payload.get("id", ""))
-            answer = str(payload.get("text", "")).strip()
-            if not answer:
-                return self._send_json({"ok": False, "error": "empty reply"}, 400)
-
-            # The answered check below is only honest if the status cannot
-            # flip between the read and the write, and each request runs on
-            # its own thread. Two tabs sending the same reply at once both
-            # used to pass the check and both post to the platform; the lock
-            # spans the external call on purpose, because releasing it any
-            # earlier reopens exactly that window.
-            with _reply_lock:
-                question = find_question_by_id(qid)
-                if not question:
-                    return self._send_json({"ok": False, "error": "question not found"}, 404)
-                # A repeated or concurrent request used to post the same reply
-                # again. A question already closed is not delivered twice.
-                if question["status"] == "answered" and not payload.get("force"):
-                    return self._send_json({
-                        "ok": False,
-                        "error": "already answered; reopen it first to reply again",
-                    }, 409)
-
-                # Vault side always happens: this is the rigid part of the rule.
-                # Posting to the platform is best-effort on top of it, never a
-                # precondition for the vault to reflect that you replied.
-                posted, platform_msg = False, "This channel cannot be posted to from here."
-                if question["channel"] == "youtube" and question["source"].startswith("yt:"):
-                    comment_id = question["source"][len("yt:"):]
-                    posted, platform_msg = post_youtube_reply(comment_id, answer)
-                else:
-                    target = discord_target(question)
-                    if target:
-                        posted, platform_msg = post_discord_reply(*target, answer)
-
-                update_question_status(qid, "answered")
-                append_answered_log(question, answer, posted,
-                                    answer_provenance(question, answer, payload))
-            # The reply becomes searchable knowledge immediately: the next
-            # Suggest for the same topic finds it.
-            build_answers_kb()
+            res = deliver_reply(str(payload.get("id", "")),
+                                str(payload.get("text", "")).strip(),
+                                force=bool(payload.get("force")), offer=payload)
+            if not res["ok"]:
+                return self._send_json(res, res.pop("code", 400))
             build(live=True)  # vault changed: the dashboard must reflect it now
-
-            return self._send_json({
-                "ok": True, "posted_to_platform": posted, "platform_message": platform_msg,
-            })
+            return self._send_json(res)
 
         self.send_error(404)
 

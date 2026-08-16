@@ -730,6 +730,25 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 
 
 
+
+/* ---- answering a whole system ---- */
+.bulklist { display:flex; flex-direction:column; gap:var(--s3);
+  margin-top:var(--s3); max-height:60vh; overflow-y:auto; }
+.bulkitem { border:1px solid var(--line); border-radius:var(--r-md);
+  padding:var(--s3); background:var(--surface); }
+.bulkhead { display:flex; gap:var(--s3); align-items:center; flex-wrap:wrap; }
+.bulkwho { color:var(--ink3); font-size:var(--t-xs); }
+.bulkst { margin-left:auto; font-family:var(--mono); font-size:var(--t-2xs);
+  color:var(--ink3); }
+.bulkst.bs-sent { color:var(--ok); }
+.bulkst.bs-failed { color:var(--crit); }
+.bulkst.bs-drafted { color:var(--accent); }
+.bulkq { margin:var(--s2) 0; font-size:var(--t-sm); color:var(--ink2); }
+.bulkdraft { width:100%; min-height:78px; font:inherit; font-size:var(--t-sm);
+  color:var(--ink); background:var(--surface2); border:1px solid var(--line);
+  border-radius:var(--r-sm); padding:var(--s3); resize:vertical; }
+.bulkdraft[readonly] { opacity:.75; }
+
 /* ---- ranked bars: which system, which kind, which country ---- */
 .bars { display:flex; flex-direction:column; gap:5px; margin:var(--s3) 0; }
 .bar { display:grid; grid-template-columns:minmax(9ch,13ch) 1fr auto;
@@ -4189,6 +4208,152 @@ document.addEventListener("click", function (ev) {
   });
 });
 
+
+/* ---- answering a whole system ----
+   Drafting and sending are two clicks, never one. What comes back from the
+   model is text with your name on it going to people who are waiting, so
+   the list between the two steps is editable and is the point of the
+   feature, not a formality. */
+var BULK_POLL = null;
+
+function bulkPost(body) {
+  return fetch("/bulk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Panel-Token": PANEL_TOKEN },
+    body: JSON.stringify(body)
+  }).then(function (r) { return r.json(); });
+}
+
+function bulkSpan(secs) {
+  if (secs < 90) return Math.round(secs) + "s";
+  if (secs < 5400) return Math.round(secs / 60) + " min";
+  return (secs / 3600).toFixed(1) + " hours";
+}
+
+function bulkRender(st) {
+  var box = $("#bulkbody");
+  if (!box) return;
+  var busy = st.phase === "drafting" || st.phase === "sending";
+  $("#bulkrun").disabled = busy;
+  $("#bulksys").disabled = busy;
+
+  var h = "";
+  if (st.phase === "idle") {
+    box.innerHTML = '<p class="figwhy">Pick a system and it drafts an answer '
+      + "for every question still waiting under it. Nothing is sent until you "
+      + "have read them.</p>";
+    return;
+  }
+
+  var n = st.items.length;
+  h += '<div class="figstat" style="border-top:0;padding-top:0">'
+    + '<div><span class="k">system</span><span class="v">' + esc(st.system_name) + "</span></div>"
+    + '<div><span class="k">questions</span><span class="v">' + fmt(n) + "</span></div>"
+    + '<div><span class="k">drafted</span><span class="v">' + fmt(st.done) + "</span></div>"
+    + (st.phase === "sending" || st.phase === "done"
+       ? '<div><span class="k">sent</span><span class="v">' + fmt(st.sent) + "</span></div>"
+         + '<div><span class="k">failed</span><span class="v' + (st.failed ? " warn" : "")
+         + '">' + fmt(st.failed) + "</span></div>" : "")
+    + "</div>";
+
+  if (st.phase === "drafting")
+    h += '<p class="figwhy">Drafting ' + fmt(st.done) + " of " + fmt(n)
+      + ". Each one is a billed model call, and any already drafted today "
+      + "costs nothing again.</p>";
+  if (st.waiting)
+    h += '<p class="figwhy">Next one goes out in ' + st.waiting + "s.</p>";
+  if (st.note) h += '<p class="figwhy">' + esc(st.note) + "</p>";
+
+  if (st.phase === "ready") {
+    var ok = st.items.filter(function (i) { return i.draft; }).length;
+    var avg = (50 + 300) / 2 * Math.max(0, ok - 1);
+    h += '<div class="figbar"><button class="btn tiny primary" id="bulknow">'
+      + "Send all " + fmt(ok) + " now</button>"
+      + '<button class="btn tiny" id="bulkspaced">Send one at a time, 50 to 300s apart'
+      + "</button>" + '<span class="note">spaced takes about ' + bulkSpan(avg)
+      + "</span></div>";
+  }
+  if (st.phase === "drafting" || st.phase === "sending")
+    h += '<div class="figbar"><button class="btn tiny" id="bulkstop">Stop</button></div>';
+
+  h += '<div class="bulklist">';
+  st.items.forEach(function (it) {
+    h += '<div class="bulkitem" data-id="' + esc(it.id) + '">'
+      + '<div class="bulkhead"><span class="slug">' + esc(it.code || "?") + "</span>"
+      + '<span class="bulkwho">' + esc(it.who) + " · " + esc(it.channel) + "</span>"
+      + '<span class="bulkst bs-' + esc(it.state) + '">' + esc(it.state)
+      + (it.msg ? " · " + esc(it.msg) : "") + "</span></div>"
+      + '<p class="bulkq">' + esc(it.asked) + "</p>"
+      + (it.draft || it.state === "drafted"
+         ? '<textarea class="bulkdraft" ' + (st.phase === "ready" ? "" : "readonly")
+           + ">" + esc(it.draft) + "</textarea>" : "")
+      + "</div>";
+  });
+  box.innerHTML = h + "</div>";
+}
+
+function bulkTick() {
+  bulkPost({ action: "status" }).then(function (st) {
+    if (!st.ok) return;
+    bulkRender(st);
+    var busy = st.phase === "drafting" || st.phase === "sending";
+    /* A run started before this tab existed has to be picked up here.
+       Without this the one read at load drew a frozen snapshot: the tab
+       showed "drafted 1 of 2" for as long as it stayed open, because only
+       the buttons ever started the interval. */
+    if (busy && !BULK_POLL) BULK_POLL = setInterval(bulkTick, 2000);
+    if (!busy && BULK_POLL) { clearInterval(BULK_POLL); BULK_POLL = null; }
+  });
+}
+
+function bulkWatch() {
+  if (BULK_POLL) clearInterval(BULK_POLL);
+  BULK_POLL = setInterval(bulkTick, 2000);
+  bulkTick();
+}
+
+/* One read at load, so a run started before this tab was opened is
+   already on screen, and so the idle card explains itself. */
+if ($("#bulkbody")) bulkTick();
+
+function bulkEdits() {
+  var out = {};
+  $$(".bulkitem").forEach(function (el) {
+    var t = $(".bulkdraft", el);
+    if (t) out[el.dataset.id] = t.value;
+  });
+  return out;
+}
+
+document.addEventListener("click", function (ev) {
+  if (ev.target.closest("#bulkrun")) {
+    var sys = $("#bulksys").value;
+    if (!sys) return;
+    $("#bulkmsg").textContent = "";
+    bulkPost({ action: "draft", system: sys }).then(function (r) {
+      if (!r.ok) { $("#bulkmsg").textContent = r.error; return; }
+      bulkWatch();
+    });
+    return;
+  }
+  if (ev.target.closest("#bulkstop")) {
+    bulkPost({ action: "stop" }).then(bulkTick);
+    return;
+  }
+  var now = ev.target.closest("#bulknow"), spaced = ev.target.closest("#bulkspaced");
+  if (now || spaced) {
+    var mode = spaced ? "spaced" : "now";
+    var count = $$(".bulkdraft").filter(function (t) { return t.value.trim(); }).length;
+    if (!confirm("Send " + count + " public replies"
+                 + (spaced ? ", one every 50 to 300 seconds" : ", all at once")
+                 + "? This posts under your name and cannot be taken back.")) return;
+    bulkPost({ action: "send", mode: mode, edits: bulkEdits() }).then(function (r) {
+      if (!r.ok) { $("#bulkmsg").textContent = r.error; return; }
+      bulkWatch();
+    });
+  }
+});
+
 /* ---- gaps and coverage drill into the question table ---- */
 function drillTo(sys) {
   var sel = $("#sysSel");
@@ -5880,6 +6045,40 @@ _NAV = [
 ]
 
 
+
+def _bulk_card(d: dict) -> str:
+    """Answer every open question of one system, drafted then reviewed.
+
+    data-view is written by hand rather than derived: _stamp_views reads the
+    screen off a card's own id, and this card shares the Answers screen with
+    a card that already owns the id "answers".
+    """
+    # Names come off the questions themselves rather than the catalog: this
+    # module has no business importing panel.py's tables, and a question
+    # already carries the display name it was filed under.
+    counts: dict[str, int] = {}
+    names: dict[str, str] = {}
+    for q in d["questions"]:
+        slug = q.get("system")
+        if q["status"] != "answered" and slug not in ("-", "", None):
+            counts[slug] = counts.get(slug, 0) + 1
+            names.setdefault(slug, q.get("system_name") or slug)
+    if not counts:
+        return ""
+    opts = "".join(
+        f'<option value="{escape(slug, quote=True)}">'
+        f'{escape(names.get(slug, slug))} ({n} waiting)</option>'
+        for slug, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+    return (
+        '<section class="card" data-view="answers" id="bulkanswer">'
+        '<h2><span class="he">📣</span>Answer a whole system</h2>'
+        '<div class="figbar"><span class="figlab">system</span>'
+        f'<select id="bulksys" class="fchip">{opts}</select>'
+        '<button class="btn tiny primary" id="bulkrun">Draft answers</button>'
+        '<span class="note" id="bulkmsg"></span></div>'
+        '<div id="bulkbody"></div></section>')
+
+
 def _stamp_views(html: str) -> str:
     """Tag each card with the screen it belongs to, from its own id.
 
@@ -6034,6 +6233,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 {_stamp_views(_tiles(d, len(d["systems"]), _overview_cards(d)) + _questions_card(d))}
 <div class="cols2">
 {_stamp_views(_answers_card(d) + _system_pressure_card(d, facets))}
+{_bulk_card(d)}
 </div>
 {_stamp_views(_sales_card(d) + _business_screen(d) + _links_card() + _sync_card(d) + _wingman_card(d))}
 <div class="grid3">
