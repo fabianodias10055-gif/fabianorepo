@@ -3122,24 +3122,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             build(live=True)
             return self._send_json({"ok": True, "status": status})
 
-        if self.path == "/mark":
-            payload = self._json_body()
-            qid = str(payload.get("id", ""))
-            status = str(payload.get("status", "answered"))
-            if status not in ("answered", "no-source", "escalated", "out-of-scope"):
-                return self._send_json({"ok": False, "error": "unknown status"}, 400)
-            if not update_question_status(qid, status):
-                return self._send_json({"ok": False, "error": "question not found"}, 404)
-            build(live=True)
-            return self._send_json({"ok": True, "status": status})
-
-        if self.path == "/context":
-            payload = self._json_body()
-            question = find_question_by_id(str(payload.get("id", "")))
-            if not question:
-                return self._send_json({"ok": False, "error": "question not found"}, 404)
-            return self._send_json(question_context(question))
-
         if self.path == "/context":
             payload = self._json_body()
             question = find_question_by_id(str(payload.get("id", "")))
