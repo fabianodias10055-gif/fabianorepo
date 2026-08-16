@@ -2788,8 +2788,29 @@ def patreon_summary() -> dict:
         "linked": bool(m.get("discord_id")),
     } for m in recent]
 
+    # Where the money actually comes from: people per tier and what each
+    # tier brings in. Computed here once so the Business screen never does
+    # arithmetic of its own that could drift from these numbers.
+    by_tier: dict[str, dict] = {}
+    for m in active:
+        for t in (m.get("tiers") or ["(no tier)"]):
+            if t == "Free":
+                continue
+            row = by_tier.setdefault(t, {"tier": t, "count": 0, "monthly_cents": 0})
+            row["count"] += 1
+            row["monthly_cents"] += m.get("monthly_cents", 0)
+
+    declined = [m for m in members if m.get("status") == "declined_patron"]
+    stopped_rows = [m for m in members if m.get("status") == "former_patron"]
+
     return {
         "recent": recent_rows,
+        "by_tier": sorted(by_tier.values(), key=lambda r: -r["monthly_cents"]),
+        "new_month_cents": sum(m.get("monthly_cents", 0) for m in active
+                               if (m.get("since") or "")[:7] == month),
+        "declined": len(declined),
+        "declined_lifetime_cents": sum(m.get("lifetime_cents", 0) for m in declined),
+        "stopped_lifetime_cents": sum(m.get("lifetime_cents", 0) for m in stopped_rows),
         "total": len(members),
         "paying": len(active),
         "monthly_cents": sum(m.get("monthly_cents", 0) for m in active),

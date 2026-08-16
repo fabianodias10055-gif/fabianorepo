@@ -3764,6 +3764,96 @@ def _sales_card(d: dict) -> str:
     )
 
 
+def _business_screen(d: dict) -> str:
+    """One screen for the numbers, said as money and people.
+
+    Everything here already existed somewhere: totals on Home, movement in
+    Sales, reach in Community. What did not exist is the view an owner
+    opens before a decision, where the same numbers sit next to each other
+    and one glance answers what the business earns, from whom, and which
+    way it is moving.
+    """
+    pat = d.get("patreon") or {}
+    if not pat:
+        return ""
+    yt = d.get("youtube") or {}
+    people = d["people"]
+
+    def line(label, value, sub=""):
+        return (f'<div class="orow"><span class="olabel">{escape(label)}</span>'
+                f'<span class="ovals"><b>{value}</b>'
+                + (f'<br><span class="note">{sub}</span>' if sub else "")
+                + "</span></div>")
+
+    # Where the money comes from
+    tiers = ""
+    for r in pat.get("by_tier") or []:
+        each = r["monthly_cents"] / r["count"] / 100 if r["count"] else 0
+        tiers += line(r["tier"], f'US$ {r["monthly_cents"] / 100:,.0f}/mo',
+                      f'{_fmt(r["count"])} people at ~US$ {each:,.0f} each')
+    paying = pat.get("paying", 0)
+    avg = pat.get("monthly_cents", 0) / paying / 100 if paying else 0
+    money = (
+        f'<section class="card"><h2><span class="he">💰</span>Where the money '
+        f'comes from</h2>{tiers}'
+        + line("All together", f'US$ {pat.get("monthly_cents", 0) / 100:,.0f}/mo',
+               f'{_fmt(paying)} paying, ~US$ {avg:,.0f} each on average')
+        + line("Since the campaign began",
+               f'US$ {pat.get("lifetime_cents", 0) / 100:,.0f}')
+        + "</section>")
+
+    # Which way it is moving
+    moving = (
+        f'<section class="card"><h2><span class="he">📈</span>Which way it is '
+        f'moving</h2>'
+        + line("Joined this month", _fmt(pat.get("new_this_month", 0)),
+               f'worth US$ {pat.get("new_month_cents", 0) / 100:,.0f}/mo')
+        + line("Payment just failed", _fmt(pat.get("declined", 0)),
+               f'they paid US$ {pat.get("declined_lifetime_cents", 0) / 100:,.0f} '
+               f'before, and have not cancelled')
+        + line("Stopped over the years", _fmt(pat.get("stopped", 0)),
+               f'US$ {pat.get("stopped_lifetime_cents", 0) / 100:,.0f} earned '
+               f'while they stayed')
+        + "</section>")
+
+    # Reach, and how much of it pays
+    reach = (yt.get("subscribers", 0) or 0) + (d.get("discord_members") or 0)
+    conv = (
+        f'<section class="card"><h2><span class="he">🌍</span>Reach, and how '
+        f'much of it pays</h2>'
+        + line("YouTube", _fmt(yt.get("subscribers", 0)),
+               f'{_fmt(yt.get("views", 0))} views all time')
+        + line("Discord", _fmt(d.get("discord_members") or 0))
+        + line("Patreon", _fmt(pat.get("total", 0)),
+               f'{_fmt(paying)} of them pay')
+        + line("Paying, out of everyone reached",
+               f"{(paying * 100 / reach):.1f}%" if reach else "-",
+               f'{_fmt(paying)} of roughly {_fmt(reach)}')
+        + "</section>")
+
+    # The work side, in the same breath
+    waiting = sum(1 for p in people if p["open"])
+    owed = [p for p in people if p.get("patron", {}).get("paying") and p["open"]]
+    work = (
+        f'<section class="card"><h2><span class="he">💬</span>The work behind '
+        f'it</h2>'
+        + line("People who have asked something", _fmt(len(people)))
+        + line("Waiting for an answer", _fmt(waiting))
+        + line("Paying customers among them", _fmt(len(owed)),
+               "they come first in Customers")
+        + line("You have answered", f'{d["answer_rate"]}%',
+               "of everything ever asked")
+        + "</section>")
+
+    return (
+        f'<section id="business"><div class="grid2">'
+        f'{money}{moving}{conv}{work}</div>'
+        f'<p class="note">Patreon read {escape(pat.get("read_at") or "?")}. '
+        f'WhatsApp and website sales are not here: nothing in this panel can '
+        f'see them yet, so every money figure on this screen is Patreon only.</p>'
+        f'</section>')
+
+
 def _new_patrons_card(d: dict) -> str:
     """The people who just started paying, by name.
 
@@ -4704,6 +4794,7 @@ _NAV = [
     ("answers", "check", "Answers sent", "answers"),
     ("people", "users", "Customers", ""),
     ("sales", "target", "Sales", ""),
+    ("business", "grid", "Business", ""),
     ("systems", "flame", "Products", ""),
     ("videos", "video", "Videos", ""),
     ("links", "link", "Links", ""),
@@ -4866,7 +4957,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 <div class="cols2">
 {_stamp_views(_answers_card(d) + _system_pressure_card(d, facets))}
 </div>
-{_stamp_views(_sales_card(d) + _links_card() + _sync_card(d) + _wingman_card(d))}
+{_stamp_views(_sales_card(d) + _business_screen(d) + _links_card() + _sync_card(d) + _wingman_card(d))}
 <div class="grid3">
 {_stamp_views(_people_card(d) + _videos_card(d) + _sources_card(instrumentation, d) + _health_card(d))}
 </div>
