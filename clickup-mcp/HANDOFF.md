@@ -22,27 +22,26 @@ custam tempo:
 Nomes duplicados morderam duas vezes hoje (parâmetro `extra`, classe CSS
 `prow`). Antes de criar nome novo em `panel_ui.py`, grep primeiro.
 
-## Trabalho em andamento (parar aqui foi deliberado)
+## Trabalho em andamento
 
-**Colocar o compositor da Inbox nos painéis de vídeo e produto.**
-O pedido do usuário: ao abrir um vídeo/produto, cada pergunta deve ter os
-controles reais (Find existing answer, Draft with Claude, What is this
-about?, Mark as answered, caixa de resposta, Post to YouTube/Discord), não
-uma lista só de leitura.
+Nenhum. O compositor nos painéis de vídeo e produto foi entregue em
+2026-08-15 (commit afff2a6): clicar numa pergunta aberta (ou no botão
+Answer) insere `composerFor(qid)` ali mesmo, com os controles reais, e o
+painel se redesenha a partir de `QDATA` quando um reply ou mark conclui.
+Regras que a implementação respeita e que valem para quem mexer depois:
 
-- FEITO (commit 44fc8cf): `composerFor(qid)` devolve o compositor como
-  bloco livre; `detailFor(qid)` é o invólucro de tabela. `runReply` tolera
-  linha da fila ainda não montada (lazy rendering).
-- FALTA: em `videoPanel()` e `productProfile()` (ambos em panel_ui.py),
-  trocar a lista `.cev` de perguntas abertas por itens que, ao clicar,
-  inserem `composerFor(qid)` ali mesmo. Cuidados:
-  - o clique dentro de `.vdet`/`.cdet`/`.pdet` não pode fechar o painel
-    (já há guardas de `closest` nos handlers delegados; siga o padrão)
-  - `openId`/`closeDet()` são globais da fila; um compositor fora da fila
-    não deve mexer neles (abrir na fila fecharia o do painel)
-  - após responder com sucesso, o item deve sair da lista do painel
-    (runReply já chama `apply()`; o painel de vídeo/produto não reage a
-    isso, precisa re-renderizar ou remover o `.cev`)
+- `openId`/`closeDet()` continuam sendo só da fila. Os handlers de
+  sucesso agora fecham o detalhe da fila apenas se ele mostra a própria
+  pergunta da ação (`if (openId === qid) closeDet()`).
+- O bloco avançar-para-a-próxima do `runReply` só roda para replies
+  vindos da fila (`fromQueue`, decidido antes do fetch).
+- `busy()` conta um compositor de painel aberto como estado de edição,
+  senão o reload de época o destruiria após 20s parado.
+- O handler de mark chama `fillRow(row)` antes de tocar no `.pill`:
+  linhas da fila são montadas sob demanda e podem não existir ainda.
+- Caminho não testado de ponta a ponta: o Post real para YouTube/Discord
+  a partir do painel (postaria para um cliente de verdade). Todo o resto
+  foi testado ao vivo, incluindo mark/reopen com escrita no vault.
 
 ## Pendências do usuário (lembrar, não fazer por ele)
 
