@@ -777,6 +777,10 @@ def parse_answers() -> list[dict]:
 
 
 ANSWERS_KB_NAME = "05 - Answered questions.md"
+# The generated notes are one per tier, so they are "05 - Answered questions
+# - Standard.md" and so on. Excluding them by this prefix rather than by the
+# number keeps a hand-written note that happens to be numbered 05 visible.
+ANSWERS_KB_PREFIX = ANSWERS_KB_NAME[:-3]
 QUESTIONS_KB_PREFIX = "06 - Open questions"
 GENERAL_KB_DIR = "_general"
 
@@ -1179,7 +1183,7 @@ def sync_report() -> dict:
             stat = path.stat()
         except OSError:
             continue
-        generated = path.name.startswith("05 -")
+        generated = path.name.startswith(ANSWERS_KB_PREFIX)
         n_elig = eligible.get(rel, 0)
         n_ship = shipped_by_source.get(rel, 0)
         if generated:
@@ -1206,7 +1210,7 @@ def sync_report() -> dict:
     # difference between "a sync exists" and knowing what is in flight.
     waiting_out = []
     for path in sorted((VAULT / "Systems").rglob("*.md")):
-        if path.name.startswith("05 -"):
+        if path.name.startswith(ANSWERS_KB_PREFIX):
             continue
         try:
             mtime = path.stat().st_mtime
@@ -1297,7 +1301,7 @@ def doc_sections() -> list[dict]:
     """
     out: list[dict] = []
     for section, path in _all_sections():
-        if path.name.startswith("05 -"):
+        if path.name.startswith(ANSWERS_KB_PREFIX):
             continue
         lines = section.splitlines()
         if lines and lines[0].lstrip().startswith("#"):
