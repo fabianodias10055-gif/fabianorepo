@@ -3505,6 +3505,26 @@ def _question_rows(questions: list) -> str:
 
 def _question_payload(questions: list) -> dict:
     """Everything the on-demand composer needs, keyed by question id."""
+    from urllib.parse import quote
+
+    def where_asked(q: dict) -> str:
+        """The link that opens the comment itself.
+
+        Discord questions arrive with one. YouTube ones never did: the
+        collector stores the comment id and the video id separately and
+        nothing ever put them together, so every one of 859 YouTube
+        questions had no way back to the person who asked it. The permalink
+        is those two ids in one URL.
+        """
+        direct = _safe_url(q.get("url", ""))
+        if direct:
+            return direct
+        src = q.get("source", "")
+        if q.get("channel") == "youtube" and q.get("video_id") and src.startswith("yt:"):
+            return (f"https://www.youtube.com/watch?v={quote(q['video_id'], safe='')}"
+                    f"&lc={quote(src[3:], safe='')}")
+        return ""
+
     out = {}
     for q in questions:
         url = _safe_url(q.get("video_url", ""))
@@ -3515,7 +3535,7 @@ def _question_payload(questions: list) -> dict:
             "text": q["text"], "reply": q.get("reply", ""),
             "video": q.get("video", ""), "video_id": q.get("video_id", ""),
             "video_url": url, "source": q.get("source", ""),
-            "link": _safe_url(q.get("url", "")), "thread": q.get("thread", ""),
+            "link": where_asked(q), "thread": q.get("thread", ""),
             "roles": q.get("roles") or [], "avatar": _safe_url(q.get("avatar_url", "")),
             "joined": q.get("joined", ""), "asker": q["who"],
             "status": q["status"],
