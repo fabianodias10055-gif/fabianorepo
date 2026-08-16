@@ -6197,9 +6197,14 @@ _NAV = [
 def _bulk_card(d: dict) -> str:
     """Answer every open question of one system, drafted then reviewed.
 
+    It lives on Inbox, with the questions and the system filter, because
+    that is where you go when you want to answer things. On Answers sent,
+    which is where it was first put, it went unfound: that screen is the
+    record of what already went out.
+
     data-view is written by hand rather than derived: _stamp_views reads the
-    screen off a card's own id, and this card shares the Answers screen with
-    a card that already owns the id "answers".
+    screen off a card's own id, and "questions" is already taken by the
+    inbox table.
     """
     # Names come off the questions themselves rather than the catalog: this
     # module has no business importing panel.py's tables, and a question
@@ -6218,7 +6223,7 @@ def _bulk_card(d: dict) -> str:
         f'{escape(names.get(slug, slug))} ({n} waiting)</option>'
         for slug, n in sorted(counts.items(), key=lambda kv: -kv[1]))
     return (
-        '<section class="card" data-view="answers" id="bulkanswer">'
+        '<section class="card" data-view="questions" id="bulkanswer">'
         '<h2><span class="he">📣</span>Answer a whole system</h2>'
         '<div class="figbar"><span class="figlab">system</span>'
         f'<select id="bulksys" class="fchip">{opts}</select>'

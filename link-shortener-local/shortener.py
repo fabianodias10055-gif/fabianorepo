@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
@@ -309,6 +310,73 @@ def import_from_csv(csv_path: str) -> tuple[int, int]:
     return imported, skipped
 
 
+
+# ── which requests are a person ───────────────────────────────────────────────
+# Two kinds of request reach a short link and are not somebody choosing to
+# open it. Both used to be counted, and on /root/uecourse they were most of
+# the number: 8,240 clicks from 34 visitors, 89% of them landing under two
+# seconds after the same visitor's previous one.
+#
+# Neither kind is turned away. The redirect always happens, because a
+# misjudged request costs an uncounted click while a refused one costs
+# somebody their download. Only the counting is skipped.
+
+# Anything that announces itself as software. Link unfurlers are in here on
+# purpose: posting a link in Discord or WhatsApp fetches it once per viewer
+# and none of those are visits.
+BOT_UA_MARKS = (
+    "bot", "crawl", "spider", "slurp", "headless", "monitor", "preview",
+    "curl", "wget", "python-", "go-http", "okhttp", "java/", "libwww",
+    "httpclient", "facebookexternalhit", "whatsapp", "embedly", "skypeuri",
+)
+# The same visitor opening the same link twice inside this window is one
+# visit, whoever they are. Real repeat traffic comes minutes or hours apart;
+# the bursts measured here came 0.2 to 0.3 seconds apart.
+CLICK_DEDUP_SECS = int(os.getenv("CLICK_DEDUP_SECS", "10"))
+
+_recent_clicks: dict[tuple, float] = {}
+_uncounted = {"software": 0, "repeat": 0}
+
+
+# A request with no user agent at all. Measured here they also arrive with
+# no usable IP, so they all collapse into one hash and cannot be told apart
+# or attributed to anybody: 103 of them, 101 sharing a single hash across
+# four months. Counting those as visitors is already wrong. Set
+# COUNT_HEADLESS=1 to keep them anyway.
+COUNT_NO_UA = os.getenv("COUNT_HEADLESS", "") == "1"
+
+
+def _looks_like_software(user_agent: str) -> bool:
+    low = (user_agent or "").strip().lower()
+    if not low:
+        return not COUNT_NO_UA
+    if low == "google":      # Google's fetcher sends exactly this, 49 times here
+        return True
+    return any(mark in low for mark in BOT_UA_MARKS)
+
+
+def _seen_just_now(ip_hash: str, link_id) -> bool:
+    """True when this visitor opened this same link a moment ago."""
+    now = time.monotonic()
+    key = (ip_hash, link_id)
+    last = _recent_clicks.get(key)
+    _recent_clicks[key] = now
+    if len(_recent_clicks) > 20000:      # bounded; this runs for months
+        stale = now - max(CLICK_DEDUP_SECS, 60)
+        for k, seen in list(_recent_clicks.items()):
+            if seen < stale:
+                _recent_clicks.pop(k, None)
+    return last is not None and (now - last) < CLICK_DEDUP_SECS
+
+
+def _uncounted_reason(user_agent: str, ip_hash: str, link_id) -> str:
+    if _looks_like_software(user_agent):
+        return "software"
+    if _seen_just_now(ip_hash, link_id):
+        return "repeat"
+    return ""
+
+
 # Hold strong references to background geo-lookup tasks so GC doesn't kill them.
 _bg_tasks: set = set()
 
@@ -331,7 +399,17 @@ async def _do_redirect(request: web.Request, slug: str, prefix: str) -> web.Resp
     user_agent = request.headers.get("User-Agent", "")[:512]
     ip_h = hash_ip(ip)
 
-    # Always log the click immediately (synchronous DB write, sub-ms).
+    skip = _uncounted_reason(user_agent, ip_h, link["id"])
+    if skip:
+        _uncounted[skip] += 1
+        total = _uncounted["software"] + _uncounted["repeat"]
+        if total % 50 == 0:
+            logger.info("not counted so far: %d software, %d repeats within %ds",
+                        _uncounted["software"], _uncounted["repeat"],
+                        CLICK_DEDUP_SECS)
+        raise web.HTTPFound(link["url"])   # they still get where they were going
+
+    # Log the click immediately (synchronous DB write, sub-ms).
     click_id = log_click(
         link["id"], "Unknown", "??", referrer,
         ip_hash=ip_h, user_agent=user_agent,
