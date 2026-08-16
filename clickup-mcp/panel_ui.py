@@ -801,6 +801,30 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
   border:1px solid var(--warn); border-radius:var(--r-xs); padding:1px 5px; }
 .bi { vertical-align:-2px; flex:none; }
 
+/* A card with no expand of its own (it is not in a grid) still gets to
+   fill the page width when a reply needs the room. */
+.card.fullrow { max-width:none; }
+.card.fullrow .qbox { min-height:220px; }
+.card.wide .qbox { min-height:200px; }
+
+
+/* ---- the note asked for before a draft ---- */
+.modalback { position:fixed; inset:0; background:rgba(0,0,0,.55);
+  display:grid; place-items:center; z-index:60; padding:var(--s4);
+  backdrop-filter:blur(2px); }
+.modal { background:var(--surface); border:1px solid var(--line);
+  border-radius:var(--r-lg); padding:var(--s5); width:min(620px,100%);
+  box-shadow:0 18px 50px rgba(0,0,0,.4); }
+.modal h3 { margin:0 0 var(--s2); font-size:var(--t-lg); }
+.modal .note { margin:0 0 var(--s3); }
+.mq { margin:0 0 var(--s3); padding:var(--s3); background:var(--surface2);
+  border-left:3px solid var(--line); border-radius:var(--r-sm);
+  font-size:var(--t-sm); color:var(--ink2); max-height:120px; overflow:auto; }
+.mctx { width:100%; font:inherit; font-size:var(--t-sm); color:var(--ink);
+  background:var(--surface2); border:1px solid var(--line);
+  border-radius:var(--r-sm); padding:var(--s3); resize:vertical; }
+.mbtns { display:flex; gap:var(--s2); margin-top:var(--s3); flex-wrap:wrap; }
+
 /* ---- answering a whole system ---- */
 .pbar { height:6px; border-radius:3px; background:var(--surface3);
   overflow:hidden; margin:var(--s3) 0 2px; }
@@ -2333,7 +2357,14 @@ function composerFor(qid) {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runReply(wrap); }
   });
   $$("[data-ai]", det).forEach(function (b) {
-    b.addEventListener("click", function () { runAi(wrap, b.dataset.ai, false); });
+    b.addEventListener("click", function () {
+      /* Only the draft asks. Find existing answer reads what is already
+         written, so a note would have nothing to change. */
+      if (b.dataset.ai !== "draft") { runAi(wrap, b.dataset.ai, false); return; }
+      askContext(q.text || "", function (extra) {
+        runAi(wrap, "draft", !!extra, extra);
+      });
+    });
   });
   det.querySelector("[data-reply]").addEventListener("click", function () { runReply(wrap); });
   det.querySelector("[data-ctx]").addEventListener("click", function () {
@@ -2751,7 +2782,8 @@ function runAi(det, mode, force, extra) {
   }, 1000);
   function stop() { clearInterval(timer); }
   fetch("/suggest_ai", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: det.dataset.id, mode: mode, force: !!force }) })
+    body: JSON.stringify({ id: det.dataset.id, mode: mode, force: !!force,
+                           extra: extra || "" }) })
     .then(function (r) { return r.json(); })
     .then(function (j) {
       if (!j.ok) throw new Error(j.error || "could not start");
@@ -4618,6 +4650,65 @@ document.addEventListener("click", function (ev) {
     });
   }
 });
+
+/* The reply box can be dragged in both directions now, but dragging past
+   the card only overlaps what is beside it. This widens the card itself,
+   through the same expand the card already carries, so the box has room
+   rather than spilling over its neighbour. */
+document.addEventListener("click", function (ev) {
+  var w = ev.target.closest(".qwide");
+  if (!w) return;
+  var card = w.closest(".card");
+  if (!card) return;
+  var ex = card.querySelector(".expand");
+  if (ex && !ex.hidden) { ex.click(); w.textContent = card.classList.contains("wide") ? "narrower" : "wider"; return; }
+  var on = card.classList.toggle("fullrow");
+  w.textContent = on ? "narrower" : "wider";
+});
+
+
+/* ---- a word before the draft ----
+   Optional on purpose: Enter or the button with an empty box drafts exactly
+   as before. What you type here is your own, so the prompt files it as the
+   owner speaking, separate from the public comment, which stays untrusted. */
+function askContext(question, onGo) {
+  var back = document.createElement("div");
+  back.className = "modalback";
+  back.innerHTML =
+    '<div class="modal" role="dialog" aria-modal="true" aria-label="Context for this draft">'
+    + '<h3>Anything Claude should know?</h3>'
+    + '<p class="note">Optional. Leave it empty and it drafts from the vault '
+    + "alone, exactly as before.</p>"
+    + '<blockquote class="mq">' + esc(question) + "</blockquote>"
+    + '<textarea class="mctx" rows="4" placeholder="e.g. they are on 5.6 already, '
+    + 'do not tell them to upgrade — or: point them at the devlog, not the old tutorial"></textarea>'
+    + '<div class="mbtns"><button class="btn tiny primary mgo">Draft</button>'
+    + '<button class="btn tiny mskip">Draft without a note</button>'
+    + '<button class="btn tiny mcancel">Cancel</button></div></div>';
+  document.body.appendChild(back);
+  var box = back.querySelector(".mctx");
+  box.focus();
+
+  function close() {
+    document.removeEventListener("keydown", onKey, true);
+    back.remove();
+  }
+  function go(text) { close(); onGo(text); }
+  function onKey(ev) {
+    if (ev.key === "Escape") { ev.preventDefault(); close(); }
+    /* Ctrl+Enter sends, plain Enter does not: a note is often two lines and
+       losing the second one to a stray Return would be worse than a click. */
+    if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
+      ev.preventDefault();
+      go(box.value.trim());
+    }
+  }
+  document.addEventListener("keydown", onKey, true);
+  back.querySelector(".mgo").addEventListener("click", function () { go(box.value.trim()); });
+  back.querySelector(".mskip").addEventListener("click", function () { go(""); });
+  back.querySelector(".mcancel").addEventListener("click", close);
+  back.addEventListener("click", function (ev) { if (ev.target === back) close(); });
+}
 
 /* ---- gaps and coverage drill into the question table ---- */
 function drillTo(sys) {
