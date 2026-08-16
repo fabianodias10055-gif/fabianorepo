@@ -2351,6 +2351,12 @@ def link_action(action: str, prefix: str, slug: str, url: str) -> dict:
     if err:
         return {"ok": False, "error": err}
 
+    if action == "suggest":
+        cached = fetch_link_telemetry()
+        if not cached.get("ok"):
+            return {"ok": False, "error": cached.get("error", "no link list")}
+        return link_suggest(url, cached.get("links") or [])
+
     if action == "countries":
         # The window matters more than it looks: 24h and 7d both come back
         # empty because geo lookup has been answering Unknown, while all
@@ -2444,6 +2450,105 @@ def link_system(prefix: str, slug: str) -> str:
     # Half the catalog name's words must appear: one shared word out of
     # three is a coincidence, not a match.
     return best_name if best_score[0] >= 0.5 else ""
+
+
+
+# What a phrase like "weapon system premium" should become. Nothing here is
+# invented: the shape is read back off the 88 links that already exist, so
+# the suggestion follows whatever convention was actually used rather than
+# one this file made up.
+_KIND_WORDS = {"download": "download", "build": "download", "file": "download",
+               "docs": "docs", "doc": "docs", "documentation": "docs",
+               "patreon": "p", "page": "p", "post": "p",
+               "free": "free", "freebuild": "freebuild"}
+
+
+def link_suggest(phrase: str, links: list) -> dict:
+    """Propose prefix, slug and where to point, from a plain phrase.
+
+    The slug's stem is learned per system: Weapon System's links all begin
+    weapon, Advanced Combat Punch's begin punchcombat. Guessing a stem from
+    the catalog name instead would have produced advancedcombatpunch, which
+    matches nothing anyone has ever linked.
+
+    The destination is deliberately not fabricated. A Patreon post URL
+    cannot be derived from a system name, so the answer carries the sibling
+    links and the host they use, and leaves the address itself to you: a
+    made-up URL that 404s is worse than an empty field.
+    """
+    words = [w for w in re.split(r"[^a-z0-9]+", (phrase or "").lower()) if w]
+    if not words:
+        return {"ok": False, "error": "say which system, for example "
+                                      "'weapon system premium'"}
+
+    tier = next((w for w in words if w in _LINK_TIER), "")
+    prefix = next((_KIND_WORDS[w] for w in words if w in _KIND_WORDS), "p")
+    # "free" is both a tier and a kind; as a kind it needs a tier of its own.
+    if prefix in ("free", "freebuild") and tier == "free":
+        tier = "basic"
+
+    # Which system the phrase means, scored the same way a slug is.
+    said = "".join(w for w in words if w not in _LINK_TIER and w not in _KIND_WORDS)
+    best, best_name = (0.0, 0), ""
+    for cslug, name, _fam in CATALOG:
+        cw = [w for w in re.split(r"[^a-z0-9]+", cslug)
+              if w and w not in _LINK_NOISE]
+        if not cw:
+            continue
+        hit = [w for w in cw if (w[:5] if len(w) >= 5 else w) in said]
+        if not hit:
+            continue
+        score = (len(hit) / len(cw), sum(len(w) for w in hit))
+        if score > best:
+            best, best_name = score, name
+    if not best_name or best[0] < 0.5:
+        return {"ok": False, "error": f"no catalog system matches "
+                                      f"'{phrase}'"}
+
+    # The stem this system's own links use, most common first, longest to
+    # break a tie.
+    family = [l for l in links if l.get("system") == best_name]
+    stems: dict[str, int] = {}
+    for l in family:
+        head = (l.get("slug") or "").split("/")[0].lower()
+        for t in _LINK_TIER:
+            if head.endswith(t):
+                head = head[:-len(t)]
+        if head:
+            stems[head] = stems.get(head, 0) + 1
+    stem = ""
+    if stems:
+        stem = sorted(stems, key=lambda k: (-stems[k], -len(k)))[0]
+    else:
+        stem = re.sub(r"[^a-z0-9]+", "",
+                      next(c for c, n, _f in CATALOG if n == best_name))
+
+    slug = stem + tier
+    taken = [l for l in links
+             if l.get("prefix") == prefix
+             and (l.get("slug") or "").split("/")[0] == slug]
+
+    # Where its siblings point, closest kind first.
+    sibs = [{"short": f"{l['prefix']}/{l['slug']}", "url": l.get("url", ""),
+             "same_kind": l.get("prefix") == prefix}
+            for l in sorted(family, key=lambda x: x.get("prefix") != prefix)][:6]
+    hosts: dict[str, int] = {}
+    for l in links:
+        if l.get("prefix") != prefix:
+            continue
+        m = re.match(r"https?://([^/]+)", l.get("url") or "")
+        if m:
+            hosts[m.group(1)] = hosts.get(m.group(1), 0) + 1
+    host = sorted(hosts, key=lambda k: -hosts[k])[0] if hosts else ""
+
+    return {
+        "ok": True, "prefix": prefix, "slug": slug, "system": best_name,
+        "tier": tier or "(none said)", "taken": bool(taken),
+        "stem_from": len(family), "host": host,
+        "host_share": (f"{hosts.get(host, 0)} of "
+                       f"{sum(hosts.values())}" if host else ""),
+        "siblings": sibs,
+    }
 
 
 # --------------------------------------------------------------------------

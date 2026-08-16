@@ -744,6 +744,16 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
   font-variant-numeric:tabular-nums; }
 .bar:hover .bt i { opacity:.82; }
 
+.lask { display:flex; gap:var(--s2); align-items:center; flex-wrap:wrap;
+  margin:var(--s4) 0 var(--s2); }
+.lask .lq { flex:1; min-width:220px; font:inherit; font-size:var(--t-sm);
+  color:var(--ink); background:var(--surface); border:1px solid var(--line);
+  border-radius:var(--r-sm); padding:5px 9px; }
+.lqcard { background:var(--surface2); border:1px solid var(--line);
+  border-radius:var(--r-md); padding:var(--s3) var(--s4); margin-bottom:var(--s3); }
+.lqcard b { font-family:var(--mono); font-size:var(--t-md); color:var(--ink); }
+.lqbad { color:var(--warn); font-size:var(--t-xs); font-weight:600; }
+
 /* ---- the short-link manager ---- */
 tr.lkrow { cursor:pointer; }
 tr.lkrow:hover .slug { color:var(--accent); }
@@ -3947,7 +3957,13 @@ function ltDetail(box, prefix, slug) {
 }
 
 function ltComposer() {
-  return '<div class="lnew"><span class="figlab">new link</span>'
+  return '<div class="lask"><span class="figlab">describe it</span>'
+    + '<input class="lq" placeholder="weapon system premium" '
+    + 'aria-label="Describe the link you want">'
+    + '<button class="btn tiny lsuggest">Suggest</button>'
+    + '<span class="note lqmsg"></span></div>'
+    + '<div class="lqout"></div>'
+    + '<div class="lnew"><span class="figlab">new link</span>'
     + '<select class="lnp" aria-label="Prefix">'
     + LT_PREFIXES.map(function (p) { return '<option value="' + p + '">' + p + "</option>"; }).join("")
     + '</select><input class="lns" placeholder="slug" aria-label="Slug">'
@@ -3956,7 +3972,56 @@ function ltComposer() {
     + '<span class="note lnmsg"></span></div>';
 }
 
+/* Suggest reads the convention off the links that already exist rather
+   than off the catalog name, then fills the fields. It stops short of the
+   destination: a Patreon post URL cannot be derived from a system name, so
+   it shows the sibling links and the host they use and leaves the address
+   to you. A fabricated URL that 404s would be worse than an empty box. */
+function ltSuggest(wrap) {
+  var q = $(".lq", wrap).value.trim();
+  var msg = $(".lqmsg", wrap);
+  var out = $(".lqout");
+  msg.textContent = "thinking…";
+  ltPost({ action: "suggest", url: q }).then(function (r) {
+    if (!r.ok) { msg.textContent = r.error; out.innerHTML = ""; return; }
+    msg.textContent = "";
+    var form = $(".lnew");
+    $(".lnp", form).value = r.prefix;
+    $(".lns", form).value = r.slug;
+    if (r.host && !$(".lnu", form).value) $(".lnu", form).value = "https://" + r.host + "/";
+    var h = '<div class="lqcard"><b>locodev.dev/' + esc(r.prefix) + "/" + esc(r.slug)
+      + "</b>" + (r.taken ? ' <span class="lqbad">that one already exists</span>' : "")
+      + '<p class="figwhy">' + esc(r.system) + ", tier " + esc(r.tier)
+      + ". The slug follows the " + fmt(r.stem_from) + " link"
+      + (r.stem_from === 1 ? "" : "s") + " this system already has"
+      + (r.stem_from ? "" : ", or the catalog name where it has none")
+      + ". " + (r.host ? "Links under " + esc(r.prefix) + " point at "
+                + esc(r.host) + " (" + esc(r.host_share) + "), so the box is "
+                + "started there; paste the real address, it cannot be "
+                + "guessed from a name." : "") + "</p>";
+    if (r.siblings && r.siblings.length) {
+      h += '<p class="lsub">Where its siblings point</p>';
+      r.siblings.forEach(function (sb) {
+        h += '<div class="lrow"><span class="slug">/' + esc(sb.short) + "</span>"
+          + '<span class="n"><a href="' + esc(sb.url) + '" target="_blank" '
+          + 'rel="noopener">' + esc(sb.url.replace(/^https?:../, "").slice(0, 54))
+          + "</a></span></div>";
+      });
+    }
+    out.innerHTML = h + "</div>";
+  });
+}
+
+document.addEventListener("keydown", function (ev) {
+  if (ev.key === "Enter" && ev.target.matches(".lq")) {
+    ev.preventDefault();
+    ltSuggest(ev.target.closest(".lask"));
+  }
+});
+
 document.addEventListener("click", function (ev) {
+  var sug = ev.target.closest(".lsuggest");
+  if (sug) { ltSuggest(sug.closest(".lask")); return; }
   var save = ev.target.closest(".lsave");
   if (save) {
     var box = save.closest(".ldet");
