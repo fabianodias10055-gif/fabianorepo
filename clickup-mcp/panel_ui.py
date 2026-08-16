@@ -63,6 +63,47 @@ _ICONS = {
 # Filled brand marks (approximations, small sizes): stroke icons read poorly
 # for brands, so these bypass the stroke-based helper.
 _BRAND = {
+    # Browser and destination marks for the link drilldown. Each one is the
+    # brand's own colour and its simplest true shape; where a mark is too
+    # intricate to draw honestly at 14px it is a tinted outline instead of a
+    # bad likeness. The name is always beside it, so nothing depends on the
+    # drawing being recognised.
+    "chrome": ('<circle cx="12" cy="12" r="10" fill="#f1c21b"/>'
+               '<path d="M12 2a10 10 0 0 1 8.66 5H12a5 5 0 0 0-4.33 2.5L3.34 7A10 10 0 0 1 12 2z" fill="#ea4335"/>'
+               '<path d="M3.34 7l4.33 2.5A5 5 0 0 0 12 17l-4.33 4.5A10 10 0 0 1 3.34 7z" fill="#34a853"/>'
+               '<circle cx="12" cy="12" r="4.6" fill="#fff"/>'
+               '<circle cx="12" cy="12" r="3.4" fill="#4285f4"/>'),
+    "firefox": ('<circle cx="12" cy="12.6" r="9.2" fill="#ff7139"/>'
+                '<path d="M12 3.4c2.2 2 2.6 4.2 1.9 5.6 1.2-.7 2.6-.4 3.4.6-1.1.2-1.7 1-1.7 2 0 2.4-2 4.3-4.4 4.3S6.8 14 6.8 11.6c0-2 1-3.4 2.3-4.6C10.6 5.6 11.7 4.6 12 3.4z" fill="#ffbd4f"/>'),
+    "safari": ('<circle cx="12" cy="12" r="9.4" fill="#1e9bf0"/>'
+               '<circle cx="12" cy="12" r="7.4" fill="#f6f7f9"/>'
+               '<path d="M16.4 7.6l-2.1 5.3-5.3 2.1 2.1-5.3z" fill="#ff5b4a"/>'
+               '<path d="M12 12l4.4-4.4-2.1 5.3z" fill="#c9302c"/>'),
+    "edge": ('<circle cx="12" cy="12" r="9.4" fill="#0e79c0"/>'
+             '<path d="M3.6 14.4C4.4 8.9 8.2 5.6 12.6 5.6c4 0 6.6 2.4 6.6 5.2 0 1.9-1.4 3-3.3 3H9.3c0 2.6 2.2 4.4 5.2 4.4 1.9 0 3.5-.5 4.6-1.2-1.5 2.4-4.2 4-7.3 4-4.6 0-8.2-2.9-8.2-6.6z" fill="#35c1f1"/>'),
+    "opera": ('<circle cx="12" cy="12" r="9.4" fill="#e6142b"/>'
+              '<ellipse cx="12" cy="12" rx="3.9" ry="6.6" fill="#fff"/>'),
+    "patreon": ('<circle cx="14.6" cy="9.3" r="6.3" fill="#f96854"/>'
+                '<rect x="2.6" y="3" width="3.7" height="18" fill="#052d49"/>'),
+    "drive": ('<path d="M8.8 2.6h6.4l6.4 11.1h-6.4z" fill="#ffcf63"/>'
+              '<path d="M2.4 13.7L5.6 8.2l6.4 11.1H5.6z" fill="#11a861"/>'
+              '<path d="M5.6 8.2L8.8 2.6l6.4 11.1-3.2 5.6z" fill="#3777e3"/>'),
+    "gdocs": ('<rect x="4.6" y="2.4" width="14.8" height="19.2" rx="2" fill="#4285f4"/>'
+              '<path d="M7.6 8.4h8.8M7.6 11.6h8.8M7.6 14.8h6" stroke="#fff" '
+              'stroke-width="1.5" stroke-linecap="round"/>'),
+    "mega": ('<circle cx="12" cy="12" r="9.4" fill="#d9272e"/>'
+             '<path d="M6.6 15.8V8.2l5.4 4.6 5.4-4.6v7.6" stroke="#fff" '
+             'stroke-width="1.9" fill="none" stroke-linejoin="round"/>'),
+    "gamma": ('<circle cx="12" cy="12" r="9.4" fill="#7c4dff"/>'
+              '<path d="M8 8h8l-4.4 5.2V17" stroke="#fff" stroke-width="1.9" '
+              'fill="none" stroke-linecap="round" stroke-linejoin="round"/>'),
+    "notebooklm": ('<rect x="3.4" y="3.4" width="17.2" height="17.2" rx="4" fill="#1a73e8"/>'
+                   '<path d="M8 8.6h8M8 12h8M8 15.4h5" stroke="#fff" stroke-width="1.6" '
+                   'stroke-linecap="round"/>'),
+    "web": ('<circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" '
+            'stroke-width="1.7"/><path d="M3.4 12h17.2M12 3.4c4.6 5 4.6 12.2 0 17.2'
+            'M12 3.4c-4.6 5-4.6 12.2 0 17.2" fill="none" stroke="currentColor" '
+            'stroke-width="1.7"/>'),
     "youtube": ('<rect x="1.5" y="5" width="21" height="14" rx="4" fill="#e5332a"/>'
                 '<path d="M10 9l6 3-6 3z" fill="#fff"/>'),
     # Discord's own mark. The stand-in drawn here before was an ellipse with
@@ -730,6 +771,35 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 
 
 
+
+
+/* ---- one link opened: the full short link, and every click in it ---- */
+.lfull { display:flex; gap:var(--s3); align-items:center; flex-wrap:wrap;
+  margin-bottom:var(--s3); }
+.lfull a { font-family:var(--mono); font-size:var(--t-md); color:var(--ink);
+  text-decoration:none; border-bottom:1px solid var(--line); }
+.lfull a:hover { color:var(--accent); border-color:var(--accent); }
+.lclicks { max-height:420px; overflow-y:auto; border:1px solid var(--line);
+  border-radius:var(--r-md); background:var(--surface); }
+.lclick { display:grid; grid-template-columns:34px minmax(90px,auto) 1fr auto auto;
+  gap:var(--s3); align-items:center; padding:6px var(--s3);
+  border-bottom:1px solid var(--line2); font-size:var(--t-sm); }
+.lclick:last-child { border-bottom:0; }
+.lclick .lb, .lclick .lr { display:inline-flex; align-items:center; gap:6px;
+  min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--ink2); }
+.lclick .n { font-family:var(--mono); font-size:var(--t-xs); color:var(--ink3);
+  white-space:nowrap; }
+.cc { font-family:var(--mono); font-size:var(--t-2xs); font-weight:700;
+  color:var(--ink2); background:var(--surface3); border-radius:var(--r-xs);
+  padding:2px 5px; text-align:center; }
+.cc.none { color:var(--ink3); font-weight:400; }
+/* Burst rows are tinted and tagged, never tinted alone: the tag is what
+   says why, and colour on its own would just look decorative. */
+.lclick.burst { background:var(--warn-bg); }
+.btag { font-family:var(--mono); font-size:var(--t-2xs); color:var(--warn);
+  border:1px solid var(--warn); border-radius:var(--r-xs); padding:1px 5px; }
+.bi { vertical-align:-2px; flex:none; }
 
 /* ---- answering a whole system ---- */
 .bulklist { display:flex; flex-direction:column; gap:var(--s3);
@@ -3927,6 +3997,58 @@ function ltTop(rows, pick) {
   return best ? best + " (" + Math.round(c[best] * 100 / rows.length) + "%)" : "-";
 }
 
+function bicon(name, size) {
+  if (BRANDS.indexOf(name) < 0) name = "web";
+  return '<svg width="' + (size || 14) + '" height="' + (size || 14) +
+    '" class="bi" aria-hidden="true"><use href="#bi-' + name + '"></use></svg>';
+}
+
+/* Which mark belongs to a host. Everything unknown falls to the globe
+   rather than to a wrong logo. */
+function ltMark(host) {
+  var h = (host || "").toLowerCase();
+  if (!h || h === "direct") return "web";
+  if (h.indexOf("youtube") >= 0) return "youtube";
+  if (h.indexOf("patreon") >= 0) return "patreon";
+  if (h.indexOf("discord") >= 0) return "discord";
+  if (h.indexOf("docs.google") >= 0) return "gdocs";
+  if (h.indexOf("notebooklm") >= 0) return "notebooklm";
+  if (h.indexOf("drive.google") >= 0 || h.indexOf("google") >= 0) return "drive";
+  if (h.indexOf("mega.nz") >= 0) return "mega";
+  if (h.indexOf("gamma.app") >= 0) return "gamma";
+  return "web";
+}
+
+function ltBrowserMark(name) {
+  var n = (name || "").toLowerCase();
+  return BRANDS.indexOf(n) >= 0 ? n : "web";
+}
+
+/* A click closer than two seconds to the same visitor's previous one was
+   not made by a hand. Marking them is the difference between a number you
+   can act on and one that flatters you: /root/uecourse reads 8,240 clicks
+   and 93% of its recent ones arrive in bursts like this. */
+var LT_BURST_SECS = 2;
+
+function ltFlagBursts(clicks) {
+  var last = {}, n = 0;
+  var asc = clicks.slice().sort(function (a, b) {
+    return Date.parse(a.clicked_at) - Date.parse(b.clicked_at);
+  });
+  asc.forEach(function (c) {
+    var t = Date.parse(c.clicked_at), prev = last[c.ip_hash];
+    c._burst = prev !== undefined && (t - prev) / 1000 < LT_BURST_SECS;
+    if (c._burst) n++;
+    last[c.ip_hash] = t;
+  });
+  return n;
+}
+
+function ltShort(prefix, slug) {
+  if (prefix === "root") return "locodev.dev/" + (slug === "_root" ? "" : slug);
+  return "locodev.dev/" + prefix + "/" + slug;
+}
+
 /* One link opened: what its clicks say, and the field that repoints it. */
 function ltDetail(box, prefix, slug) {
   box.innerHTML = '<div class="note">reading this link’s clicks…</div>';
@@ -3940,14 +4062,25 @@ function ltDetail(box, prefix, slug) {
     cl.forEach(function (c) { if (c.ip_hash) uniq[c.ip_hash] = 1; });
     var nuniq = Object.keys(uniq).length;
     var capped = (link.total_clicks || 0) > cl.length;
+    var bursts = ltFlagBursts(cl);
+    var burstPct = cl.length ? Math.round(bursts * 100 / cl.length) : 0;
+    var full = ltShort(prefix, slug);
+
+    h += '<div class="lfull"><span class="figlab">short link</span>'
+      + '<a href="https://' + esc(full) + '" target="_blank" rel="noopener">https://'
+      + esc(full) + "</a>"
+      + '<button class="btn tiny" data-copy="https://' + esc(full) + '">copy</button></div>';
 
     h += '<div class="figstat" style="border-top:0;padding-top:0">'
       + '<div><span class="k">clicks, all time</span><span class="v">'
       + fmt(link.total_clicks || 0) + "</span></div>"
       + '<div><span class="k">people, in this sample</span><span class="v">'
       + fmt(nuniq) + "</span></div>"
-      + '<div><span class="k">top country</span><span class="v">'
-      + esc(ltTop(cl, function (c) { return c.country_code; })) + "</span></div>"
+      + '<div><span class="k">clicks per person</span><span class="v'
+      + (nuniq && cl.length / nuniq >= 4 ? " warn" : "") + '">'
+      + (nuniq ? (cl.length / nuniq).toFixed(1) : "-") + "</span></div>"
+      + '<div><span class="k">arrived in bursts</span><span class="v'
+      + (burstPct >= 20 ? " warn" : "") + '">' + burstPct + "%</span></div>"
       + '<div><span class="k">top browser</span><span class="v">'
       + esc(ltTop(cl, function (c) { return ltBrowser(c.user_agent); })) + "</span></div>"
       + '<div><span class="k">came from</span><span class="v">'
@@ -3957,22 +4090,37 @@ function ltDetail(box, prefix, slug) {
     h += '<p class="figwhy">Everything except the all-time count is measured '
       + "over the " + fmt(cl.length) + " most recent clicks"
       + (capped ? ", which is all the API returns per link. The rest of the "
-                + fmt(link.total_clicks) + " are not in this sample, so the "
-                + "share of people and countries is about recent traffic, not "
-                + "the link’s whole life." : ".") + "</p>";
+                + fmt(link.total_clicks) + " are not in this sample." : ".")
+      + " A click is counted as a burst when the same visitor made another "
+      + "less than two seconds earlier, which no hand does; "
+      + (burstPct >= 20
+         ? "at " + burstPct + "% this link's recent traffic is mostly automated, "
+           + "so read its totals as a ceiling rather than an audience."
+         : "at " + burstPct + "% this one looks like people.") + "</p>";
 
     h += '<div class="ledit"><label>Points at</label>'
       + '<input type="url" class="lurl" value="' + esc(link.url || "") + '">'
       + '<button class="btn tiny primary lsave">Save</button>'
       + '<span class="note lmsg"></span></div>';
 
-    h += '<p class="lsub">Most recent clicks</p>';
+    h += '<p class="lsub">Every click in the sample · ' + fmt(cl.length) + "</p>";
     if (!cl.length) h += '<div class="empty">none yet</div>';
-    cl.slice(0, 12).forEach(function (c) {
-      h += '<div class="lrow"><span>' + esc(c.country_code || "??") + " · "
-        + esc(ltBrowser(c.user_agent)) + " · " + esc(c.referrer || "direct")
-        + '</span><span class="n">' + rel(c.clicked_at) + "</span></div>";
-    });
+    else {
+      h += '<div class="lclicks">';
+      cl.forEach(function (c) {
+        var br = ltBrowser(c.user_agent);
+        var ref = c.referrer || "direct";
+        var cc = (c.country_code && c.country_code !== "??") ? c.country_code : "";
+        h += '<div class="lclick' + (c._burst ? " burst" : "") + '">'
+          + (cc ? '<span class="cc">' + esc(cc) + "</span>"
+                : '<span class="cc none" title="no country recorded">--</span>')
+          + '<span class="lb">' + bicon(ltBrowserMark(br)) + esc(br) + "</span>"
+          + '<span class="lr">' + bicon(ltMark(ref)) + esc(ref) + "</span>"
+          + (c._burst ? '<span class="btag">burst</span>' : "")
+          + '<span class="n">' + rel(c.clicked_at) + "</span></div>";
+      });
+      h += "</div>";
+    }
     box.innerHTML = h;
     box.dataset.prefix = prefix;
     box.dataset.slug = slug;
