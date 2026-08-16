@@ -1764,6 +1764,11 @@ Your job: search this vault (the current directory) and draft the reply.
   to customers. Systems/_general/ holds licensing, tier and compatibility
   answers that apply to every system.
 - YouTube/Videos/<date title>/ holds each video's description and comments.
+  Its 00 - Overview.md carries `video_id:`. Building
+  https://www.youtube.com/watch?v=<video_id>&t=<seconds>s from that id is
+  reading, not guessing, so a video you cite must always arrive as a link,
+  never as a bare title. Convert the timestamp you cite into seconds for
+  the t= parameter, and make the two agree: 14:02 is t=842s.
 - A video folder's assets note (04 - Assets and access) says which assets
   are free, what each subscription tier includes, and the short links to
   hand out. Answer where-do-I-get-the-assets questions from it, and give
@@ -1792,14 +1797,19 @@ Rules:
   variable names, settings, file paths or links.
 - Leave the reader with the least friction to learn. Whenever the vault
   gives you them, include:
-  * the LocoDev video that shows it, with the timestamp of the exact moment
-    (transcripts carry a timestamp per paragraph; cite it like 12:34);
+  * the LocoDev video that shows it, as a link built from that folder's
+    video_id and opening at the exact moment, with the readable timestamp
+    beside it: "Pickup Multiple Weapons (14:02):
+    https://www.youtube.com/watch?v=<id>&t=842s". Naming a video without
+    its link makes the reader search for it, which is the friction this
+    rule exists to remove;
   * documentation links already written in the vault notes (Google Docs and
     similar), so they can read the full write-up;
   * for someone who reads as a beginner, the official Unreal Engine
     documentation for the node or feature involved. Name the exact page or
-    the phrase to search; only give a URL you read in the vault or are
-    completely certain of, never a guessed one.
+    the phrase to search; only give a URL you read in the vault, built from
+    a video_id as above, or are completely certain of, never a guessed
+    one.
 - If the vault does not answer it, say that plainly in `missing` and give the
   best partial answer you can; do not fill the gap with plausible guesses.
 - The question may be about a different system than the one tagged. Search
