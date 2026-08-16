@@ -1558,7 +1558,7 @@ function setView(name) {
      on the data, not the function: setView runs once before the chart
      engine's own statements have, and a declaration is hoisted while the
      specs it reads are not. */
-  if (typeof CHSPEC !== "undefined") chDrawAll();
+  if (typeof CHSPEC !== "undefined") { chSyncExpand(); chDrawAll(); }
 }
 /* Anything that acts on another screen has to open it first. Edit lives on
    Answers and drives the Questions table; before this it filtered, opened
@@ -3719,7 +3719,7 @@ function chDrawAll() { $$(".fig").forEach(chDraw); }
    the room, but the button goes on every card in the dashboard grids: the
    right-hand column often ends early and the space is there to be used. */
 function chMountExpand() {
-  $$(".grid2 > .card").forEach(function (card) {
+  $$(".grid2 > .card, .cols2 > .card, .grid3 > .card").forEach(function (card) {
     var h = card.querySelector("h2");
     if (!h || h.querySelector(".expand")) return;
     var key = (h.textContent || "").trim();
@@ -3736,6 +3736,21 @@ function chMountExpand() {
     b.setAttribute("aria-expanded", String(on));
     b.textContent = on ? "shrink" : "expand";
     h.appendChild(b);
+  });
+}
+
+/* A card already filling its row has nothing to gain from expanding, and
+   a button that visibly does nothing is worse than no button. That happens
+   two ways: setView marks a container .solo when one card is left visible,
+   and the auto-fit grids collapse to a single column on a narrow window.
+   Both show up as one column here, so one check covers them. */
+function chSyncExpand() {
+  $$(".expand").forEach(function (b) {
+    var card = b.closest(".card");
+    var cols = getComputedStyle(card.parentElement).gridTemplateColumns;
+    var many = cols.split(" ").filter(Boolean).length > 1;
+    b.hidden = !many;
+    if (!many && card.classList.contains("wide")) card.classList.remove("wide");
   });
 }
 
@@ -3771,11 +3786,12 @@ document.addEventListener("click", function (ev) {
 var chTimer;
 addEventListener("resize", function () {
   clearTimeout(chTimer);
-  chTimer = setTimeout(chDrawAll, 180);
+  chTimer = setTimeout(function () { chSyncExpand(); chDrawAll(); }, 180);
 });
 
 chLoad();
 chMountExpand();
+chSyncExpand();
 chDrawAll();
 
 /* ---- gaps and coverage drill into the question table ---- */
