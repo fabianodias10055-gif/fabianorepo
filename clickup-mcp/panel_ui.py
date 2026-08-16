@@ -594,8 +594,13 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
   padding-right:var(--s2); }
 .cev { border-left:2px solid var(--line); padding:var(--s2) 0 var(--s2) var(--s3); }
 .cev.open { border-left-color:var(--warn); }
-.cev[data-qid] { cursor:pointer; }
+.cev[data-qid] { cursor:pointer; display:flex; flex-wrap:wrap;
+  gap:var(--s2) var(--s3); align-items:flex-start; }
 .cev[data-qid]:hover, .cev.composing { border-left-color:var(--accent); }
+.cev .cthumb { width:96px; height:54px; object-fit:cover; flex:none;
+  border-radius:var(--r-xs); }
+.cev .cbody { flex:1; min-width:220px; }
+.cev > .detwrap { flex-basis:100%; cursor:auto; }
 .cev .detwrap { cursor:auto; }
 /* the panel list is capped at 420px; a composer needs the room */
 .ctl.composing { max-height:none; }
@@ -960,6 +965,9 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
   padding:var(--s2) var(--s3); font-size:var(--t-sm); margin-bottom:var(--s2); }
 .aisrc { color:var(--ink3); font-family:var(--mono); font-size:var(--t-2xs);
   margin-bottom:var(--s3); word-break:break-all; }
+.aiprompt { white-space:pre-wrap; max-height:320px; overflow-y:auto;
+  font-size:var(--t-2xs); color:var(--ink3); border-top:1px dashed var(--line);
+  padding-top:var(--s2); margin-top:var(--s2); }
 .regen { margin-left:auto; color:var(--accent); cursor:pointer; font-weight:600;
   font-family:var(--ui); font-size:var(--t-xs); }
 .regen:hover { text-decoration:underline; }
@@ -1491,9 +1499,9 @@ var pending = false;     /* a newer build exists but now is a bad moment */
    their work off the screen. The page waits for a quiet moment, and says
    plainly that it is holding a newer version rather than doing it silently. */
 function busy() {
-  if (openId) return true;
+  if (openCount()) return true;
   /* a composer open inside a video or product panel is edit state too,
-     and it has no openId to speak for it */
+     and it has no entry in openIds to speak for it */
   if (document.querySelector(".cev .detwrap")) return true;
   var el = document.activeElement;
   if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) return true;
@@ -1761,10 +1769,10 @@ function apply() {
 
   rows.forEach(function (r) { r.classList.toggle("hide", !onPage.has(r)); });
   visRows.forEach(fillRow);
-  if (openId) {
-    var openRow = rowById(openId);
-    if (!openRow || openRow.classList.contains("hide")) closeDet();
-  }
+  Object.keys(openIds).forEach(function (oid) {
+    var openRow = rowById(oid);
+    if (!openRow || openRow.classList.contains("hide")) closeDet(oid);
+  });
 
   var total = matchRows.length;
   $("#qcount").textContent = total
@@ -1952,11 +1960,21 @@ $("#pgsize").addEventListener("change", function () {
 /* ---- expandable rows + suggest/reply, with continuity across reloads ---- */
 /* ---- one inspector, built on demand ----
    The composer used to be rendered for every question, open or not, which
-   was most of a 5.85 MB page. Now a single detail row is created from QDATA
-   when a question is opened and removed when it closes, so the DOM holds one
-   textarea instead of 866. Draft text, open state and AI results are keyed
-   by question id exactly as before, so nothing is lost across a rebuild. */
-var openId = null;
+   was most of a 5.85 MB page. Now a detail row is created from QDATA when a
+   question is opened and removed when it closes, so the DOM holds the
+   composers you opened instead of 866, and any number can be open at once.
+   Draft text, open state and AI results are keyed by question id exactly as
+   before, so nothing is lost across a rebuild. */
+var openIds = {};            /* qid -> true for every open queue detail */
+function openCount() {
+  var n = 0;
+  for (var k in openIds) n += 1;
+  return n;
+}
+function ssOpen() {
+  var ids = Object.keys(openIds);
+  ss("lp-open", ids.length ? JSON.stringify(ids) : null);
+}
 
 function composerFor(qid) {
   var q = QDATA[qid];
@@ -2086,9 +2104,9 @@ function composerFor(qid) {
         }
         panelRefresh(wrap);
         toast(done ? "Marked answered in the vault." : "Reopened in the vault.", "good");
-        /* only close the queue detail when it shows this very question;
-           marking from a panel must not close an unrelated open row */
-        if (openId === qid) closeDet();
+        /* closes this question's own queue detail if open; every other
+           open row is somebody else's work and stays */
+        closeDet(qid);
         apply();
       })
       .catch(function () {
@@ -2115,14 +2133,17 @@ function detailFor(qid) {
   return tr;
 }
 
-function closeDet() {
-  if (!openId) return;
-  var det = $('tr.qdet[data-id="' + CSS.escape(openId) + '"]');
-  var row = rowById(openId);
+function closeDet(qid) {
+  /* no argument = close every open detail: Escape, and the re-sorts that
+     would strand a detail row away from where its question moved to */
+  if (!qid) { Object.keys(openIds).forEach(closeDet); return; }
+  if (!openIds[qid]) return;
+  var det = $('tr.qdet[data-id="' + CSS.escape(qid) + '"]');
+  var row = rowById(qid);
   if (det) det.remove();
   if (row) row.setAttribute("aria-expanded", "false");
-  ss("lp-open", null);
-  openId = null;
+  delete openIds[qid];
+  ssOpen();
 }
 
 function rowById(qid) {
@@ -2134,14 +2155,15 @@ function rowById(qid) {
 function toggleDet(row, focus) {
   if (!row) return;
   var qid = row.dataset.id;
-  if (openId === qid) { closeDet(); return; }
-  closeDet();
+  if (openIds[qid]) { closeDet(qid); return; }
+  /* the ones already open stay open: closing somebody's half-written
+     reply because a second question was opened threw work away */
   var det = detailFor(qid);
   if (!det) return;
   row.parentNode.insertBefore(det, row.nextSibling);
   row.setAttribute("aria-expanded", "true");
-  openId = qid;
-  ss("lp-open", qid);
+  openIds[qid] = true;
+  ssOpen();
   /* replay whatever the model already produced for this question */
   ["search", "draft"].forEach(function (mode) {
     var hit = AI_CACHE[mode + ":" + qid];
@@ -2224,9 +2246,10 @@ function runReply(det) {
         if (fromQueue) {
           /* Clearing a backlog means the answered item leaves the queue
              and the next one is ready. Leaving it open with stale counts
-             made every reply end in manual cleanup. */
+             made every reply end in manual cleanup. Only this question's
+             detail closes; other open composers keep their work. */
           var wasAt = matchRows.indexOf(row);
-          closeDet();
+          closeDet(det.dataset.id);
           apply();
           var next = matchRows[Math.min(Math.max(0, wasAt), matchRows.length - 1)];
           if (next && visRows.indexOf(next) === -1) {
@@ -2235,11 +2258,10 @@ function runReply(det) {
           }
           if (next) kFocus(visRows.indexOf(next));
         } else {
-          /* A panel reply leaves the queue's page, focus and open row
-             alone. The queue detail closes only if it shows the very
-             question just answered; anything else open there is the
-             user's own business. */
-          if (openId === det.dataset.id) closeDet();
+          /* A panel reply leaves the queue's page, focus and open rows
+             alone. Only this very question's detail closes, if open;
+             anything else open there is the user's own business. */
+          closeDet(det.dataset.id);
           apply();
         }
       } else {
@@ -2264,8 +2286,11 @@ document.addEventListener("click", function (e) {
   e.stopPropagation();
   var row = el.closest("tr.qrow");
   if (!row) return;
-  if (openId !== row.dataset.id) toggleDet(row, "box");
-  else { var b = $("tr.qdet .qbox"); if (b) b.focus(); }
+  if (!openIds[row.dataset.id]) toggleDet(row, "box");
+  else {
+    var b = $('tr.qdet[data-id="' + CSS.escape(row.dataset.id) + '"] .qbox');
+    if (b) b.focus();
+  }
 });
 
 /* ---- AI: the Claude CLI reads the vault; results persist in the vault ----
@@ -2281,6 +2306,29 @@ var ROLE_CLASS = {
 };
 function aiOut(det, mode) { return det.querySelector('.aiout[data-mode="' + mode + '"]'); }
 function aiBtn(det, mode) { return det.querySelector('[data-ai="' + mode + '"]'); }
+
+/* The exact text the model receives, fetched on demand. What a paid button
+   sends should never be a mystery to the person paying for it. */
+function promptPeek(det, mode, out) {
+  var peek = document.createElement("span");
+  peek.className = "regen";
+  peek.textContent = "view prompt";
+  peek.title = "Show the exact prompt this button sends to the model";
+  peek.addEventListener("click", function () {
+    var pre = out.querySelector(".aiprompt");
+    if (pre) { pre.remove(); return; }
+    pre = document.createElement("pre");
+    pre.className = "aiprompt";
+    pre.textContent = "fetching the prompt...";
+    out.appendChild(pre);
+    fetch("/ai_prompt", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: det.dataset.id, mode: mode }) })
+      .then(function (r) { return r.json(); })
+      .then(function (s) { pre.textContent = s.ok ? s.prompt : (s.error || "failed"); })
+      .catch(function () { pre.textContent = "could not reach the panel server"; });
+  });
+  return peek;
+}
 function ageText(ts) {
   var s = Math.max(0, Date.now() / 1000 - ts);
   if (s < 3600) return Math.round(s / 60) + "m ago";
@@ -2328,6 +2376,7 @@ function aiRender(det, mode, s, btn) {
   again.title = "Run it again and replace this cached result";
   again.addEventListener("click", function () { runAi(det, mode, true); });
   src.appendChild(again);
+  src.appendChild(promptPeek(det, mode, out));
   out.appendChild(src);
 
   if (s.answer) {
@@ -2421,6 +2470,12 @@ function runAi(det, mode, force) {
   var waiting = mode === "search" ? "Searching the vault" : "Claude is reading your vault";
   out.innerHTML = '<div class="src">' + waiting + "...</div>";
   var tick = out.querySelector(".src");
+  /* its own row: the ticking timer rewrites tick's text every second and
+     would wipe anything appended inside it */
+  var peekrow = document.createElement("div");
+  peekrow.className = "src";
+  peekrow.appendChild(promptPeek(det, mode, out));
+  out.appendChild(peekrow);
   var timer = setInterval(function () {
     tick.textContent = waiting + "... " + Math.round((Date.now() - t0) / 1000) + "s";
   }, 1000);
@@ -2780,7 +2835,12 @@ function productProfile(name) {
   out += '<div class="ctl">';
   open.slice().reverse().slice(0, 25).forEach(function (q) {
     var p = PATRONS[q.who.replace(/^@/, "").split(" ")[0].toLowerCase()];
-    out += '<div class="cev open" data-qid="' + esc(q.id) + '"><span class="cdate">'
+    /* each question here came from a different video; the thumbnail is how
+       the eye tells them apart before reading a word */
+    out += '<div class="cev open" data-qid="' + esc(q.id) + '">'
+      + (q.small ? '<img class="cthumb" loading="lazy" alt="" title="' + esc(q.video || "")
+          + '" referrerpolicy="no-referrer" src="' + esc(q.small) + '">' : "")
+      + '<div class="cbody"><span class="cdate">'
       + esc(q.date) + " &middot; "
       + esc(q.who) + (p && p.paying ? ' <span class="tag sub">pays</span>' : "")
       + genMarks(q.id)
@@ -2788,7 +2848,7 @@ function productProfile(name) {
       + '<div class="cq">' + esc(q.text.slice(0, 200)) + "</div>"
       + (q.link ? '<a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open it</a> ' : "")
       + '<button class="btn tiny">Answer</button>'
-      + "</div>";
+      + "</div></div>";
   });
   if (!open.length) out += '<div class="note">Nothing open. Everyone who asked got an answer.</div>';
   if (open.length > 25) out += '<div class="note">and ' + (open.length - 25) + " more</div>";
@@ -2879,13 +2939,13 @@ function videoPanel(name) {
     .sort(function (a, b) { return freq[b] - freq[a]; }).slice(0, 8);
 
   function cev(q, extra) {
-    return '<div class="cev open" data-qid="' + esc(q.id) + '"><span class="cdate">'
+    return '<div class="cev open" data-qid="' + esc(q.id) + '"><div class="cbody"><span class="cdate">'
       + esc(q.date) + " &middot; "
       + esc(q.who) + (extra || "") + genMarks(q.id) + "</span>"
       + '<div class="cq">' + esc(q.text.slice(0, 200)) + "</div>"
       + (q.link ? '<a class="clink" href="' + q.link + '" target="_blank" rel="noopener">open the comment</a> ' : "")
       + '<button class="btn tiny">Answer</button>'
-      + "</div>";
+      + "</div></div>";
   }
 
   /* Requests are decisions for you, questions are answers for them; mixed
@@ -2958,7 +3018,7 @@ document.addEventListener("click", function (ev) {
    The waiting lists used to be read-only: every answer meant leaving the
    panel for the inbox. Clicking a question now puts composerFor(qid) right
    under it, with the same buttons, drafts and cached generations as the
-   queue. openId/closeDet stay out of this on purpose: they belong to the
+   queue. openIds/closeDet stay out of this on purpose: they belong to the
    queue, and opening here must not close what is open there. */
 document.addEventListener("click", function (ev) {
   if (!ev.target.closest) return;
@@ -2969,24 +3029,17 @@ document.addEventListener("click", function (ev) {
   /* a drag to copy part of the question is not a request to toggle */
   var sel = window.getSelection ? window.getSelection() : null;
   if (sel && !sel.isCollapsed) return;
-  /* uniqueness spans the whole panel, which can hold more than one list
-     (requests and questions); the height release stays per list */
-  var host = item.closest(".cprofile") || item.closest(".ctl");
+  /* Any number of composers can be open at once, here and in the queue:
+     closing somebody's half-written reply because a second question was
+     opened threw work away. The list stays expanded while any composer
+     inside it is open. */
   var ctl = item.closest(".ctl");
   var mine = item.querySelector(".detwrap");
   if (mine) {
     mine.remove();
     item.classList.remove("composing");
-    if (ctl) ctl.classList.remove("composing");
+    if (ctl && !ctl.querySelector(".detwrap")) ctl.classList.remove("composing");
     return;
-  }
-  /* one open composer per panel, like the queue keeps one detail row */
-  var other = host && host.querySelector(".detwrap");
-  if (other) {
-    other.closest(".cev").classList.remove("composing");
-    var octl = other.closest(".ctl");
-    if (octl) octl.classList.remove("composing");
-    other.remove();
   }
   var wrap = composerFor(item.dataset.qid);
   if (!wrap) return;
@@ -3110,7 +3163,7 @@ document.addEventListener("keydown", function (e) {
       var r = visRows[(start + i) % visRows.length];
       if (r.dataset.st === "no-source" || r.dataset.st === "escalated") {
         kFocus(visRows.indexOf(r));
-        if (openId !== r.dataset.id) toggleDet(r);
+        if (!openIds[r.dataset.id]) toggleDet(r);
         break;
       }
     }
@@ -3336,9 +3389,16 @@ try {
   for (var i = 0; i < sessionStorage.length; i++) {
     var key = sessionStorage.key(i);
     if (key === "lp-open") {
-      var wasOpen = sessionStorage.getItem(key);
-      var r = wasOpen && rowById(wasOpen);
-      if (r && !r.classList.contains("hide")) toggleDet(r);
+      /* a JSON array now; a plain id is a leftover from before multi-open
+         and still restores as a single row */
+      var wasOpen = sessionStorage.getItem(key) || "";
+      var ids;
+      try { ids = JSON.parse(wasOpen); } catch (e2) { ids = [wasOpen]; }
+      if (!Array.isArray(ids)) ids = [String(ids)];
+      ids.forEach(function (oid) {
+        var r = oid && rowById(oid);
+        if (r && !r.classList.contains("hide")) toggleDet(r);
+      });
     }
   }
 } catch (e) {}
