@@ -69,6 +69,12 @@ KB_AUTO_MIN_SCORE = int(os.getenv("KB_AUTO_MIN_SCORE", "3"))   # min non-stopwor
 KB_AUTO_COOLDOWN = int(os.getenv("KB_AUTO_COOLDOWN", "120"))   # seconds between KB replies per user per channel
 # Per-user cooldown on the expensive @mention/reply AI path (subprocess + fetches)
 AI_USER_COOLDOWN = int(os.getenv("AI_USER_COOLDOWN", "8"))     # seconds between AI answers per user
+# Proactive AI answering: reply to help requests in support channels even when the
+# bot was NOT @mentioned. The KB keyword match is tried first; the AI only steps in
+# when the KB has no confident answer. Set AI_AUTO_ANSWER=0 to disable.
+AI_AUTO_ANSWER = os.getenv("AI_AUTO_ANSWER", "1").lower() not in ("0", "false", "no")
+AI_AUTO_MIN_WORDS = int(os.getenv("AI_AUTO_MIN_WORDS", "5"))   # ignore short chatter ("thanks", "lol")
+AI_AUTO_COOLDOWN = int(os.getenv("AI_AUTO_COOLDOWN", "45"))    # sec between unprompted answers per user+channel
 # Whether to attach a KB entry's stored images to FAQ auto-replies. Off by
 # default because historical entries also stored the asker's own question
 # screenshots, which made the bot post unrelated images. Re-enable once the
@@ -2575,15 +2581,35 @@ def _is_safe_fetch_url(url: str) -> bool:
     return _url_host_is_public(p.hostname)
 
 
+async def _read_capped(resp, max_bytes: int) -> bytes | None:
+    """Read a response body fully, up to max_bytes. Returns None if the body is
+    empty or exceeds the cap.
+
+    NOTE: do NOT use `resp.content.read(n)` for this — aiohttp's StreamReader
+    returns only whatever is already buffered (often a single chunk), so it
+    silently TRUNCATES the body instead of reading n bytes. Truncated images
+    are rejected by the Anthropic API, which is exactly the bug this replaces.
+    """
+    buf = bytearray()
+    try:
+        async for chunk in resp.content.iter_chunked(65536):
+            buf += chunk
+            if len(buf) > max_bytes:
+                return None
+    except Exception:
+        return None
+    return bytes(buf) if buf else None
+
+
 async def _fetch_capped(session, url, **kwargs):
     """GET `url` with redirects disabled and the body capped at MAX_FETCH_BYTES.
     Returns (status, body_bytes) or (None, b'') on error/oversize."""
     kwargs.setdefault("allow_redirects", False)
     try:
         async with session.get(url, **kwargs) as resp:
-            body = await resp.content.read(MAX_FETCH_BYTES + 1)
-            if len(body) > MAX_FETCH_BYTES:
-                logger.warning("Fetch aborted — body exceeds %d bytes: %s", MAX_FETCH_BYTES, url)
+            body = await _read_capped(resp, MAX_FETCH_BYTES)
+            if body is None:
+                logger.warning("Fetch aborted — empty or over %d bytes: %s", MAX_FETCH_BYTES, url)
                 return None, b""
             return resp.status, body
     except Exception as _fe:
@@ -3267,6 +3293,8 @@ class FeedbackBot(discord.Client):
         self._processed_messages: set[int] = set()
         # Per-user last-AI-call time (monotonic) for the AI-path cooldown
         self._ai_last_call: dict[int, float] = {}
+        # Per-(user, channel) last unprompted AI answer, for AI_AUTO_COOLDOWN
+        self._ai_auto_cooldown: dict[tuple[int, int], float] = {}
         # Spam detection: user_id → deque of (datetime, channel_id, Message, is_image_only)
         self._spam_tracker: dict[int, collections.deque] = {}
         # Users already actioned this session (avoid double-kick)
@@ -4273,8 +4301,8 @@ class FeedbackBot(discord.Client):
                         async with session.get(u, timeout=_aiohttp.ClientTimeout(total=10)) as resp:
                             if resp.status != 200:
                                 continue
-                            body = await resp.content.read(MAX_IMAGE_BYTES + 1)
-                            if not body or len(body) > MAX_IMAGE_BYTES:
+                            body = await _read_capped(resp, MAX_IMAGE_BYTES)
+                            if body is None:
                                 continue
                     except Exception:
                         continue
@@ -4588,14 +4616,46 @@ class FeedbackBot(discord.Client):
                 and isinstance(message.channel, discord.Thread)
                 and str(getattr(message.channel, "parent_id", None)) == PROJECTS_FORUM_CHANNEL_ID
             )
-            if in_kb_channel or in_project_thread:
-                replied = await self._try_kb_auto_reply(message)
-                # If neither the bot nor (yet) a human has answered, watch the
-                # question and escalate to staff if it stays ignored.
-                _qtext = message.content.strip()
-                if not replied and len(_qtext) >= 10 and _looks_like_question(_qtext):
+            if not (in_kb_channel or in_project_thread):
+                return
+            replied = await self._try_kb_auto_reply(message)
+            if replied:
+                return  # the KB already answered it
+            _qtext = message.content.strip()
+            _has_img = any(
+                (a.content_type and a.content_type.startswith("image/"))
+                or os.path.splitext(a.filename)[1].lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+                for a in message.attachments
+            )
+            # No KB answer — let the AI handle it, so people get help without
+            # having to know they must @mention the bot. Guarded so the bot
+            # doesn't jump into casual chatter.
+            if (
+                AI_AUTO_ANSWER
+                and ANTHROPIC_API_KEY
+                and len(_qtext.split()) >= AI_AUTO_MIN_WORDS
+                and _looks_like_help_request(_qtext, has_image=_has_img)
+            ):
+                _ck = (message.author.id, message.channel.id)
+                _tnow = time.monotonic()
+                if _tnow - self._ai_auto_cooldown.get(_ck, 0.0) >= AI_AUTO_COOLDOWN:
+                    self._ai_auto_cooldown[_ck] = _tnow
+                    if len(self._ai_auto_cooldown) > 500:
+                        self._ai_auto_cooldown = {
+                            k: v for k, v in self._ai_auto_cooldown.items()
+                            if _tnow - v < AI_AUTO_COOLDOWN * 4
+                        }
+                    logger.info("AI auto-answering unprompted help request from %s in %s",
+                                message.author, message.channel)
+                    # fall through to the AI responder below
+                else:
+                    return
+            else:
+                # Not something the AI should answer — keep the old behaviour of
+                # escalating a genuinely unanswered question to staff.
+                if len(_qtext) >= 10 and _looks_like_question(_qtext):
                     self._schedule_unanswered_check(message)
-            return
+                return
         if not ANTHROPIC_API_KEY:
             return
         if message.id in self._processed_messages:
@@ -4708,9 +4768,9 @@ class FeedbackBot(discord.Client):
                 async with _aiohttp.ClientSession() as session:
                     async with session.get(attachment.url) as resp:
                         if resp.status == 200:
-                            img_bytes = await resp.content.read(MAX_IMAGE_BYTES + 1)
-                            if len(img_bytes) > MAX_IMAGE_BYTES:
-                                logger.warning("Skipping oversize image %s (> %d bytes)",
+                            img_bytes = await _read_capped(resp, MAX_IMAGE_BYTES)
+                            if img_bytes is None:
+                                logger.warning("Skipping image %s (empty or > %d bytes)",
                                                attachment.filename, MAX_IMAGE_BYTES)
                                 continue
                             import base64 as _base64
@@ -4725,8 +4785,11 @@ class FeedbackBot(discord.Client):
                             elif img_bytes[:4] == b'RIFF' and img_bytes[8:12] == b'WEBP':
                                 media_type = "image/webp"
                             else:
-                                ct = attachment.content_type or "image/png"
-                                media_type = ct.split(";")[0].strip()
+                                # Anthropic accepts only jpeg/png/gif/webp — skip
+                                # anything else (bmp/tiff/heic) instead of guessing
+                                # a media_type the API will reject.
+                                logger.info("Skipping unsupported image type: %s", attachment.filename)
+                                continue
                             user_content.append({
                                 "type": "image",
                                 "source": {
@@ -4774,14 +4837,19 @@ class FeedbackBot(discord.Client):
                                 try:
                                     async with _hist_session.get(_hatt.url) as _hr:
                                         if _hr.status == 200:
-                                            _hibytes = await _hr.read()
+                                            _hibytes = await _read_capped(_hr, MAX_IMAGE_BYTES)
+                                            if _hibytes is None:
+                                                raise ValueError("history image empty or too large")
                                             import base64 as _b64h
                                             _hib64 = _b64h.b64encode(_hibytes).decode()
                                             if _hibytes[:8] == b'\x89PNG\r\n\x1a\n':    _himt = "image/png"
                                             elif _hibytes[:3] == b'\xff\xd8\xff':        _himt = "image/jpeg"
                                             elif _hibytes[:4] == b'GIF8':               _himt = "image/gif"
                                             elif _hibytes[:4] == b'RIFF' and _hibytes[8:12] == b'WEBP': _himt = "image/webp"
-                                            else: _himt = (_hatt.content_type or "image/png").split(";")[0].strip()
+                                            else:
+                                                # Unknown magic bytes — Anthropic only accepts
+                                                # jpeg/png/gif/webp, so skip rather than guess.
+                                                raise ValueError("unsupported history image type")
                                             _hist_images.append({
                                                 "type": "image",
                                                 "source": {"type": "base64", "media_type": _himt, "data": _hib64},
@@ -5368,7 +5436,11 @@ class FeedbackBot(discord.Client):
         # and should not compound across turns. Storing full_prompt would make history
         # grow by ~50 KB per analytics exchange and eventually crash the API call.
         history_text = (f"[User shared {image_count} image(s)] " if image_count > 0 else "") + (question or "")
-        history.append({"role": "user", "content": user_content if image_count > 0 else history_text.strip()})
+        # Store only the compact TEXT form — never the base64 image blocks. The
+        # current turn sends the real images via `current_content`; keeping them in
+        # history re-sent megabytes of base64 on every later turn (up to the API's
+        # 32 MB request limit) and could never be trimmed back down.
+        history.append({"role": "user", "content": history_text.strip() or "[image]"})
         # Keep only last 10 messages to avoid token limits
         if len(history) > 10:
             history = history[-10:]
@@ -5440,7 +5512,25 @@ class FeedbackBot(discord.Client):
                 # Prior exchanges use compact history (raw questions); the current
                 # turn uses the full context-injected prompt so Claude has all data.
                 current_content = user_content if image_count > 0 else (full_prompt or question or "")
-                msgs = list(history[:-1]) + [{"role": "user", "content": current_content}]
+                # Sanitize prior turns before sending. The Anthropic API rejects a
+                # history that starts with an assistant turn or that has two turns of
+                # the same role in a row — which is exactly what a previously failed
+                # call leaves behind (the user turn is appended before this try block,
+                # so a failure strands it with no assistant reply). Without this, one
+                # error would permanently break every later call from that user.
+                _prior = []
+                for _m in list(history[:-1]):
+                    if not _m.get("content"):
+                        continue
+                    if not _prior and _m.get("role") != "user":
+                        continue  # history must start with a user turn
+                    if _prior and _prior[-1].get("role") == _m.get("role"):
+                        _prior[-1] = _m  # collapse consecutive same-role turns
+                        continue
+                    _prior.append(_m)
+                if _prior and _prior[-1].get("role") == "user":
+                    _prior.pop()  # dangling user turn from a failed call
+                msgs = _prior + [{"role": "user", "content": current_content}]
                 def _ask():
                     ai = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
                     resp = ai.messages.create(
@@ -5570,6 +5660,27 @@ class FeedbackBot(discord.Client):
                 # one itself when it's genuinely relevant.
             except Exception as exc:
                 logger.warning("AI responder error: %s", exc, exc_info=True)
+                # Drop the user turn we appended before the call so it can't strand
+                # the history in an invalid state for the next message.
+                try:
+                    _h = self._conversation_history.get(user_id)
+                    if _h and _h[-1].get("role") == "user":
+                        _h.pop()
+                except Exception:
+                    pass
+                # Surface the real error to staff so failures are diagnosable
+                # without digging through Railway logs.
+                try:
+                    _log_ch = await self._mirror_dest()
+                    if _log_ch:
+                        await _log_ch.send(
+                            f"⚠️ **AI responder error**\n"
+                            f"**User:** {message.author} (`{message.author.id}`)\n"
+                            f"**Channel:** <#{message.channel.id}>\n"
+                            f"**Error:** `{type(exc).__name__}: {exc}`"[:1900]
+                        )
+                except Exception:
+                    pass
                 if _is_owner:
                     await message.reply(f"⚠️ Error: `{type(exc).__name__}: {exc}`")
                 else:
@@ -5670,6 +5781,43 @@ def _looks_like_question(text: str) -> bool:
         return True
     words = text.lower().split()
     return bool(words) and words[0] in _KB_QUESTION_STARTERS and len(words) >= 4
+
+
+# Phrases that mark a message as a help request even when it has no question mark
+# and doesn't start with a question word — e.g. "I downloaded the tutorial ... the
+# animation refuses to play". _looks_like_question misses these entirely.
+_HELP_REQUEST_PHRASES = (
+    "doesn't work", "does not work", "dont work", "don't work", "not working",
+    "isn't working", "wont work", "won't work", "refuses to", "refuse to",
+    "can't get", "cant get", "can't seem", "unable to", "not able to",
+    "i'm stuck", "im stuck", "stuck on", "stuck at",
+    "error", "errors", "crash", "crashing", "crashed", "bug", "broken", "broke",
+    "issue", "issues", "problem", "problems", "trouble", "fails", "failing", "failed",
+    "not showing", "not playing", "doesn't play", "doesn't show", "nothing happens",
+    "no idea", "need help", "any help", "some help", "please help", "help me",
+    "i tried", "i've tried", "ive tried", "tried everything",
+    "how do i", "how can i", "how to", "what am i", "why is", "why does", "why doesn't",
+    "instead of", "supposed to", "should be", "expected",
+    "step by step", "tutorial on", "guide on", "explain",
+)
+
+
+def _looks_like_help_request(text: str, has_image: bool = False) -> bool:
+    """Broader than _looks_like_question: catches support requests phrased as
+    statements ("the animation refuses to play"), which is how most people
+    actually report problems. Used to decide whether the AI should step in."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    if _looks_like_question(t):
+        return True
+    low = t.lower()
+    if any(p in low for p in _HELP_REQUEST_PHRASES):
+        return True
+    # A screenshot plus a real sentence is almost always a bug report.
+    if has_image and len(t.split()) >= 8:
+        return True
+    return False
 
 def _kb_search_scored(query: str, top_n: int = 3, min_score: int = 1) -> list[tuple[int, dict]]:
     """Like _kb_search but filters stopwords, returns (score, entry) pairs, min_score enforced."""
