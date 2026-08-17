@@ -2638,15 +2638,36 @@ def _is_safe_fetch_url(url: str) -> bool:
     return _url_host_is_public(p.hostname)
 
 
+async def _read_capped(resp, max_bytes: int) -> bytes | None:
+    """Read a response body FULLY, up to max_bytes. Returns None if the body is
+    empty or exceeds the cap.
+
+    NOTE: do NOT use `resp.content.read(n)` for this — aiohttp's StreamReader
+    returns only whatever is already buffered (often one ~64KB chunk), so it
+    silently TRUNCATES the body instead of reading n bytes. A truncated image is
+    rejected by the Anthropic API, which broke every message containing a
+    screenshot.
+    """
+    buf = bytearray()
+    try:
+        async for chunk in resp.content.iter_chunked(65536):
+            buf += chunk
+            if len(buf) > max_bytes:
+                return None
+    except Exception:
+        return None
+    return bytes(buf) if buf else None
+
+
 async def _fetch_capped(session, url, **kwargs):
     """GET `url` with redirects disabled and the body capped at MAX_FETCH_BYTES.
     Returns (status, body_bytes) or (None, b'') on error/oversize."""
     kwargs.setdefault("allow_redirects", False)
     try:
         async with session.get(url, **kwargs) as resp:
-            body = await resp.content.read(MAX_FETCH_BYTES + 1)
-            if len(body) > MAX_FETCH_BYTES:
-                logger.warning("Fetch aborted — body exceeds %d bytes: %s", MAX_FETCH_BYTES, url)
+            body = await _read_capped(resp, MAX_FETCH_BYTES)
+            if body is None:
+                logger.warning("Fetch aborted — empty or over %d bytes: %s", MAX_FETCH_BYTES, url)
                 return None, b""
             return resp.status, body
     except Exception as _fe:
@@ -4370,8 +4391,8 @@ class FeedbackBot(discord.Client):
                         async with session.get(u, timeout=_aiohttp.ClientTimeout(total=10)) as resp:
                             if resp.status != 200:
                                 continue
-                            body = await resp.content.read(MAX_IMAGE_BYTES + 1)
-                            if not body or len(body) > MAX_IMAGE_BYTES:
+                            body = await _read_capped(resp, MAX_IMAGE_BYTES)
+                            if body is None:
                                 continue
                     except Exception:
                         continue
@@ -4820,9 +4841,9 @@ class FeedbackBot(discord.Client):
                 async with _aiohttp.ClientSession() as session:
                     async with session.get(attachment.url) as resp:
                         if resp.status == 200:
-                            img_bytes = await resp.content.read(MAX_IMAGE_BYTES + 1)
-                            if len(img_bytes) > MAX_IMAGE_BYTES:
-                                logger.warning("Skipping oversize image %s (> %d bytes)",
+                            img_bytes = await _read_capped(resp, MAX_IMAGE_BYTES)
+                            if img_bytes is None:
+                                logger.warning("Skipping image %s (empty or > %d bytes)",
                                                attachment.filename, MAX_IMAGE_BYTES)
                                 continue
                             import base64 as _base64
@@ -5498,7 +5519,11 @@ class FeedbackBot(discord.Client):
         # and should not compound across turns. Storing full_prompt would make history
         # grow by ~50 KB per analytics exchange and eventually crash the API call.
         history_text = (f"[User shared {image_count} image(s)] " if image_count > 0 else "") + (question or "")
-        history.append({"role": "user", "content": user_content if image_count > 0 else history_text.strip()})
+        # Store only the compact TEXT form — never the base64 image blocks. The
+        # current turn sends the real images via `current_content`; keeping them in
+        # history re-sent megabytes of base64 on every later turn (heading for the
+        # API's 32 MB request limit) and could never be trimmed back down.
+        history.append({"role": "user", "content": history_text.strip() or "[image]"})
         # Keep only last 10 messages to avoid token limits
         if len(history) > 10:
             history = history[-10:]
@@ -5570,7 +5595,25 @@ class FeedbackBot(discord.Client):
                 # Prior exchanges use compact history (raw questions); the current
                 # turn uses the full context-injected prompt so Claude has all data.
                 current_content = user_content if image_count > 0 else (full_prompt or question or "")
-                msgs = list(history[:-1]) + [{"role": "user", "content": current_content}]
+                # Sanitize prior turns. The Anthropic API rejects a history that
+                # starts with an assistant turn, contains empty content, or has a
+                # dangling user turn — all of which happen naturally here: the user
+                # turn is appended before this call, so any failure strands it, and
+                # the history[-10:] trim can drop the leading user turn. Without
+                # this, one error broke every later call from that user.
+                _prior = []
+                for _m in list(history[:-1]):
+                    if not _m.get("content"):
+                        continue
+                    if not _prior and _m.get("role") != "user":
+                        continue
+                    if _prior and _prior[-1].get("role") == _m.get("role"):
+                        _prior[-1] = _m
+                        continue
+                    _prior.append(_m)
+                if _prior and _prior[-1].get("role") == "user":
+                    _prior.pop()
+                msgs = _prior + [{"role": "user", "content": current_content}]
                 def _ask():
                     ai = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
                     resp = ai.messages.create(
@@ -5722,6 +5765,27 @@ class FeedbackBot(discord.Client):
                 # one itself when it's genuinely relevant.
             except Exception as exc:
                 logger.warning("AI responder error: %s", exc, exc_info=True)
+                # Drop the user turn appended before the call so a failure can't
+                # strand the history in a state that breaks every later message.
+                try:
+                    _h = self._conversation_history.get(user_id)
+                    if _h and _h[-1].get("role") == "user":
+                        _h.pop()
+                except Exception:
+                    pass
+                # Surface the real error to staff so failures are diagnosable
+                # without digging through Railway logs.
+                try:
+                    _log_ch = await self._mirror_dest()
+                    if _log_ch:
+                        await _log_ch.send(
+                            f"⚠️ **AI responder error**\n"
+                            f"**User:** {message.author} (`{message.author.id}`)\n"
+                            f"**Channel:** <#{message.channel.id}>\n"
+                            f"**Error:** `{type(exc).__name__}: {exc}`"[:1900]
+                        )
+                except Exception:
+                    pass
                 if _is_owner:
                     await message.reply(f"⚠️ Error: `{type(exc).__name__}: {exc}`")
                 else:
