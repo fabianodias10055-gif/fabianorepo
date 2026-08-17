@@ -3980,7 +3980,46 @@ def video_effect(members: list[dict], window: int = 7) -> dict:
         (row(names.get(k, k), [{"lift": x} for x in v]) for k, v in topics.items()
          if len(v) >= 3), key=lambda r: -r["ratio"])[:8]
 
+    # The comparison that survives scrutiny: a week holding a video against a
+    # week holding none, inside one year so channel size is held still. The
+    # ratios above use the period average as their baseline, and that average
+    # includes the video weeks, so it compares publishing against a mixture
+    # of publishing and silence. This one does not.
+    quiet = []
+    for y in sorted({v["date"][:4] for v in vids}):
+        ydays = [d for d in paid if d.startswith(y)]
+        if len(ydays) < 60:
+            continue
+        covered = set()
+        for v in vids:
+            if not v["date"].startswith(y):
+                continue
+            d0 = date.fromisoformat(v["date"])
+            for i in range(window):
+                covered.add((d0 + timedelta(days=i)).isoformat())
+        # Stop at today, not at 365. A year still running would otherwise
+        # count its future as quiet days with nobody joining, which deflates
+        # the without-video side and inflates the ratio: 2026 read 2.76x
+        # against 1.2x for the finished years purely from that.
+        start = date(int(y), 1, 1)
+        stop = min(date(int(y), 12, 31), last)
+        ndays = (stop - start).days + 1
+        if ndays < 90:
+            continue
+        allday = [(start + timedelta(days=i)).isoformat() for i in range(ndays)]
+        withv = [d for d in allday if d in covered]
+        without = [d for d in allday if d not in covered]
+        if len(withv) < 30 or len(without) < 30:
+            continue
+        a_ = sum(paid.get(d, 0) for d in withv) / len(withv)
+        b_ = sum(paid.get(d, 0) for d in without) / len(without)
+        quiet.append({"year": y, "videos": sum(1 for v in vids if v["date"].startswith(y)),
+                      "with_video": round(a_, 2), "without": round(b_, 2),
+                      "ratio": round(a_ / b_, 2) if b_ else 0,
+                      "extra_week": round((a_ - b_) * 7, 1)})
+
     return {
+        "quiet": quiet,
         "window": window, "baseline": round(base, 1), "videos": len(vids),
         "kinds": kinds, "fair": fair, "topics": topic_rows,
         "tagged": sum(1 for v in vids if v["system"] and v["system"] != "-"),

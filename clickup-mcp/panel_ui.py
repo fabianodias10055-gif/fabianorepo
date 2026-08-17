@@ -6843,6 +6843,39 @@ def _retention_card(d: dict) -> str:
 
 
 
+def _effect_years(v: dict) -> str:
+    """The comparison that survives: a week with a video against one without.
+
+    Put first because the ratios further down measure against the period
+    average, and that average contains the video weeks, so they compare
+    publishing with a mixture of publishing and silence. This compares it
+    with silence.
+    """
+    rows = [q for q in (v.get("quiet") or []) if q["videos"] >= 10]
+    if not rows:
+        return ""
+    top = max(q["ratio"] for q in rows) or 1
+    bars = "".join(
+        f'<div class="bar" title="{q["year"]}: {q["with_video"]} a day in a '
+        f'week holding a video, {q["without"]} in one holding none, from '
+        f'{q["videos"]} videos">'
+        f'<span class="bl">{q["year"]} &middot; {q["videos"]} videos</span>'
+        f'<span class="bt"><i style="width:'
+        f'{max(2, round(q["ratio"] * 100 / top))}%"></i></span>'
+        f'<span class="bv">{q["ratio"]}x '
+        f'<small>+{q["extra_week"]}/week</small></span></div>'
+        for q in rows)
+    yrs = ", ".join(q["year"] for q in rows)
+    return (
+        '<p class="lsub">A week with a video, against a week without</p>'
+        f'<div class="bars">{bars}</div>'
+        f'<p class="figwhy">Each year on its own, so channel size is held '
+        f'still. {escape(yrs)} agree on about a fifth more people starting to '
+        f'pay in a week that carried a video, across years holding very '
+        f'different numbers of them. That agreement is what makes this the '
+        f'number to trust, and the ones below the ones to read carefully.</p>')
+
+
 def _effect_card(d: dict) -> str:
     """Does publishing bring patrons, as bars against the ordinary week."""
     pat = d.get("patreon") or {}
@@ -6901,6 +6934,7 @@ def _effect_card(d: dict) -> str:
     return (
         '<section class="card" id="effect">'
         '<h2><span class="he">🎬</span>Does publishing bring patrons</h2>'
+        + _effect_years(v)
         + legend
         + '<p class="lsub">By what was published</p>'
         + bars(v["kinds"])
