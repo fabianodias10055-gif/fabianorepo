@@ -1747,6 +1747,10 @@ function setView(name) {
      engine's own statements have, and a declaration is hoisted while the
      specs it reads are not. */
   if (typeof CHSPEC !== "undefined") { chSyncExpand(); chDrawAll(); }
+  /* The bulk card holds its list after a run settles, since the poll stops
+     then. Arriving on the screen is the moment to check it is still the
+     list the server has. */
+  if (name === "questions" && typeof bulkTick === "function") bulkTick();
 }
 /* Anything that acts on another screen has to open it first. Edit lives on
    Answers and drives the Questions table; before this it filtered, opened
@@ -4759,7 +4763,15 @@ document.addEventListener("click", function (ev) {
       bulkPost({ action: "polish", id: pit.dataset.id, text: cur,
                  instruction: instruction })
         .then(function (r) {
-          if (!r.ok) { pmsg.textContent = "not polished: " + r.error; return; }
+          if (!r.ok) {
+            pmsg.textContent = r.error;
+            /* The page kept its render after a run settled, because the
+               poll stops then; a restart or a new run since left every id
+               on screen pointing at nothing. Redraw rather than leave a
+               dead button beside an explanation nobody can act on. */
+            if (r.code === "stale") bulkTick();
+            return;
+          }
           pmsg.textContent = "";
           bulkWatch();
         });
@@ -4777,7 +4789,7 @@ document.addEventListener("click", function (ev) {
     one.disabled = true;
     bulkPost({ action: "send_one", id: item.dataset.id, text: txt })
       .then(function (r) {
-        m1.textContent = r.ok ? "sent" : "not sent: " + r.error;
+        m1.textContent = r.ok ? "sent" : r.error;
         one.disabled = false;
         bulkTick();
       });

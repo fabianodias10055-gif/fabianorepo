@@ -1845,6 +1845,40 @@ Return only the JSON object."""
 
 
 
+
+# Words that read as a manual rather than as you. Add to this list rather
+# than describing the problem again in prose: it is the one place the two
+# prompts look, and a named word is easier to refuse than a mood.
+JARGON_WORDS = (
+    "plumbing", "authored", "back-holsters", "back-holster",
+    "leverage", "utilize", "furthermore", "moreover", "aforementioned",
+    "robust", "seamless", "facilitate", "delve",
+)
+
+VOICE_RULES = """- Write it the way the channel owner writes: direct, practical, second
+  person, no marketing.
+- Open like a person. "Hi! thanks for the question", "Hi! thanks for the
+  feedback", "hi, thanks for asking" are all openers the owner uses, and a
+  ":)" belongs where
+  the message is friendly rather than a bug report. Vary it; the same
+  opener on every reply reads as a template, which is the thing this is
+  avoiding.
+- Never use these words: {jargon}. They read as a manual. Say what the
+  thing does instead: not "the plumbing exists" but "it is already in
+  there"; not "the animation would have to be authored" but "somebody
+  would have to make that animation".
+- Write like a person typing quickly, not like a document. About one reply
+  in three can carry one small slip: a missing letter, a doubled word, a
+  trailing "..". Never in a node name, a variable, a URL, a timestamp, a
+  version number or a file path, where a slip stops being charm and starts
+  costing somebody an hour.
+- Under 120 words unless the fix genuinely needs numbered steps."""
+
+
+def _voice() -> str:
+    return VOICE_RULES.format(jargon=", ".join(JARGON_WORDS))
+
+
 def _extra_block(extra: str) -> str:
     """What the owner typed before asking for the draft.
 
@@ -1954,9 +1988,7 @@ Rules:
   best partial answer you can; do not fill the gap with plausible guesses.
 - The question may be about a different system than the one tagged. Search
   broadly before concluding.
-- Write `answer` in the channel owner's voice: direct, practical, second
-  person, no marketing, no greeting boilerplate. Under 120 words unless the
-  fix genuinely needs numbered steps.
+{_voice()}
 - `confidence` is 0-100: how well the vault supports this specific answer.
   Be strict. 90+ only when you found a passage that answers it directly.
 - `sources` lists the vault-relative paths you actually opened.
@@ -2021,8 +2053,7 @@ Rules:
   https://www.youtube.com/watch?v=<video_id>&t=<seconds>s from it is
   reading, not guessing, and the readable timestamp must match the t=
   value.
-- Keep the channel owner's voice: direct, practical, second person, no
-  greeting boilerplate, no marketing.
+{_voice()}
 - `confidence` is 0-100 for how well the vault supports the result.
 - `sources` lists the vault-relative paths you opened, empty if none.
 
@@ -3158,7 +3189,8 @@ def bulk_send_one(qid: str, text: str) -> dict:
     with _bulk_lock:
         item = next((it for it in _bulk["items"] if it["id"] == qid), None)
         if item is None:
-            return {"ok": False, "error": "not part of this run"}
+            return {"ok": False, "code": "stale",
+                    "error": "this list is from an older run; refreshing"}
         if item["state"] in ("sent", "sending"):
             return {"ok": False, "error": "already going out"}
         if _bulk["phase"] == "sending" and item["state"] == "queued":
@@ -3198,7 +3230,8 @@ def bulk_polish(qid: str, text: str, instruction: str) -> dict:
     with _bulk_lock:
         item = next((it for it in _bulk["items"] if it["id"] == qid), None)
         if item is None:
-            return {"ok": False, "error": "not part of this run"}
+            return {"ok": False, "code": "stale",
+                    "error": "this list is from an older run; refreshing"}
         if item["state"] in ("sent", "sending", "polishing"):
             return {"ok": False, "error": f"already {item['state']}"}
         item["state"] = "polishing"
