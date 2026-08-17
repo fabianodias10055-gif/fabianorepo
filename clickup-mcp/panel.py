@@ -3889,92 +3889,108 @@ def integration_health() -> list:
 
 
 def video_effect(members: list[dict], window: int = 7) -> dict:
-    """Whether publishing a video moves the join rate, measured not assumed.
+    """Whether publishing moves the join rate, split by kind and by topic.
 
-    Joins per day come from every member's `since`; the videos come from the
-    date each folder name starts with. For each video, the joins in the days
-    after it are compared with what the whole period's average would give
-    over the same span.
+    Joins per day come from every member's `since`, counting only people who
+    went on to pay. Videos come from the folders, which carry the date, the
+    topic and now whether the thing was streamed or uploaded.
 
-    Split by whether the person ever paid, because the two answers differ
-    and only one of them is the question anyone means.
-
-    What this is not: proof. A video and a Patreon post usually ship the
-    same day, the video's own promotion runs beside it, and most videos
-    here land within a week of the last one, so the windows overlap and the
-    videos are not independent trials. It measures that joins rise around a
-    release, not that the video caused them.
+    Two comparisons, because one of them is a trap. Over the whole history
+    lives beat uploads badly, and that is almost entirely the year: every
+    live here was streamed in 2025 and most uploads came before it, so the
+    naive split compares a bigger channel against a smaller one and calls
+    the difference format. The per-year rows are the fair reading, and 2025
+    is the only year holding enough of both.
     """
     from datetime import date, timedelta
 
     paid: dict[str, int] = {}
-    free: dict[str, int] = {}
     for m in members:
         day = (m.get("since") or "")[:10]
-        if len(day) != 10:
-            continue
-        bucket = paid if (m.get("lifetime_cents") or 0) > 0 else free
-        bucket[day] = bucket.get(day, 0) + 1
-    if not paid and not free:
+        if len(day) == 10 and (m.get("lifetime_cents") or 0) > 0:
+            paid[day] = paid.get(day, 0) + 1
+    if not paid:
         return {}
-
-    days = sorted(set(paid) | set(free))
-    try:
-        first, last = date.fromisoformat(days[0]), date.fromisoformat(days[-1])
-    except ValueError:
-        return {}
+    days = sorted(paid)
+    first, last = date.fromisoformat(days[0]), date.fromisoformat(days[-1])
     span = max(1, (last - first).days + 1)
+    base = sum(paid.values()) / span * window
 
-    videos = []
-    root = VAULT / "YouTube" / "Videos"
-    if root.is_dir():
-        for f in root.iterdir():
-            m = re.match(r"(\d{4}-\d{2}-\d{2}) (.+)", f.name)
-            if m and m.group(1) >= days[0]:
-                videos.append((m.group(1), m.group(2)))
-    videos.sort()
-    if not videos:
-        return {}
-
-    def in_window(counts: dict, start: str) -> int:
+    def in_window(start: str) -> int:
         d0 = date.fromisoformat(start)
-        return sum(counts.get((d0 + timedelta(days=i)).isoformat(), 0)
+        return sum(paid.get((d0 + timedelta(days=i)).isoformat(), 0)
                    for i in range(window))
 
-    out = {"window": window, "videos": len(videos), "sides": []}
-    per_video = []
-    for label, counts in (("who went on to pay", paid),
-                          ("who followed for free", free)):
-        total = sum(counts.values())
-        base = total / span * window
-        lifts = [in_window(counts, v) for v, _t in videos]
-        lifts_sorted = sorted(lifts)
-        median = lifts_sorted[len(lifts_sorted) // 2] if lifts_sorted else 0
-        above = sum(1 for x in lifts if x > base)
-        out["sides"].append({
-            "label": label, "total": total,
-            "baseline": round(base, 1), "median": median,
-            "ratio": round(median / base, 2) if base else 0,
-            "above": above, "of": len(lifts),
-            "above_pct": round(above * 100 / len(lifts)) if lifts else 0,
-        })
-        if label.startswith("who went on"):
-            per_video = list(zip(videos, lifts))
+    def field(text: str, key: str) -> str:
+        # [ 	]* and not \s*: \s crosses the newline even under re.M and
+        # reads the frontmatter's closing --- as the value.
+        m = re.search(rf"^{key}:[ 	]*(\S+)?[ 	]*$", text, re.M)
+        return (m.group(1) or "").strip() if m else ""
 
-    base_paid = out["sides"][0]["baseline"] or 1
-    top = sorted(per_video, key=lambda x: -x[1])[:5]
-    out["best"] = [{"date": v[0], "title": v[1][:60], "joined": n,
-                    "times": round(n / base_paid, 1)} for v, n in top if n]
+    vids = []
+    root = VAULT / "YouTube" / "Videos"
+    if root.is_dir():
+        for f in root.glob("*/00 - Overview.md"):
+            d = re.match(r"(\d{4}-\d{2}-\d{2}) (.+)", f.parent.name)
+            if not d or d.group(1) < days[0]:
+                continue
+            t = f.read_text(encoding="utf-8", errors="replace")
+            vids.append({"date": d.group(1), "title": d.group(2)[:60],
+                         "live": field(t, "live"), "system": field(t, "system"),
+                         "lift": in_window(d.group(1))})
+    if not vids:
+        return {}
 
-    # Overlapping windows are the caveat with a number, so give it one.
-    close = 0
-    for i in range(len(videos) - 1):
-        a = date.fromisoformat(videos[i][0])
-        b = date.fromisoformat(videos[i + 1][0])
-        if (b - a).days <= window:
-            close += 1
-    out["overlapping"] = close
-    return out
+    def med(xs):
+        xs = sorted(xs)
+        return xs[len(xs) // 2] if xs else 0
+
+    def row(label, sel, note=""):
+        lifts = [v["lift"] for v in sel]
+        m = med(lifts)
+        return {"label": label, "n": len(lifts), "median": m,
+                "ratio": round(m / base, 2) if base else 0, "note": note}
+
+    kinds = [
+        row("YouTube livestream", [v for v in vids if v["live"] == "yes"]),
+        row("YouTube upload", [v for v in vids if v["live"] == "no"]),
+    ]
+
+    years = {}
+    for v in vids:
+        years.setdefault(v["date"][:4], {}).setdefault(v["live"], []).append(v["lift"])
+    fair = []
+    for y, byk in sorted(years.items()):
+        if len(byk) < 2 or min(len(x) for x in byk.values()) < 5:
+            continue
+        ydays = [d for d in paid if d.startswith(y)]
+        ybase = (sum(paid[d] for d in ydays) / 365 * window) or 1
+        fair.append({"year": y, "baseline": round(ybase, 1), "kinds": [
+            {"label": "livestream" if k == "yes" else "upload",
+             "n": len(x), "median": med(x),
+             "ratio": round(med(x) / ybase, 2)}
+            for k, x in sorted(byk.items(), reverse=True)]})
+
+    topics: dict[str, list] = {}
+    for v in vids:
+        if v["system"] and v["system"] != "-":
+            topics.setdefault(v["system"], []).append(v["lift"])
+    names = {sl: nm for sl, nm, _f in CATALOG}
+    topic_rows = sorted(
+        (row(names.get(k, k), [{"lift": x} for x in v]) for k, v in topics.items()
+         if len(v) >= 3), key=lambda r: -r["ratio"])[:8]
+
+    return {
+        "window": window, "baseline": round(base, 1), "videos": len(vids),
+        "kinds": kinds, "fair": fair, "topics": topic_rows,
+        "tagged": sum(1 for v in vids if v["system"] and v["system"] != "-"),
+        "best": [{"date": v["date"], "title": v["title"], "joined": v["lift"],
+                  "times": round(v["lift"] / base, 1) if base else 0}
+                 for v in sorted(vids, key=lambda x: -x["lift"])[:5] if v["lift"]],
+        # Named so the card can say it rather than leave a gap the reader
+        # fills with an assumption.
+        "patreon_posts": None,
+    }
 
 
 def patreon_retention(members: list[dict]) -> dict:

@@ -124,9 +124,16 @@ def list_videos(playlist_id: str, limit: int | None) -> list[dict]:
 def video_stats(ids: list[str]) -> dict[str, dict]:
     out = {}
     for i in range(0, len(ids), 50):
-        data = api_get("videos", {"part": "statistics", "id": ",".join(ids[i:i + 50])})
+        # liveStreamingDetails rides along free: this endpoint costs one unit
+        # per call whatever parts are asked for, and whether a video was
+        # streamed or uploaded is the difference between "publishing brings
+        # patrons" and knowing which kind of publishing does.
+        data = api_get("videos", {"part": "statistics,liveStreamingDetails",
+                                  "id": ",".join(ids[i:i + 50])})
         for it in data.get("items", []):
-            out[it["id"]] = it.get("statistics", {})
+            st = dict(it.get("statistics", {}))
+            st["_live"] = "yes" if it.get("liveStreamingDetails") else "no"
+            out[it["id"]] = st
     return out
 
 
@@ -251,6 +258,7 @@ def write_overview(folder: Path, v: dict, stats: dict, dry: bool) -> None:
         f"published: {v['published']}",
         f"views: {stats.get('viewCount', '')}",
         f"comment_count: {stats.get('commentCount', '0')}",
+        f"live: {stats.get('_live', 'unknown')}",
         "facet: overview",
         "access: public",
         "system:",

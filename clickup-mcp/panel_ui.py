@@ -834,6 +834,12 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .mbtns { display:flex; gap:var(--s2); margin-top:var(--s3); flex-wrap:wrap; }
 
 /* ---- answering a whole system ---- */
+.bbase { position:absolute; top:-2px; bottom:-2px; width:2px;
+  background:var(--ink3); opacity:.7; }
+.bt { position:relative; }
+.chlegend i.basetick { background:var(--ink3); width:2px; height:12px;
+  border-radius:0; }
+
 .reneeds { margin-left:auto; }
 
 #qnarrow { color:var(--warn); }
@@ -6838,50 +6844,85 @@ def _retention_card(d: dict) -> str:
 
 
 def _effect_card(d: dict) -> str:
-    """Does publishing move the join rate. Measured, with what it cannot say."""
+    """Does publishing bring patrons, as bars against the ordinary week."""
     pat = d.get("patreon") or {}
     v = pat.get("video_effect") or {}
-    if not v.get("sides"):
+    if not v.get("kinds"):
         return ""
+    base = v["baseline"] or 1
 
-    stats = "".join(
-        f'<div><span class="k">{escape(s["label"])}</span>'
-        f'<span class="v{" warn" if s["ratio"] < 1.15 else ""}">{s["ratio"]}x</span>'
-        f'<span class="k">{s["median"]} in the week vs {s["baseline"]} usual'
-        f' &middot; {s["above_pct"]}% of videos beat it</span></div>'
-        for s in v["sides"])
+    def bars(rows, thin=5):
+        top = max([r["ratio"] for r in rows] + [1.0])
+        out = []
+        for r in rows:
+            w = max(2, round(r["ratio"] * 100 / top))
+            weak = r["n"] < thin
+            out.append(
+                f'<div class="bar" title="{escape(r["label"], quote=True)}: '
+                f'{r["median"]} in the week, {r["ratio"]}x the usual '
+                f'{v["baseline"]}, from {r["n"]} videos">'
+                f'<span class="bl">{escape(r["label"])}</span>'
+                f'<span class="bt"><i style="width:{w}%;'
+                f'{"opacity:.45" if weak else ""}"></i>'
+                f'<b class="bbase" style="left:{min(99, round(100 / top))}%"></b>'
+                f'</span>'
+                f'<span class="bv">{r["ratio"]}x '
+                f'<small>n={r["n"]}{" ?" if weak else ""}</small></span></div>')
+        return '<div class="bars">' + "".join(out) + "</div>"
 
-    best = "".join(
-        f'<div class="lrow"><span>{escape(b["date"])} &middot; '
-        f'{escape(b["title"])}</span>'
-        f'<span class="n">{b["joined"]} paid &middot; {b["times"]}x</span></div>'
-        for b in (v.get("best") or []))
+    legend = (
+        '<div class="chlegend">'
+        '<span><i style="background:var(--ch-main)"></i>joins in the week after, '
+        'against the ordinary week</span>'
+        '<span><i class="basetick"></i>where an ordinary week sits</span>'
+        '<span><i style="background:var(--ch-main);opacity:.45"></i>'
+        'fewer than five videos, read as a hint not a number</span></div>')
+
+    fair = ""
+    for y in v.get("fair") or []:
+        inner = "".join(
+            f'<div class="bar"><span class="bl">{escape(k["label"])}</span>'
+            f'<span class="bt"><i style="width:'
+            f'{max(2, round(k["ratio"] * 60))}%"></i></span>'
+            f'<span class="bv">{k["ratio"]}x <small>n={k["n"]}</small></span></div>'
+            for k in y["kinds"])
+        fair += (f'<p class="lsub">Inside {escape(y["year"])} alone, where both '
+                 f'exist</p><div class="bars">{inner}</div>')
+
+    topics = ""
+    if v.get("topics"):
+        topics = ('<p class="lsub">By topic</p>' + bars(v["topics"], thin=5)
+                  + f'<p class="figwhy">Only {_fmt(v["tagged"])} of '
+                    f'{_fmt(v["videos"])} videos carry a topic, and only one has '
+                    f'more than a handful, so every bar but Ledge System is a '
+                    f'hint. Tagging more of them in the vault is what would '
+                    f'make this readable.</p>')
 
     return (
         '<section class="card" id="effect">'
         '<h2><span class="he">🎬</span>Does publishing bring patrons</h2>'
-        f'<div class="figstat" style="border-top:0;padding-top:0">{stats}</div>'
-        '<p class="figwhy">Joins in the ' + str(v["window"]) + ' days after each '
-        'of the ' + _fmt(v["videos"]) + ' videos, against what the period average '
-        'gives over the same span. The split is the finding: a video reliably '
-        'brings followers and barely moves payers. Reading the first number '
-        'alone would credit videos with growth that is mostly free follows.</p>'
-        + (f'<p class="lsub">The weeks that brought the most paying patrons</p>'
-           f'{best}' if best else "")
-        + '<p class="figwhy">This is not proof that a video caused anything. A '
-        'video and a Patreon post usually go out the same day, the promotion '
-        'runs beside it, and ' + _fmt(v.get("overlapping", 0)) + ' of these '
-        'videos land within a week of the previous one, so their windows '
-        'overlap and they are not independent trials. It says joins rise '
-        'around a release, which is a weaker and truer claim.</p>'
-        '<p class="figwhy">Two of the three things you asked about cannot be '
-        'measured here yet. Answering a question has no date to measure from: '
-        'the vault records that a question is answered, not the day it was, '
-        'and only the 46 replies sent from this panel carry a real timestamp, '
-        'all of them from the last few days. A new Patreon project has no data '
-        'at all, since the collector reads members and not posts. Both become '
-        'measurable the moment those dates start being recorded.</p>'
-        "</section>")
+        + legend
+        + '<p class="lsub">By what was published</p>'
+        + bars(v["kinds"])
+        + '<div class="bars"><div class="bar">'
+          '<span class="bl">Patreon post</span>'
+          '<span class="bt"><i style="width:0"></i></span>'
+          '<span class="bv"><small>no data</small></span></div></div>'
+        + '<p class="figwhy">Counted on people who went on to pay, in the '
+          + str(v["window"]) + ' days after each of ' + _fmt(v["videos"])
+        + ' videos, against the ' + str(v["baseline"]) + ' an ordinary week '
+          'brings. Patreon posts have no bar because the collector reads '
+          'members and not posts: that row is missing data, not a zero.</p>'
+        + fair
+        + '<p class="figwhy">The two readings disagree, and the second is the '
+          'honest one. Across the whole history livestreams look far better '
+          'than uploads, but every livestream here was streamed in 2025 and '
+          'most uploads came before it, so that comparison is a bigger '
+          'channel against a smaller one wearing the label of format. Inside '
+          '2025 the two are level. What the data supports is that publishing '
+          'lifts joins; it does not support choosing live over upload.</p>'
+        + topics
+        + "</section>")
 
 
 def _stamp_views(html: str) -> str:
