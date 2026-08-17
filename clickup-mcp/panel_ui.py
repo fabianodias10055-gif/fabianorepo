@@ -834,6 +834,8 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .mbtns { display:flex; gap:var(--s2); margin-top:var(--s3); flex-wrap:wrap; }
 
 /* ---- answering a whole system ---- */
+.bulkst.bs-polishing { color:var(--accent); }
+
 .bigmsg { color:var(--warn); font-weight:600; }
 .bulkst.bs-queued { color:var(--ink3); }
 
@@ -4647,8 +4649,9 @@ function bulkRender(st) {
          ? '<textarea class="bulkdraft" ' + (st.phase === "sending" ? "readonly" : "")
            + ">" + esc(it.draft) + "</textarea>"
            + (it.state === "sent" ? ""
-              : '<div class="bulkone"><button class="btn tiny bulksend1">'
-                + "Send this one</button>"
+              : '<div class="bulkone">'
+                + '<button class="btn tiny bulkpolish">Polish text</button>'
+                + '<button class="btn tiny bulksend1">Send this one</button>'
                 + '<span class="note b1msg"></span></div>') : "")
       + "</div>";
   });
@@ -4741,6 +4744,29 @@ document.addEventListener("click", function (ev) {
   var g = ev.target.closest(".bulkgap");
   if (g) { BULK_GAP = g.dataset.gap; bulkTick(); return; }
 
+  var pol = ev.target.closest(".bulkpolish");
+  if (pol) {
+    var pit = pol.closest(".bulkitem");
+    var cur = $(".bulkdraft", pit).value;
+    var pmsg = $(".b1msg", pit);
+    /* The same dialog the draft button uses, so there is one place that
+       asks for words. What it sends is whatever is in the box right now,
+       not the server's copy: you may have edited it before deciding it
+       needed one more change. */
+    askPolish(cur, function (instruction) {
+      if (!instruction) return;
+      pmsg.textContent = "polishing...";
+      bulkPost({ action: "polish", id: pit.dataset.id, text: cur,
+                 instruction: instruction })
+        .then(function (r) {
+          if (!r.ok) { pmsg.textContent = "not polished: " + r.error; return; }
+          pmsg.textContent = "";
+          bulkWatch();
+        });
+    });
+    return;
+  }
+
   var one = ev.target.closest(".bulksend1");
   if (one) {
     var item = one.closest(".bulkitem");
@@ -4816,19 +4842,38 @@ document.addEventListener("click", function (ev) {
    Optional on purpose: Enter or the button with an empty box drafts exactly
    as before. What you type here is your own, so the prompt files it as the
    owner speaking, separate from the public comment, which stays untrusted. */
-function askContext(question, onGo) {
+/* Asking what to change, on top of the draft it will change. Built from
+   askContext so the two dialogs behave identically: Escape cancels, Tab
+   stays inside, focus comes back. */
+function askPolish(draft, onGo) {
+  askContext(draft, onGo, {
+    title: "What should change?",
+    hint: "It edits this reply rather than writing a new one, so anything "
+        + "you do not mention comes back unchanged.",
+    placeholder: "shorter, and add the link to the devlog",
+    go: "Polish",
+    skip: "",
+  });
+}
+
+function askContext(question, onGo, opt) {
+  opt = opt || {};
   var back = document.createElement("div");
   back.className = "modalback";
   back.innerHTML =
     '<div class="modal" role="dialog" aria-modal="true" aria-label="Context for this draft">'
-    + '<h3>Anything Claude should know?</h3>'
-    + '<p class="note">Optional. Leave it empty and it drafts from the vault '
-    + "alone, exactly as before.</p>"
+    + "<h3>" + esc(opt.title || "Anything Claude should know?") + "</h3>"
+    + '<p class="note">' + esc(opt.hint || "Optional. Leave it empty and it "
+        + "drafts from the vault alone, exactly as before.") + "</p>"
     + '<blockquote class="mq">' + esc(question) + "</blockquote>"
-    + '<textarea class="mctx" rows="4" placeholder="e.g. they are on 5.6 already, '
-    + 'do not tell them to upgrade — or: point them at the devlog, not the old tutorial"></textarea>'
-    + '<div class="mbtns"><button class="btn tiny primary mgo">Draft</button>'
-    + '<button class="btn tiny mskip">Draft without a note</button>'
+    + '<textarea class="mctx" rows="4" placeholder="' + esc(opt.placeholder
+        || "e.g. they are on 5.6 already, do not tell them to upgrade")
+    + '"></textarea>'
+    + '<div class="mbtns"><button class="btn tiny primary mgo">'
+    + esc(opt.go || "Draft") + "</button>"
+    + (opt.skip === "" ? ""
+       : '<button class="btn tiny mskip">' + esc(opt.skip
+           || "Draft without a note") + "</button>")
     + '<button class="btn tiny mcancel">Cancel</button></div></div>';
   /* Where the focus was, so it can be given back. A dialog that drops
      focus on the body leaves a keyboard user at the top of the document,
@@ -4868,7 +4913,8 @@ function askContext(question, onGo) {
   }
   document.addEventListener("keydown", onKey, true);
   back.querySelector(".mgo").addEventListener("click", function () { go(box.value.trim()); });
-  back.querySelector(".mskip").addEventListener("click", function () { go(""); });
+  var skip = back.querySelector(".mskip");
+  if (skip) skip.addEventListener("click", function () { go(""); });
   back.querySelector(".mcancel").addEventListener("click", close);
   back.addEventListener("click", function (ev) { if (ev.target === back) close(); });
 }
