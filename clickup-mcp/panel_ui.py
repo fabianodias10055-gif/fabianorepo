@@ -834,6 +834,8 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .mbtns { display:flex; gap:var(--s2); margin-top:var(--s3); flex-wrap:wrap; }
 
 /* ---- answering a whole system ---- */
+.reneeds { margin-left:auto; }
+
 #qnarrow { color:var(--warn); }
 .qclearq { border:1px solid var(--warn); background:transparent; color:var(--warn);
   border-radius:var(--r-xs); font:inherit; font-size:var(--t-2xs);
@@ -875,7 +877,10 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 
 /* ---- ranked bars: which system, which kind, which country ---- */
 .bars { display:flex; flex-direction:column; gap:5px; margin:var(--s3) 0; }
-.bar { display:grid; grid-template-columns:minmax(9ch,13ch) 1fr auto;
+/* The label column sizes itself between these two, so a short one like a
+   country name still leaves the bar its room while "paid once, same month"
+   is not cut to "paid once, sa...". */
+.bar { display:grid; grid-template-columns:minmax(9ch,22ch) 1fr auto;
   gap:var(--s3); align-items:center; font-size:var(--t-sm); }
 .bl { color:var(--ink2); overflow:hidden; text-overflow:ellipsis;
   white-space:nowrap; }
@@ -4968,6 +4973,42 @@ function askContext(question, onGo, opt) {
   back.addEventListener("click", function (ev) { if (ev.target === back) close(); });
 }
 
+/* Recheck reads the vault again and swaps this card's rows, without the
+   full-page reload the top Update triggers: what is owed changes while you
+   work, and losing your scroll to see it is a poor trade.
+
+   It re-reads. It does not re-collect: Discord and YouTube arrive on their
+   own schedules, so the age of the newest question is what the note under
+   the button reports, since a card that is fresh from stale sources is the
+   thing worth not implying. */
+document.addEventListener("click", function (ev) {
+  var b = ev.target.closest("#reneeds");
+  if (!b) return;
+  if (!LIVE) { toast("Static file: this needs the live server.", "bad"); return; }
+  b.disabled = true;
+  b.classList.add("spin");
+  fetch("/needs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Panel-Token": PANEL_TOKEN },
+    body: "{}"
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      b.disabled = false;
+      b.classList.remove("spin");
+      if (!j.ok) { toast("Could not recheck: " + (j.error || "?"), "bad"); return; }
+      var box = $("#needsbody");
+      if (box) box.innerHTML = j.html;
+      toast(j.changed ? "Rechecked, and it changed." : "Rechecked, nothing new.",
+            j.changed ? "info" : "ok");
+    })
+    .catch(function (e) {
+      b.disabled = false;
+      b.classList.remove("spin");
+      toast("Could not reach the panel server.", "bad");
+    });
+});
+
 /* ---- gaps and coverage drill into the question table ---- */
 function drillTo(sys) {
   var sel = $("#sysSel");
@@ -5482,7 +5523,10 @@ def _needs_attention(d: dict) -> str:
         for tone, label, sub in items
     ) or '<p class="empty">Nobody is waiting on you. Genuinely.</p>'
     return (f'<section class="card" id="attention"><h2><span class="he">🔔</span>'
-            f'Needs attention</h2>{rows}</section>')
+            f'Needs attention'
+            f'<button class="btn tiny reneeds" id="reneeds" type="button">'
+            f'recheck</button></h2>'
+            f'<div id="needsbody">{rows}</div></section>')
 
 
 def _today_card(d: dict) -> str:
@@ -5564,7 +5608,7 @@ def _sales_card(d: dict) -> str:
             f'<p class="note stagenote">{escape(s["note"])}{names}</p>'
         )
     return (
-        f'<section class="card" data-view="business" id="sales">'
+        f'<section class="card" id="sales">'
         f'<h2><span class="he">💳</span>Where people are</h2>'
         f'<p class="note">Only what Patreon can prove. A sale made anywhere '
         f'else, on the website or by hand, is not in this and would have to '
@@ -5618,7 +5662,7 @@ def _fig(name: str, title: str) -> str:
 
 
 
-def _business_screen(d: dict) -> str:
+def _business_screen(d: dict, below: str = "") -> str:
     """One screen for the numbers, said as money and people.
 
     Everything here already existed somewhere: totals on Home, movement in
@@ -5705,6 +5749,7 @@ def _business_screen(d: dict) -> str:
         f'<p class="note">Patreon read {escape(pat.get("read_at") or "?")}. '
         f'WhatsApp and website sales are not here: nothing in this panel can '
         f'see them yet, so every money figure on this screen is Patreon only.</p>'
+        f'{below}'
         f'</section>')
 
 
@@ -6256,7 +6301,7 @@ def _people_card(d: dict) -> str:
         head += (f' &middot; {len(paying)} paying, US$ {monthly / 100:,.0f}/mo'
                  f'{f" &middot; {len(owed)} waiting on you" if owed else ""}')
     return (
-        f'<section class="card" data-view="business" id="people">'
+        f'<section class="card" id="people">'
         f'<h2><span class="he">👥</span>Customers'
         f'<span class="cnt">{head}</span></h2>'
         f'<p class="note">Paying customers with an unanswered question come '
@@ -6759,7 +6804,7 @@ def _retention_card(d: dict) -> str:
                 + "</div>")
 
     return (
-        '<section class="card" data-view="business" id="retention">'
+        '<section class="card" id="retention">'
         '<h2><span class="he">🧮</span>Who stayed, and how fast the rest '
         'left</h2>'
         '<div class="figstat" style="border-top:0;padding-top:0">'
@@ -6788,6 +6833,54 @@ def _retention_card(d: dict) -> str:
         'last charge month are the same: they paid once. That is what taking '
         "a tier's content and leaving looks like from here, though it is "
         'not proof of why.</p>'
+        "</section>")
+
+
+
+def _effect_card(d: dict) -> str:
+    """Does publishing move the join rate. Measured, with what it cannot say."""
+    pat = d.get("patreon") or {}
+    v = pat.get("video_effect") or {}
+    if not v.get("sides"):
+        return ""
+
+    stats = "".join(
+        f'<div><span class="k">{escape(s["label"])}</span>'
+        f'<span class="v{" warn" if s["ratio"] < 1.15 else ""}">{s["ratio"]}x</span>'
+        f'<span class="k">{s["median"]} in the week vs {s["baseline"]} usual'
+        f' &middot; {s["above_pct"]}% of videos beat it</span></div>'
+        for s in v["sides"])
+
+    best = "".join(
+        f'<div class="lrow"><span>{escape(b["date"])} &middot; '
+        f'{escape(b["title"])}</span>'
+        f'<span class="n">{b["joined"]} paid &middot; {b["times"]}x</span></div>'
+        for b in (v.get("best") or []))
+
+    return (
+        '<section class="card" id="effect">'
+        '<h2><span class="he">🎬</span>Does publishing bring patrons</h2>'
+        f'<div class="figstat" style="border-top:0;padding-top:0">{stats}</div>'
+        '<p class="figwhy">Joins in the ' + str(v["window"]) + ' days after each '
+        'of the ' + _fmt(v["videos"]) + ' videos, against what the period average '
+        'gives over the same span. The split is the finding: a video reliably '
+        'brings followers and barely moves payers. Reading the first number '
+        'alone would credit videos with growth that is mostly free follows.</p>'
+        + (f'<p class="lsub">The weeks that brought the most paying patrons</p>'
+           f'{best}' if best else "")
+        + '<p class="figwhy">This is not proof that a video caused anything. A '
+        'video and a Patreon post usually go out the same day, the promotion '
+        'runs beside it, and ' + _fmt(v.get("overlapping", 0)) + ' of these '
+        'videos land within a week of the previous one, so their windows '
+        'overlap and they are not independent trials. It says joins rise '
+        'around a release, which is a weaker and truer claim.</p>'
+        '<p class="figwhy">Two of the three things you asked about cannot be '
+        'measured here yet. Answering a question has no date to measure from: '
+        'the vault records that a question is answered, not the day it was, '
+        'and only the 46 replies sent from this panel carry a real timestamp, '
+        'all of them from the last few days. A new Patreon project has no data '
+        'at all, since the collector reads members and not posts. Both become '
+        'measurable the moment those dates start being recorded.</p>'
         "</section>")
 
 
@@ -6948,10 +7041,9 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 <div class="cols2">
 {_stamp_views(_answers_card(d) + _system_pressure_card(d, facets))}
 </div>
-{_stamp_views(_business_screen(d) + _links_card() + _sync_card(d) + _wingman_card(d))}
-{_sales_card(d)}
-{_retention_card(d)}
-{_people_card(d)}
+{_stamp_views(_business_screen(d, _sales_card(d) + _retention_card(d)
+                                 + _effect_card(d) + _people_card(d))
+              + _links_card() + _sync_card(d) + _wingman_card(d))}
 <div class="grid3">
 {_stamp_views(_videos_card(d) + _sources_card(instrumentation, d) + _health_card(d))}
 </div>

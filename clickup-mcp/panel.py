@@ -3887,6 +3887,96 @@ def integration_health() -> list:
 
 
 
+
+def video_effect(members: list[dict], window: int = 7) -> dict:
+    """Whether publishing a video moves the join rate, measured not assumed.
+
+    Joins per day come from every member's `since`; the videos come from the
+    date each folder name starts with. For each video, the joins in the days
+    after it are compared with what the whole period's average would give
+    over the same span.
+
+    Split by whether the person ever paid, because the two answers differ
+    and only one of them is the question anyone means.
+
+    What this is not: proof. A video and a Patreon post usually ship the
+    same day, the video's own promotion runs beside it, and most videos
+    here land within a week of the last one, so the windows overlap and the
+    videos are not independent trials. It measures that joins rise around a
+    release, not that the video caused them.
+    """
+    from datetime import date, timedelta
+
+    paid: dict[str, int] = {}
+    free: dict[str, int] = {}
+    for m in members:
+        day = (m.get("since") or "")[:10]
+        if len(day) != 10:
+            continue
+        bucket = paid if (m.get("lifetime_cents") or 0) > 0 else free
+        bucket[day] = bucket.get(day, 0) + 1
+    if not paid and not free:
+        return {}
+
+    days = sorted(set(paid) | set(free))
+    try:
+        first, last = date.fromisoformat(days[0]), date.fromisoformat(days[-1])
+    except ValueError:
+        return {}
+    span = max(1, (last - first).days + 1)
+
+    videos = []
+    root = VAULT / "YouTube" / "Videos"
+    if root.is_dir():
+        for f in root.iterdir():
+            m = re.match(r"(\d{4}-\d{2}-\d{2}) (.+)", f.name)
+            if m and m.group(1) >= days[0]:
+                videos.append((m.group(1), m.group(2)))
+    videos.sort()
+    if not videos:
+        return {}
+
+    def in_window(counts: dict, start: str) -> int:
+        d0 = date.fromisoformat(start)
+        return sum(counts.get((d0 + timedelta(days=i)).isoformat(), 0)
+                   for i in range(window))
+
+    out = {"window": window, "videos": len(videos), "sides": []}
+    per_video = []
+    for label, counts in (("who went on to pay", paid),
+                          ("who followed for free", free)):
+        total = sum(counts.values())
+        base = total / span * window
+        lifts = [in_window(counts, v) for v, _t in videos]
+        lifts_sorted = sorted(lifts)
+        median = lifts_sorted[len(lifts_sorted) // 2] if lifts_sorted else 0
+        above = sum(1 for x in lifts if x > base)
+        out["sides"].append({
+            "label": label, "total": total,
+            "baseline": round(base, 1), "median": median,
+            "ratio": round(median / base, 2) if base else 0,
+            "above": above, "of": len(lifts),
+            "above_pct": round(above * 100 / len(lifts)) if lifts else 0,
+        })
+        if label.startswith("who went on"):
+            per_video = list(zip(videos, lifts))
+
+    base_paid = out["sides"][0]["baseline"] or 1
+    top = sorted(per_video, key=lambda x: -x[1])[:5]
+    out["best"] = [{"date": v[0], "title": v[1][:60], "joined": n,
+                    "times": round(n / base_paid, 1)} for v, n in top if n]
+
+    # Overlapping windows are the caveat with a number, so give it one.
+    close = 0
+    for i in range(len(videos) - 1):
+        a = date.fromisoformat(videos[i][0])
+        b = date.fromisoformat(videos[i + 1][0])
+        if (b - a).days <= window:
+            close += 1
+    out["overlapping"] = close
+    return out
+
+
 def patreon_retention(members: list[dict]) -> dict:
     """How long the people who left had stayed, and how many are still here.
 
@@ -4075,6 +4165,7 @@ def patreon_summary() -> dict:
         "new_this_month": sum(1 for m in active if (m.get("since") or "")[:7] == month),
         "stopped": sum(1 for m in members if m.get("status") == "former_patron"),
         "retention": patreon_retention(members),
+        "video_effect": video_effect(members),
         "read_at": (raw.get("read_at") or "")[:16].replace("T", " "),
     }
 
@@ -4491,6 +4582,9 @@ ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 # One reply lands at a time. Guards inside /reply serialize check-then-post,
 # which per-request threads otherwise interleave.
 _reply_lock = threading.Lock()
+# What the last recheck returned, so the next one can say whether
+# anything moved rather than always claiming it did.
+_needs_seen: dict = {}
 
 _state = {"epoch": 0, "building": False}
 
@@ -4782,6 +4876,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/rebuild":
             build(live=True)
             return self._send_json({"ok": True})
+
+        if self.path == "/needs":
+            # Re-reads the vault and returns just this card's rows. A full
+            # rebuild would work and would also reload the page out from
+            # under whatever you were reading.
+            import panel_ui as _ui
+            d = scan()
+            html = _ui._needs_attention(d)
+            inner = html
+            if 'id="needsbody">' in html:
+                inner = html.split('id="needsbody">', 1)[1].rsplit("</div></section>", 1)[0]
+            prev = _needs_seen.get("html")
+            _needs_seen["html"] = inner
+            return self._send_json({"ok": True, "html": inner,
+                                    "changed": prev is not None and prev != inner})
 
         if self.path == "/link":
             payload = self._json_body()
