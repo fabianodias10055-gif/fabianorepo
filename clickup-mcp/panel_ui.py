@@ -834,6 +834,12 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .mbtns { display:flex; gap:var(--s2); margin-top:var(--s3); flex-wrap:wrap; }
 
 /* ---- answering a whole system ---- */
+#qnarrow { color:var(--warn); }
+.qclearq { border:1px solid var(--warn); background:transparent; color:var(--warn);
+  border-radius:var(--r-xs); font:inherit; font-size:var(--t-2xs);
+  padding:1px 6px; cursor:pointer; margin-left:4px; }
+.qclearq:hover { background:var(--warn-bg); }
+
 .bulkst.bs-polishing { color:var(--accent); }
 
 .bigmsg { color:var(--warn); font-weight:600; }
@@ -2101,9 +2107,25 @@ function apply() {
   });
 
   var total = matchRows.length;
-  $("#qcount").textContent = total
+  /* Say when a search is what makes this number small. The box sits in the
+     top bar, far from the table, and the filter chips keep showing their own
+     totals, so "1 of 1" under a chip reading "Open 1,422" looked like the
+     inbox had lost everything. */
+  var qn = $("#qcount");
+  qn.textContent = total
     ? (from + 1) + "-" + Math.min(to, total) + " of " + fmt(total)
     : "0";
+  var nar = $("#qnarrow");
+  if (nar) {
+    if (state.q) {
+      nar.innerHTML = ' matching "' + esc(state.q) + '" '
+        + '<button class="qclearq" type="button">show all</button>';
+      nar.hidden = false;
+    } else {
+      nar.hidden = true;
+      nar.textContent = "";
+    }
+  }
   $("#pgnow").textContent = page + 1;
   $("#pgtot").textContent = pages;
   $("#pgprev").disabled = page === 0;
@@ -2242,11 +2264,18 @@ document.addEventListener("click", function (ev) {
   var key = b.dataset.key;
   $("#qres").classList.add("hide");
   if (b.dataset.go === "person") {
-    goView("people");
+    /* Customers lives on Business now, so the jump has to open that screen
+       and then bring the card into view: it sits below the money and the
+       funnel, off screen on arrival. */
+    goView("business");
     setTimeout(function () {
       var tr = document.querySelector('#people tr.crow[data-who="' + key.replace(/"/g, '\\"') + '"]');
-      revealRow(tr);
       if (tr && !tr.classList.contains("copen")) toggleCustomer(tr);
+      /* Scroll last. Opening the row inserts a detail row and moves
+         everything below it, so a scroll measured before that lands in the
+         wrong place, and Customers now sits 2,300px down the Business
+         screen where wrong means off screen entirely. */
+      revealRow(tr);
     }, 30);
   } else if (b.dataset.go === "product") {
     goView("systems");
@@ -4309,6 +4338,14 @@ document.addEventListener("keydown", function (ev) {
 });
 
 document.addEventListener("click", function (ev) {
+  if (ev.target.closest(".qclearq")) {
+    $("#q").value = "";
+    state.q = "";
+    page = 0;
+    apply();
+    syncUrl();
+    return;
+  }
   var vb = ev.target.closest("[data-vbulk]");
   if (vb) {
     /* A question carries its system's display name, not its slug, and the
@@ -5527,7 +5564,7 @@ def _sales_card(d: dict) -> str:
             f'<p class="note stagenote">{escape(s["note"])}{names}</p>'
         )
     return (
-        f'<section class="card" id="sales">'
+        f'<section class="card" data-view="business" id="sales">'
         f'<h2><span class="he">💳</span>Where people are</h2>'
         f'<p class="note">Only what Patreon can prove. A sale made anywhere '
         f'else, on the website or by hand, is not in this and would have to '
@@ -5625,12 +5662,9 @@ def _business_screen(d: dict) -> str:
         f'moving</h2>'
         + line("Joined this month", _fmt(pat.get("new_this_month", 0)),
                f'worth US$ {pat.get("new_month_cents", 0) / 100:,.0f}/mo')
-        + line("Payment just failed", _fmt(pat.get("declined", 0)),
-               f'they paid US$ {pat.get("declined_lifetime_cents", 0) / 100:,.0f} '
-               f'before, and have not cancelled')
-        + line("Stopped over the years", _fmt(pat.get("stopped", 0)),
-               f'US$ {pat.get("stopped_lifetime_cents", 0) / 100:,.0f} earned '
-               f'while they stayed')
+        # Payment just failed and Stopped used to be repeated here. They are
+        # in the funnel below, where a bar puts them next to the stages they
+        # came from, which is the reading this card cannot give.
         + _fig("pledges", "Pledges started each month")
         + _fig("cohort", "When today\'s patrons joined")
         + "</section>")
@@ -6014,7 +6048,8 @@ def _questions_card(d: dict) -> str:
     return (
         f'<section class="card" id="questions">'
         f'<h2><span class="he">💬</span>Incoming questions'
-        f'<span class="cnt">showing <span id="qcount"></span> &middot; '
+        f'<span class="cnt">showing <span id="qcount"></span>'
+        f'<span id="qnarrow" hidden></span> &middot; '
         f'j/k navigate &middot; n next open &middot; Enter to answer</span></h2>'
         f'{_filters(d["questions"])}'
         f'<div class="scroll"><table aria-label="Incoming questions"><thead><tr>'
@@ -6221,7 +6256,8 @@ def _people_card(d: dict) -> str:
         head += (f' &middot; {len(paying)} paying, US$ {monthly / 100:,.0f}/mo'
                  f'{f" &middot; {len(owed)} waiting on you" if owed else ""}')
     return (
-        f'<section class="card" id="people"><h2><span class="he">👥</span>Customers'
+        f'<section class="card" data-view="business" id="people">'
+        f'<h2><span class="he">👥</span>Customers'
         f'<span class="cnt">{head}</span></h2>'
         f'<p class="note">Paying customers with an unanswered question come '
         f'first. Money shows only where someone linked their Patreon to their '
@@ -6637,8 +6673,6 @@ _NAV = [
     # from the panel's log, not the 900-odd vault-wide answered questions
     # the Home tile counts, and calling both "answered" read as a bug.
     ("answers", "check", "Answers sent", "answers"),
-    ("people", "users", "Customers", ""),
-    ("sales", "target", "Sales", ""),
     ("business", "grid", "Business", ""),
     ("systems", "flame", "Products", ""),
     ("videos", "video", "Videos", ""),
@@ -6845,9 +6879,11 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 <div class="cols2">
 {_stamp_views(_answers_card(d) + _system_pressure_card(d, facets))}
 </div>
-{_stamp_views(_sales_card(d) + _business_screen(d) + _links_card() + _sync_card(d) + _wingman_card(d))}
+{_stamp_views(_business_screen(d) + _links_card() + _sync_card(d) + _wingman_card(d))}
+{_sales_card(d)}
+{_people_card(d)}
 <div class="grid3">
-{_stamp_views(_people_card(d) + _videos_card(d) + _sources_card(instrumentation, d) + _health_card(d))}
+{_stamp_views(_videos_card(d) + _sources_card(instrumentation, d) + _health_card(d))}
 </div>
 <footer>{diag}</footer>
 </main>
