@@ -593,6 +593,10 @@ def main() -> int:
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--vault", default=str(VAULT))
+    # DISCORD_CHANNEL_IDS in .env replaces this list wholesale, it does not
+    # extend it. Adding a channel to DEFAULT_CHANNELS above while that
+    # variable is set changes nothing, silently, which is how the backup
+    # channel stayed unread after being added here.
     ap.add_argument("--channels", default=os.getenv("DISCORD_CHANNEL_IDS", DEFAULT_CHANNELS))
     ap.add_argument("--no-split", dest="split", action="store_false",
                     help="keep a message with two questions as one entry")
