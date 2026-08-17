@@ -4376,11 +4376,11 @@ class FeedbackBot(discord.Client):
         """Best-effort: send up to 3 of the spam images to Claude and return a
         one-line description/reason (e.g. 'fake MrBeast crypto giveaway'). Returns
         '' if disabled or on any failure."""
-        # Off by default: the answer is drafted in the panel through the CLI
-        # and posted from there after being read. The escalation scheduled
-        # above is what tells you this one is waiting.
+        # Gated by the same switch as the live reply: with AI_LIVE_REPLY off the
+        # bot spends nothing on the API, so a kick keeps its generic reason
+        # instead of an AI-written one.
         if not AI_LIVE_REPLY:
-            return
+            return ""
         if not ANTHROPIC_API_KEY:
             return ""
         _exts = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
@@ -4753,6 +4753,14 @@ class FeedbackBot(discord.Client):
             # stays scheduled either way: it counts any later message as an
             # answer, so a good AI reply silences it and a failed one still
             # reaches staff.
+        # The live reply is off by default: answers are drafted in the panel
+        # through the CLI and posted once a human has read them. This is the
+        # gate the switch was meant to control — it has to sit here, on the one
+        # path that reaches the API, and it covers a mention and a reply to the
+        # bot as well as the unprompted answer above. The escalation timer is
+        # already scheduled for all three, so nothing asked here is dropped.
+        if not AI_LIVE_REPLY:
+            return
         if not ANTHROPIC_API_KEY:
             return
         if message.id in self._processed_messages:
