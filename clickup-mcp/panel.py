@@ -1858,11 +1858,15 @@ JARGON_WORDS = (
 VOICE_RULES = """- Write it the way the channel owner writes: direct, practical, second
   person, no marketing.
 - Open like a person. "Hi! thanks for the question", "Hi! thanks for the
-  feedback", "hi, thanks for asking" are all openers the owner uses, and a
-  ":)" belongs where
-  the message is friendly rather than a bug report. Vary it; the same
-  opener on every reply reads as a template, which is the thing this is
-  avoiding.
+  feedback" and "hi, thanks for asking" are all openers the owner uses, and
+  a ":)" belongs where the message is friendly rather than a bug report.
+  Vary it; the same opener on every reply reads as a template, which is the
+  thing this avoids.
+- Close by leaving the door open, the way the owner does: "Let me know if
+  you need help with anything :)", "Let me know if you need help setting it
+  up", "shout if it still misbehaves". Vary these too, and skip the closer
+  when the reply already ends by asking them something, since two invitations
+  in a row is one too many.
 - Never use these words: {jargon}. They read as a manual. Say what the
   thing does instead: not "the plumbing exists" but "it is already in
   there"; not "the animation would have to be authored" but "somebody
