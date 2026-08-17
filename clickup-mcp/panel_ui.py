@@ -834,6 +834,18 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .mbtns { display:flex; gap:var(--s2); margin-top:var(--s3); flex-wrap:wrap; }
 
 /* ---- answering a whole system ---- */
+.prow2 { display:grid; grid-template-columns:minmax(11ch,17ch) repeat(3,1fr);
+  gap:var(--s4); align-items:start; padding:var(--s3) 0;
+  border-bottom:1px solid var(--line2); }
+.prow2:last-of-type { border-bottom:0; }
+.pcell { display:flex; flex-direction:column; gap:2px; }
+.pcell .k { font-size:var(--t-2xs); color:var(--ink3);
+  text-transform:uppercase; letter-spacing:.06em; }
+.pcell .v { font-family:var(--mono); font-size:var(--t-lg); color:var(--ok);
+  font-weight:600; }
+.pcell .v.warn { color:var(--warn); }
+@media (max-width:900px) { .prow2 { grid-template-columns:1fr 1fr; } }
+
 .bbase { position:absolute; top:-2px; bottom:-2px; width:2px;
   background:var(--ink3); opacity:.7; }
 .bt { position:relative; }
@@ -6843,6 +6855,59 @@ def _retention_card(d: dict) -> str:
 
 
 
+def _period_card(d: dict) -> str:
+    """This week, month and year against the one before."""
+    pat = d.get("patreon") or {}
+    pc = pat.get("period_change") or {}
+    rows = pc.get("rows") or []
+    if not rows:
+        return ""
+
+    def pct(v):
+        if v is None:
+            return '<span class="v">-</span>'
+        return f'<span class="v{" warn" if v < 0 else ""}">{v:+d}%</span>'
+
+    body = "".join(
+        f'<div class="prow2"><span class="olabel">{escape(r["label"])}'
+        f'<span class="note"> &middot; {r["days"]} days</span></span>'
+        f'<span class="pcell"><span class="k">people who started paying</span>'
+        f'{pct(r["pct"])}<span class="k">{_fmt(r["now"])} against '
+        f'{_fmt(r["prev"])}</span></span>'
+        f'<span class="pcell"><span class="k">new monthly revenue</span>'
+        f'{pct(r["money_pct"])}<span class="k">US$ {_fmt(r["money_now"])} '
+        f'against US$ {_fmt(r["money_prev"])}</span></span>'
+        f'<span class="pcell"><span class="k">videos published</span>'
+        f'<span class="v">{r["videos_now"]}</span>'
+        f'<span class="k">against {r["videos_prev"]}</span></span></div>'
+        for r in rows)
+
+    year = next((r for r in rows if r["label"].startswith("this year")), None)
+    note = ""
+    if year and year["videos_prev"] and year["pct"] is not None:
+        drop = round((year["videos_prev"] - year["videos_now"]) * 100
+                     / year["videos_prev"])
+        note = (f'<p class="figwhy">The year is the row worth sitting with. '
+                f'{drop}% fewer videos went out than by this day last year, '
+                f'and {abs(year["pct"])}% fewer people started paying'
+                + (f', while the money those people bring each month is '
+                   f'{year["money_pct"]:+d}%' if year["money_pct"] is not None
+                   else "")
+                + '. Publishing far less cost far less than the effort '
+                  'suggests, and who joined mattered more than how many.</p>')
+
+    return (
+        '<section class="card" id="periods">'
+        '<h2><span class="he">📆</span>Against the period before</h2>'
+        f'{body}{note}'
+        f'<p class="figwhy">Each side counts the same number of elapsed days, '
+        f'so a month half lived is compared with the same half of the month '
+        f'before rather than with a whole one. Through '
+        f'{escape(pc.get("through") or "?")}. New monthly revenue is what the '
+        f'people who joined in that period pay per month.</p>'
+        "</section>")
+
+
 def _effect_years(v: dict) -> str:
     """The comparison that survives: a week with a video against one without.
 
@@ -7116,8 +7181,9 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 <div class="cols2">
 {_stamp_views(_answers_card(d) + _system_pressure_card(d, facets))}
 </div>
-{_stamp_views(_business_screen(d, _sales_card(d) + _retention_card(d)
-                                 + _effect_card(d) + _people_card(d))
+{_stamp_views(_business_screen(d, _period_card(d) + _sales_card(d)
+                                 + _retention_card(d) + _effect_card(d)
+                                 + _people_card(d))
               + _links_card() + _sync_card(d) + _wingman_card(d))}
 <div class="grid3">
 {_stamp_views(_videos_card(d) + _sources_card(instrumentation, d) + _health_card(d))}

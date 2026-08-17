@@ -3888,6 +3888,70 @@ def integration_health() -> list:
 
 
 
+
+def period_change(members: list[dict]) -> dict:
+    """This week, month and year against the one before, like for like.
+
+    A month half lived against a month fully lived reads as a collapse that
+    is only the calendar, so each comparison uses the same number of elapsed
+    days on both sides.
+
+    Money here is new recurring revenue: what the people who joined in the
+    period are worth per month. It moves independently of the headcount,
+    which is the point of showing both.
+    """
+    from datetime import date, timedelta
+
+    joins: dict[str, int] = {}
+    money: dict[str, int] = {}
+    for m in members:
+        day = (m.get("since") or "")[:10]
+        if len(day) == 10 and (m.get("lifetime_cents") or 0) > 0:
+            joins[day] = joins.get(day, 0) + 1
+            money[day] = money.get(day, 0) + (m.get("monthly_cents") or 0)
+    if not joins:
+        return {}
+
+    vids: dict[str, int] = {}
+    root = VAULT / "YouTube" / "Videos"
+    if root.is_dir():
+        for f in root.glob("*/00 - Overview.md"):
+            d = re.match(r"(\d{4}-\d{2}-\d{2}) ", f.parent.name)
+            if d:
+                vids[d.group(1)] = vids.get(d.group(1), 0) + 1
+
+    last = date.fromisoformat(max(joins))
+
+    def total(src: dict, start, n: int) -> int:
+        return sum(src.get((start + timedelta(days=k)).isoformat(), 0)
+                   for k in range(n))
+
+    def pair(label, now_start, prev_start, n):
+        a, b = total(joins, now_start, n), total(joins, prev_start, n)
+        ma, mb = total(money, now_start, n) / 100, total(money, prev_start, n) / 100
+        return {
+            "label": label, "days": n,
+            "now": a, "prev": b,
+            "pct": round((a - b) * 100 / b) if b else None,
+            "money_now": round(ma), "money_prev": round(mb),
+            "money_pct": round((ma - mb) * 100 / mb) if mb else None,
+            "videos_now": total(vids, now_start, n),
+            "videos_prev": total(vids, prev_start, n),
+        }
+
+    rows = [pair("this week", last - timedelta(days=6), last - timedelta(days=13), 7)]
+
+    day_of_month = last.day
+    prev_month = (date(last.year, last.month, 1) - timedelta(days=1)).replace(day=1)
+    rows.append(pair("this month so far", date(last.year, last.month, 1),
+                     prev_month, day_of_month))
+
+    day_of_year = (last - date(last.year, 1, 1)).days + 1
+    rows.append(pair("this year so far", date(last.year, 1, 1),
+                     date(last.year - 1, 1, 1), day_of_year))
+    return {"rows": rows, "through": last.isoformat()}
+
+
 def video_effect(members: list[dict], window: int = 7) -> dict:
     """Whether publishing moves the join rate, split by kind and by topic.
 
@@ -4018,7 +4082,42 @@ def video_effect(members: list[dict], window: int = 7) -> dict:
                       "ratio": round(a_ / b_, 2) if b_ else 0,
                       "extra_week": round((a_ - b_) * 7, 1)})
 
+    # What happened when publishing actually stopped. This is the only
+    # natural experiment here, and it disagrees with the week-level lift, so
+    # it belongs on the card beside it rather than in a drawer.
+    gaps = []
+    dates = sorted(v["date"] for v in vids)
+    for i in range(len(dates) - 1):
+        a_d = date.fromisoformat(dates[i])
+        b_d = date.fromisoformat(dates[i + 1])
+        if (b_d - a_d).days < 30:
+            continue
+        start = a_d + timedelta(days=window)
+        length = (b_d - a_d).days - window
+        if length < 21:
+            continue
+
+        def rate(d0, n):
+            return sum(paid.get((d0 + timedelta(days=k)).isoformat(), 0)
+                       for k in range(n)) / n
+
+        during = rate(start, length)
+        before = rate(a_d - timedelta(days=60), 60)
+        if not before:
+            continue
+        gaps.append({"from": dates[i], "to": dates[i + 1], "days": length,
+                     "during": round(during, 2), "before": round(before, 2),
+                     "ratio": round(during / before, 2)})
+    ratios = sorted(g["ratio"] for g in gaps)
+    silence = {
+        "n": len(gaps),
+        "median": ratios[len(ratios) // 2] if ratios else 0,
+        "below": sum(1 for r in ratios if r < 1),
+        "longest": max(gaps, key=lambda g: g["days"]) if gaps else None,
+    }
+
     return {
+        "silence": silence,
         "quiet": quiet,
         "window": window, "baseline": round(base, 1), "videos": len(vids),
         "kinds": kinds, "fair": fair, "topics": topic_rows,
@@ -4221,6 +4320,7 @@ def patreon_summary() -> dict:
         "stopped": sum(1 for m in members if m.get("status") == "former_patron"),
         "retention": patreon_retention(members),
         "video_effect": video_effect(members),
+        "period_change": period_change(members),
         "read_at": (raw.get("read_at") or "")[:16].replace("T", " "),
     }
 
