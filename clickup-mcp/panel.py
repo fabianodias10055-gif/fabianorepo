@@ -3886,6 +3886,82 @@ def integration_health() -> list:
     return rows
 
 
+
+def patreon_retention(members: list[dict]) -> dict:
+    """How long the people who left had stayed, and how many are still here.
+
+    Nothing in the export says the day somebody cancelled. What it does say
+    is the day of their last charge, and that is the honest proxy: a former
+    patron's tenure is the months between joining and the last time they
+    paid. It undercounts by at most the part of a month they stayed after
+    the final charge, which no field records.
+
+    The bucket that matters is the first one. A patron whose join month and
+    last-charge month are the same paid once and left, which is what taking
+    the tier's content and cancelling looks like from here. It is not proof
+    of intent, and the card says so.
+    """
+    def months_between(a: str, b: str) -> int:
+        try:
+            ya, ma, da = int(a[:4]), int(a[5:7]), int(a[8:10])
+            yb, mb, db = int(b[:4]), int(b[5:7]), int(b[8:10])
+        except (ValueError, IndexError):
+            return -1
+        n = (yb - ya) * 12 + (mb - ma)
+        if db < da:
+            n -= 1
+        return max(0, n)
+
+    left = [m for m in members if m.get("status") == "former_patron"]
+    dated = [m for m in left if m.get("since") and m.get("last_charge")]
+    buckets: dict[int, int] = {}
+    paid_by_bucket: dict[int, int] = {}
+    for m in dated:
+        n = months_between(m["since"][:10], m["last_charge"][:10])
+        if n < 0:
+            continue
+        buckets[n] = buckets.get(n, 0) + 1
+        paid_by_bucket[n] = paid_by_bucket.get(n, 0) + int(m.get("lifetime_cents") or 0)
+
+    total = sum(buckets.values())
+    rows = []
+    for n in sorted(buckets):
+        if n >= 6:
+            break
+        rows.append({"months": n, "n": buckets[n],
+                     "pct": round(buckets[n] * 100 / total, 1) if total else 0,
+                     "cents": paid_by_bucket.get(n, 0)})
+    rest = sum(v for k, v in buckets.items() if k >= 6)
+    rest_cents = sum(v for k, v in paid_by_bucket.items() if k >= 6)
+    if rest:
+        rows.append({"months": 6, "n": rest, "over": True,
+                     "pct": round(rest * 100 / total, 1) if total else 0,
+                     "cents": rest_cents})
+
+    one_and_out = buckets.get(0, 0)
+    within_month = one_and_out + buckets.get(1, 0)
+    active = [m for m in members if m.get("status") == "active_patron"]
+    declined = [m for m in members if m.get("status") == "declined_patron"]
+
+    return {
+        "rows": rows, "measured": total, "left": len(left),
+        "undated": len(left) - len(dated),
+        "one_and_out": one_and_out,
+        "one_and_out_pct": round(one_and_out * 100 / total, 1) if total else 0,
+        "within_month": within_month,
+        "within_month_pct": round(within_month * 100 / total, 1) if total else 0,
+        # Two counts, because Patreon's own dashboard shows the second and
+        # this panel showed only the first, which is where "the number of
+        # patrons is not accurate" comes from. A declined patron has not
+        # cancelled: they are subscribed and the card failed.
+        "paying_now": len(active),
+        "subscribed_now": len(active) + len(declined),
+        "declined_now": len(declined),
+        "kept_pct": round(len(active) * 100 / (len(active) + len(left)), 1)
+                    if (len(active) + len(left)) else 0,
+    }
+
+
 def patreon_summary() -> dict:
     """The paying side in numbers, for the home page.
 
@@ -3998,6 +4074,7 @@ def patreon_summary() -> dict:
         "lifetime_cents": sum(m.get("lifetime_cents", 0) for m in members),
         "new_this_month": sum(1 for m in active if (m.get("since") or "")[:7] == month),
         "stopped": sum(1 for m in members if m.get("status") == "former_patron"),
+        "retention": patreon_retention(members),
         "read_at": (raw.get("read_at") or "")[:16].replace("T", " "),
     }
 

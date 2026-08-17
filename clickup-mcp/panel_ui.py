@@ -6722,6 +6722,75 @@ def _bulk_card(d: dict) -> str:
         '<div id="bulkbody"></div></section>')
 
 
+
+def _retention_card(d: dict) -> str:
+    """Who stayed, who left, and how fast they left.
+
+    Built because "how many patrons" had one answer on this panel and a
+    different one on Patreon's own dashboard, and because the shape of the
+    leaving matters more than the count: most of the people who ever paid
+    paid once.
+    """
+    pat = d.get("patreon") or {}
+    r = pat.get("retention") or {}
+    if not r.get("measured"):
+        return ""
+    rows = r["rows"]
+    top = max((x["n"] for x in rows), default=1) or 1
+
+    bars = []
+    for x in rows:
+        label = ("6 months or more" if x.get("over")
+                 else "paid once, same month" if x["months"] == 0
+                 else f'{x["months"]} month' + ("s" if x["months"] > 1 else ""))
+        width = max(2, round(x["n"] * 100 / top))
+        bars.append(
+            f'<div class="bar" title="{escape(label, quote=True)}: '
+            f'{_fmt(x["n"])} people, US$ {x["cents"] / 100:,.0f} paid">'
+            f'<span class="bl">{escape(label)}</span>'
+            f'<span class="bt"><i style="width:{width}%"></i></span>'
+            f'<span class="bv">{_fmt(x["n"])} &middot; '
+            f'US$ {x["cents"] / 100:,.0f}</span></div>')
+
+    def cell(k, v, sub="", warn=False):
+        return (f'<div><span class="k">{escape(k)}</span>'
+                f'<span class="v{" warn" if warn else ""}">{v}</span>'
+                + (f'<span class="k">{escape(sub)}</span>' if sub else "")
+                + "</div>")
+
+    return (
+        '<section class="card" data-view="business" id="retention">'
+        '<h2><span class="he">🧮</span>Who stayed, and how fast the rest '
+        'left</h2>'
+        '<div class="figstat" style="border-top:0;padding-top:0">'
+        + cell("paying right now", _fmt(r["paying_now"]), "the card went through")
+        + cell("subscribed right now", _fmt(r["subscribed_now"]),
+               f'includes {_fmt(r["declined_now"])} whose card failed')
+        + cell("of everyone who ever paid, still here",
+               f'{r["kept_pct"]}%', "", r["kept_pct"] < 20)
+        + cell("paid once and left", _fmt(r["one_and_out"]),
+               f'{r["one_and_out_pct"]}% of those who left', True)
+        + "</div>"
+        '<p class="figwhy">Two counts, because they answer different '
+        "questions and this panel used to show only the first. Patreon's own "
+        'dashboard counts the second: a declined patron has not cancelled, '
+        'their card failed and they are still subscribed.</p>'
+        '<p class="lsub">How long the people who left had stayed</p>'
+        '<div class="bars">' + "".join(bars) + "</div>"
+        f'<p class="figwhy">Measured on {_fmt(r["measured"])} of the '
+        f'{_fmt(r["left"])} who left'
+        + (f', the other {_fmt(r["undated"])} having no charge on record'
+           if r.get("undated") else "")
+        + '. Nothing in the export says the day somebody cancelled, so this '
+        'is the months between joining and their last charge, which '
+        'undercounts by whatever part of a month they stayed after paying '
+        'for the last time. The first bar is people whose joining month and '
+        'last charge month are the same: they paid once. That is what taking '
+        "a tier's content and leaving looks like from here, though it is "
+        'not proof of why.</p>'
+        "</section>")
+
+
 def _stamp_views(html: str) -> str:
     """Tag each card with the screen it belongs to, from its own id.
 
@@ -6881,6 +6950,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 </div>
 {_stamp_views(_business_screen(d) + _links_card() + _sync_card(d) + _wingman_card(d))}
 {_sales_card(d)}
+{_retention_card(d)}
 {_people_card(d)}
 <div class="grid3">
 {_stamp_views(_videos_card(d) + _sources_card(instrumentation, d) + _health_card(d))}
