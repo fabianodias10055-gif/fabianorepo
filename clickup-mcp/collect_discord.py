@@ -71,6 +71,11 @@ DEFAULT_CHANNELS = ",".join((
     # while the bot is restarting is never delivered to it, and this poll is
     # what finds it afterwards.
     "1158395982485147689",   # welcome
+    # The one channel the bot answers in and this collector did not read.
+    # With the bot's live AI reply off, a question typed here would have
+    # reached nobody: not answered, not collected, and the escalation only
+    # reaches the alert channel, not the panel's queue.
+    "1499029543078465696",   # backup
 ))
 
 MIN_QUESTION_LEN = 25

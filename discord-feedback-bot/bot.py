@@ -92,6 +92,16 @@ SPAM_MSG_COUNT = int(os.getenv("SPAM_MSG_COUNT", "6"))           # any msgs with
 SPAM_MSG_CHANNELS = int(os.getenv("SPAM_MSG_CHANNELS", "3"))     # across this many channels
 SPAM_MSG_WINDOW = int(os.getenv("SPAM_MSG_WINDOW", "10"))        # seconds
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+# The live conversational reply runs on the metered Anthropic API. The panel
+# on the owner's machine drafts the same answers through the Claude Code CLI
+# instead, against the whole vault rather than the slice that fits in a
+# prompt, and nothing reaches a member without being read first. Set
+# AI_LIVE_REPLY=1 to hand the live path back to the API.
+#
+# Turning it off must never make a question vanish: the escalation timer is
+# what carries it to staff, and it is scheduled on every path below, which
+# it was not before.
+AI_LIVE_REPLY = os.getenv("AI_LIVE_REPLY", "0") == "1"
 PUSHOVER_USER_KEY = os.getenv("PUSHOVER_USER_KEY", "")
 PUSHOVER_API_TOKEN = os.getenv("PUSHOVER_API_TOKEN", "")
 # The channels the bot watches without being called. Overridable so a channel
@@ -4349,6 +4359,16 @@ class FeedbackBot(discord.Client):
                     is_reply_to_bot = True
             except Exception:
                 pass
+        # A mention or a reply to the bot used to jump straight to the AI
+        # path, so it was the one route with no escalation behind it. That
+        # was survivable while the AI always answered; with the live path
+        # off it would drop the question in silence, in any channel,
+        # including the five the panel's collector does not read.
+        if is_mention or is_reply_to_bot:
+            _mtext = message.content.strip()
+            if len(_mtext) >= 10 and _looks_like_question(_mtext):
+                self._schedule_unanswered_check(message)
+
         if not is_mention and not is_reply_to_bot:
             # Proactively answer questions in support channels OR project forum threads
             in_kb_channel = message.channel.id in KB_CHANNEL_IDS
@@ -4377,6 +4397,11 @@ class FeedbackBot(discord.Client):
             # stays scheduled either way: it counts any later message as an
             # answer, so a good AI reply silences it and a failed one still
             # reaches staff.
+        # Off by default: the answer is drafted in the panel through the CLI
+        # and posted from there after being read. The escalation scheduled
+        # above is what tells you this one is waiting.
+        if not AI_LIVE_REPLY:
+            return
         if not ANTHROPIC_API_KEY:
             return
         if message.id in self._processed_messages:
