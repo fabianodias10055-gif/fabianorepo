@@ -543,6 +543,62 @@ def find_answer(msg: dict, messages: list[dict], staff: set[str]) -> dict | None
     return None
 
 
+def _sent_at(msg: dict):
+    """Discord's ISO timestamp, or None when it is missing or malformed."""
+    try:
+        return datetime.fromisoformat(msg.get("timestamp") or "")
+    except (TypeError, ValueError):
+        return None
+
+
+def preceding_context(msg: dict, messages: list[dict], limit: int = 4,
+                      window_secs: int = 7200) -> str:
+    """The lines just before this one that the asker was part of.
+
+    A question in a chat channel is usually the tail of a conversation, and
+    the tail is what gets collected. "I cant change the direction but its
+    good it walks" cannot be answered on its own; the ragdoll and the
+    control rig it is about are named three messages earlier, and without
+    them a draft has to guess.
+
+    Only the asker's own earlier lines and the one message they replied to
+    are taken. #general-chat usually has two conversations running at once,
+    and pulling every neighbouring message would file somebody else's
+    subject alongside this one.
+    """
+    who = str((msg.get("author") or {}).get("id", ""))
+    ref = str((msg.get("message_reference") or {}).get("message_id") or "")
+    try:
+        mid = int(msg["id"])
+    except (KeyError, TypeError, ValueError):
+        return ""
+    when = _sent_at(msg)
+
+    picked: list[tuple[int, str, str]] = []
+    for other in messages:
+        try:
+            oid = int(other["id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if oid >= mid:
+            continue
+        author = other.get("author") or {}
+        if str(author.get("id", "")) != who and str(other.get("id", "")) != ref:
+            continue
+        then = _sent_at(other)
+        if when and then and (when - then).total_seconds() > window_secs:
+            continue
+        body = resolve_mentions(" ".join((other.get("content") or "").split()), other)
+        if body:
+            picked.append((oid, author_handle(author), body[:300]))
+
+    picked.sort()
+    # A middle dot, built rather than typed: this file is ASCII and the
+    # separator only has to be legible to a reader and to the model.
+    sep = " " + chr(183) + " "
+    return sep.join(f"{h}: {b}" for _oid, h, b in picked[-limit:])
+
+
 def existing_sources(path: Path) -> set[str]:
     if not path.is_file():
         return set()
@@ -565,6 +621,9 @@ def write_inbox(rows: list[dict], dry: bool) -> int:
     blocks = []
     for r in fresh:
         reply_line = f"reply: {r['reply']}\n" if r.get("reply") else ""
+        # One line, because the header is a contiguous run of key: value and
+        # the parser stops at the first blank line.
+        ctx_line = f"context: {r['context']}\n" if r.get("context") else ""
         blocks.append(
             f"\n### {r['date']} {r['author']}\n"
             f"channel: discord\n"
@@ -574,6 +633,7 @@ def write_inbox(rows: list[dict], dry: bool) -> int:
             f"source: {r['source']}\n"
             f"thread: {r['thread'] or ('#' + r['channel_name'])}\n"
             f"url: {r['url']}\n"
+            f"{ctx_line}"
             f"{reply_line}\n"
             f"{r['text'][:1200]}\n"
         )
@@ -722,6 +782,7 @@ def main() -> int:
                     continue
                 text = joined
             answer = find_answer(m, messages, staff)
+            context = preceding_context(m, messages)
             reply = (resolve_mentions(" ".join((answer.get("content") or "").split()),
                                       answer)[:900] if answer else "")
             parts = split_questions(text) if args.split else [text]
@@ -742,6 +803,7 @@ def main() -> int:
                     "text": part,
                     "status": part_status,
                     "reply": reply,
+                    "context": context,
                     "source": f"dc:{m['id']}{suffix}",
                     "channel_name": name,
                     # A forum question belongs to its post, not to the forum,
