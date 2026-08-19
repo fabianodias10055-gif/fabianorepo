@@ -363,6 +363,22 @@ PROBLEM_MARKERS = (
     # is "<thing> is not <verb>ing", which no single phrase above catches.
 )
 NEGATED_VERB = re.compile(r"\b(is|are|was|were|does|do|did|will|wont|won.t)\s+not\s+\w+")
+# Every phrase above describes the thing that is broken. None of them
+# describe the person, and someone who has already been helped once often
+# reports the second failure entirely in the first person: "I put it on the
+# handgun slot and the pickup plays now, but aim and reload are still doing
+# the same thing so now I'm stumped". That message has no question mark, no
+# leading question word and no marker, so it was dropped and the customer
+# was left waiting. Over the whole logged history this pattern admits
+# eleven messages, so it is a narrow door, not a second front gate.
+STUCK_REPORT = re.compile(
+    r"\bi(?:.?m|\s+am)\s+(?:\w+\s+){0,2}"
+    r"(?:stumped|stuck|lost|clueless|confused|struggling|at a loss)\b"
+    # The fix was tried and it did not take.
+    r"|\bstill\s+(?:doing the same|the same|not working|no luck|nothing)\b"
+    # A question asked as a statement, which is how most follow-ups arrive.
+    r"|\bi\s+(?:still\s+)?(?:dont|don.t|can.t|cant|cannot)\s+"
+    r"(?:know|figure|understand|get)\s+(?:out\s+)?(?:why|how|what|where)\b")
 # A message that is only praise or thanks is not a request, even when it
 # happens to contain a marker word.
 CLOSERS = ("thank", "thanks", "tks", "obrigad", "worked", "solved", "fixed it",
@@ -400,7 +416,8 @@ def looks_like_question(text: str) -> bool:
     if len(t) < 160 and "?" not in t and any(c in t for c in CLOSERS):
         return False
     has_marker = (any(m in t for m in PROBLEM_MARKERS)
-                  or bool(NEGATED_VERB.search(t)))
+                  or bool(NEGATED_VERB.search(t))
+                  or bool(STUCK_REPORT.search(t)))
     if has_marker:
         return True
     if "?" in t:
