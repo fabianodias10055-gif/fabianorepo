@@ -668,6 +668,9 @@ def main() -> int:
 
         messages: list[dict] = []
         thread_of: dict[str, str] = {}
+        # A forum post's opening message carries the same id as the thread,
+        # which is how the title is matched back to it below.
+        opens: dict[str, str] = {}
         failed = False
         for sid, label in sources:
             try:
@@ -690,6 +693,8 @@ def main() -> int:
                 continue
             for m in got:
                 thread_of[m["id"]] = label
+                if is_forum and m["id"] == sid and label:
+                    opens[m["id"]] = label
             messages.extend(got)
         if failed:
             continue
@@ -705,7 +710,17 @@ def main() -> int:
                 continue          # a staff message is an answer, not a question
             text = resolve_mentions(" ".join((m.get("content") or "").split()), m)
             if not looks_like_question(text):
-                continue
+                # In a forum the title is where the problem goes and the
+                # first message is often only a video: "Ledge System doesn't
+                # work on 5.7" sat unread for six months because nothing in
+                # this loop could see the title. Read it only when the body
+                # alone fails, so no question already being collected has
+                # its text changed.
+                title = opens.get(m["id"], "")
+                joined = f"{title}. {text}".strip() if title else ""
+                if not joined or not looks_like_question(joined):
+                    continue
+                text = joined
             answer = find_answer(m, messages, staff)
             reply = (resolve_mentions(" ".join((answer.get("content") or "").split()),
                                       answer)[:900] if answer else "")

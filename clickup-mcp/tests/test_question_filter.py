@@ -81,3 +81,15 @@ def test_stuck_report_stays_a_narrow_door():
     )
     admitted = [t for t in noise if c.looks_like_question(t)]
     assert not admitted, admitted
+
+
+def test_a_forum_title_is_the_question():
+    """#support-hub, 2026-02-03, opened with a video and no words.
+
+    The collector falls back to the post title when the body alone fails,
+    so these two assertions are the contract that fallback depends on.
+    """
+    body = ""
+    title = "Ledge System doesn't work on 5.7"
+    assert not c.looks_like_question(body)
+    assert c.looks_like_question(title + ". " + body)
