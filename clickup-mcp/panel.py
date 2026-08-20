@@ -3156,7 +3156,14 @@ def _bulk_draft_body() -> None:
 
         job = start_ai_job(question, "draft")
         waited = 0.0
-        while waited < 180:
+        # Derived from the job's own timeout, never a number of its own.
+        # Hardcoded at 180 this gave up two minutes before the CLI did, so a
+        # draft that took four minutes was marked failed while the process
+        # that was writing it ran on to a perfectly good answer. The grace
+        # is so the job reports its own error rather than this loop
+        # inventing one on top of it.
+        patience = AI_TIMEOUT + 20
+        while waited < patience:
             time.sleep(1.0)
             waited += 1.0
             if _bulk["stop"]:
@@ -3170,7 +3177,8 @@ def _bulk_draft_body() -> None:
                 _mark(idx, "failed", st.get("error") or "the model call failed")
                 break
         else:
-            _mark(idx, "failed", "the model took longer than three minutes")
+            _mark(idx, "failed",
+                  f"no answer after {int(patience // 60)} minutes")
 
     _finish("ready", "")
 
