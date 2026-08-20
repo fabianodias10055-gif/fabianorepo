@@ -361,8 +361,14 @@ NAME_BY_SLUG = {slug: name for slug, name, _c in CATALOG}
 
 ANSWERED_LOG_NAME = "02 - Answered.md"
 
+# Every field a collector can write. A name missing from here does not
+# merely go unread: _FIELD_LINE stops matching the line, so it falls
+# through into the prose below and becomes part of the question text.
+# "context" was added to the case-preserving list and forgotten here, and
+# four questions were displayed and drafted as "context: @someone: ...".
 QUESTION_FIELDS = ("channel", "system", "status", "subscriber", "source",
-                   "video_id", "video_url", "video", "reply", "url", "thread")
+                   "video_id", "video_url", "video", "reply", "url", "thread",
+                   "context")
 _FIELD_LINE = re.compile(r"^(" + "|".join(QUESTION_FIELDS) + r"):\s*(.*)$")
 
 
@@ -3232,6 +3238,12 @@ def bulk_send_one(qid: str, text: str) -> dict:
                     "error": "this list is from an older run; refreshing"}
         if item["state"] in ("sent", "sending"):
             return {"ok": False, "error": "already going out"}
+        # A polish in flight is about to replace this text. Sending now
+        # posts the unpolished version publicly, under your name, and the
+        # rewrite you asked for lands a few seconds later with nowhere to go.
+        if item["state"] == "polishing":
+            return {"ok": False,
+                    "error": "still polishing this one; it will be ready shortly"}
         if _bulk["phase"] == "sending" and item["state"] == "queued":
             return {"ok": False, "error": "the run is about to send this one"}
         item["state"] = "sending"
@@ -3285,7 +3297,12 @@ def bulk_polish(qid: str, text: str, instruction: str) -> dict:
                 return
             job = start_ai_job(question, "polish", text + chr(31) + instruction)
             waited = 0.0
-            while waited < 240:
+            # Same rule as the drafting loop: derived from the job's own
+            # timeout, never a number of its own. At a hardcoded 240 this
+            # threw away every polish that landed in the last minute the
+            # CLI was still allowed to use.
+            patience = AI_TIMEOUT + 20
+            while waited < patience:
                 time.sleep(1.0)
                 waited += 1.0
                 st = ai_job_status(job)
@@ -3300,7 +3317,8 @@ def bulk_polish(qid: str, text: str, instruction: str) -> dict:
                     _mark_id(qid, "drafted",
                              st.get("error") or "the model call failed")
                     return
-            _mark_id(qid, "drafted", "took longer than four minutes")
+            _mark_id(qid, "drafted",
+                     f"no answer after {int(patience // 60)} minutes")
         except Exception as exc:                   # noqa: BLE001
             _mark_id(qid, "drafted", f"{type(exc).__name__}: {exc}"[:120])
 

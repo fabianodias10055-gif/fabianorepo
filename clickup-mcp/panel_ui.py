@@ -4643,10 +4643,24 @@ function bulkMoney(c) {
   return h;
 }
 
+/* Two different questions that were being asked with one expression.
+   bulkRunning is about the run: whether starting another would collide.
+   bulkBusy is about anything still in flight, a single row's polish
+   included. A polish leaves phase at "ready" and moves only the row, so a
+   poll that watched the phase alone cleared itself on its first tick and
+   the polished text arrived on the server with nothing left to draw it. */
+function bulkRunning(st) {
+  return st.phase === "drafting" || st.phase === "sending";
+}
+function bulkBusy(st) {
+  if (bulkRunning(st)) return true;
+  return (st.items || []).some(function (i) { return i.state === "polishing"; });
+}
+
 function bulkRender(st) {
   var box = $("#bulkbody");
   if (!box) return;
-  var busy = st.phase === "drafting" || st.phase === "sending";
+  var busy = bulkRunning(st);
   $("#bulkrun").disabled = busy;
   $("#bulksys").disabled = busy;
 
@@ -4689,7 +4703,7 @@ function bulkRender(st) {
          + '">' + fmt(st.failed) + "</span></div>" : "")
     + "</div>";
 
-  if (st.phase === "drafting" || st.phase === "sending") {
+  if (bulkRunning(st)) {
     var pct = n ? Math.round(st.done * 100 / n) : 0;
     h += '<div class="bulkbar" role="progressbar" aria-valuenow="' + pct
       + '" aria-valuemin="0" aria-valuemax="100"><i style="width:' + pct
@@ -4722,7 +4736,7 @@ function bulkRender(st) {
       + '<span class="note">spaced takes about ' + bulkSpan(avg) + "</span>"
       + '<span class="note bigmsg" id="bulksendmsg"></span></div>';
   }
-  if (st.phase === "drafting" || st.phase === "sending")
+  if (bulkRunning(st))
     h += '<div class="figbar"><button class="btn tiny" id="bulkstop">Stop</button></div>';
 
   h += '<div class="bulklist">';
@@ -4781,7 +4795,7 @@ function bulkTick() {
   bulkPost({ action: "status" }).then(function (st) {
     if (!st.ok) return;
     bulkRender(st);
-    var busy = st.phase === "drafting" || st.phase === "sending";
+    var busy = bulkBusy(st);
     /* A run started before this tab existed has to be picked up here.
        Without this the one read at load drew a frozen snapshot: the tab
        showed "drafted 1 of 2" for as long as it stayed open, because only
