@@ -3043,6 +3043,20 @@ def _bulk_load() -> None:
         for item in kept["items"]:
             if item.get("state") == "queued":
                 item["state"] = "drafted" if item.get("draft") else "waiting"
+    # Rows drafted before this run carried a score have one in the cache
+    # already: the model returned it, _normalize kept it and save_ai_result
+    # wrote it next to the text. Reading it back here is free and means the
+    # bars appear on a run that is already open rather than only on the
+    # next one.
+    for item in kept["items"]:
+        if item.get("conf") or not item.get("draft"):
+            continue
+        question = find_question_by_id(item.get("id", ""))
+        if not question:
+            continue
+        hit = cached_ai_result(question, "draft") or {}
+        if hit.get("confidence"):
+            item["conf"] = int(hit["confidence"])
     kept["stop"] = False
     _bulk.update(kept)
 
@@ -3105,6 +3119,10 @@ def bulk_draft(system: str) -> dict:
                       "asked": " ".join((q.get("text") or "").split())[:400],
                       "channel": q.get("channel", ""),
                       "draft": draft,
+                      # The cache keeps the score alongside the text, so a
+                      # row filled from it opens with the same bar a fresh
+                      # one earns rather than an empty one.
+                      "conf": int(hit.get("confidence") or 0) if draft else 0,
                       "state": "drafted" if draft else "waiting",
                       "msg": "written earlier, no new cost" if draft else ""})
 
@@ -3177,7 +3195,8 @@ def _bulk_draft_body() -> None:
                 return
             st = ai_job_status(job)
             if st.get("state") == "done":
-                _mark(idx, "drafted", "", (st.get("answer") or "").strip())
+                _mark(idx, "drafted", "", (st.get("answer") or "").strip(),
+                      st.get("confidence"))
                 break
             if st.get("state") in ("error", "unknown"):
                 _mark(idx, "failed", st.get("error") or "the model call failed")
@@ -3309,7 +3328,8 @@ def bulk_polish(qid: str, text: str, instruction: str) -> dict:
                 if st.get("state") == "done":
                     new = (st.get("answer") or "").strip()
                     if new:
-                        _mark_id(qid, "drafted", "polished", new)
+                        _mark_id(qid, "drafted", "polished", new,
+                                 st.get("confidence"))
                     else:
                         _mark_id(qid, "drafted", "came back empty; kept yours")
                     return
@@ -3374,16 +3394,18 @@ def _bulk_send_body(mode: str, gap: str = "wide") -> None:
     build(live=True)
 
 
-def _mark_id(qid: str, state: str, msg: str = "", draft: str = "") -> None:
+def _mark_id(qid: str, state: str, msg: str = "", draft: str = "",
+             conf: int | None = None) -> None:
     """Same as _mark but finds the row by question id."""
     with _bulk_lock:
         idx = next((i for i, it in enumerate(_bulk["items"])
                     if it["id"] == qid), -1)
     if idx >= 0:
-        _mark(idx, state, msg, draft)
+        _mark(idx, state, msg, draft, conf)
 
 
-def _mark(idx: int, state: str, msg: str = "", draft: str = "") -> None:
+def _mark(idx: int, state: str, msg: str = "", draft: str = "",
+          conf: int | None = None) -> None:
     with _bulk_lock:
         if idx >= len(_bulk["items"]):
             return                # the list was replaced while this ran
@@ -3392,6 +3414,11 @@ def _mark(idx: int, state: str, msg: str = "", draft: str = "") -> None:
         item["msg"] = msg
         if draft:
             item["draft"] = draft
+        # How well the vault backed this specific answer, as the model
+        # scored it. Written only when a run produced one, so marking a
+        # row failed or stopped does not erase the number it earned.
+        if conf is not None:
+            item["conf"] = int(conf)
         _bulk["done"] = sum(1 for i in _bulk["items"]
                             if i["state"] not in ("waiting", "queued"))
     _bulk_save()

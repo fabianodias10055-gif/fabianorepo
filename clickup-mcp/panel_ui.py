@@ -4657,6 +4657,20 @@ function bulkBusy(st) {
   return (st.items || []).some(function (i) { return i.state === "polishing"; });
 }
 
+/* How well the vault backed this particular answer, as the model scored
+   it. Same component and same 60/30 thresholds as the single-question
+   view: a row that reads 24% here should read 24% there, and look it. */
+function bulkConf(it) {
+  if (it.state !== "drafted" && it.state !== "sent") return "";
+  var c = typeof it.conf === "number" ? it.conf : 0;
+  if (!c) return "";
+  var cls = c >= 60 ? "ok" : c >= 30 ? "warn" : "crit";
+  return '<span class="conf conf-' + cls + '" title="How well the vault '
+    + 'supports this answer. Under 30% usually means it is guessing.">'
+    + '<span class="confbar"><i style="width:' + c + '%"></i></span>'
+    + c + "%</span>";
+}
+
 function bulkRender(st) {
   var box = $("#bulkbody");
   if (!box) return;
@@ -4747,7 +4761,8 @@ function bulkRender(st) {
       + '<span class="bulkst bs-' + esc(it.state) + '">'
       + (it.state === "queued" && st.phase === "sending" ? "waiting its turn"
          : esc(it.state))
-      + (it.msg ? " · " + esc(it.msg) : "") + "</span></div>"
+      + (it.msg ? " · " + esc(it.msg) : "") + "</span>"
+      + bulkConf(it) + "</div>"
       + '<p class="bulkq">' + esc(it.asked) + "</p>"
       + (it.draft || it.state === "drafted"
          ? '<textarea class="bulkdraft" ' + (st.phase === "sending" ? "readonly" : "")
