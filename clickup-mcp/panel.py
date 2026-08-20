@@ -2023,6 +2023,17 @@ Rules:
     one.
 - If the vault does not answer it, say that plainly in `missing` and give the
   best partial answer you can; do not fill the gap with plausible guesses.
+- When the question itself is too vague to answer well, ask them for the one
+  thing that would unlock it instead of answering two or three possible
+  readings of it. Name what you need, say in half a sentence why it changes
+  the answer, and stop there: "Happy to look at that! Which system is it,
+  the ledge one or the weapon one? The fix is in a different place for
+  each." Keep it to a couple of lines, in the same voice as any other
+  reply. Three speculative answers stacked up read as noise and cost them a
+  round trip anyway, so one good question is the shorter path for both of
+  you. Set `confidence` low when the reply is a question rather than an
+  answer, because the vault did not answer anything: that low score is how
+  the queue shows this row is waiting on a person and not on the model.
 - The question may be about a different system than the one tagged. Search
   broadly before concluding.
 {_voice()}
@@ -2208,8 +2219,33 @@ def _run_ai(job_id: str, question: dict, mode: str = "draft",
         return finish(state="error", error=f"CLI returned no JSON: {detail}")
 
     if env.get("is_error"):
-        errs = env.get("errors") or [env.get("subtype", "unknown error")]
-        return finish(state="error", error="; ".join(str(e) for e in errs)[:300],
+        # This CLI has no "errors" key, and its "subtype" reads "success"
+        # on a healthy call, so the old fallback reported thirty-eight
+        # failures whose stated reason was the word success. What actually
+        # carries the reason is these, and they say different kinds of
+        # thing: an HTTP status is the API refusing, a terminal reason is
+        # the run being cut short, a denial is a tool it was not allowed.
+        bits = []
+        if env.get("api_error_status"):
+            bits.append(f"API returned {env['api_error_status']}")
+        for key in ("terminal_reason", "stop_reason"):
+            val = env.get(key)
+            if val and str(val) not in ("end_turn", "success"):
+                bits.append(f"{key.replace('_', ' ')}: {val}")
+        denied = env.get("permission_denials") or []
+        if denied:
+            bits.append(f"{len(denied)} tool permission denials")
+        bits.extend(str(e) for e in (env.get("errors") or []))
+        sub = env.get("subtype")
+        if not bits and sub and str(sub) != "success":
+            bits.append(str(sub))
+        if not bits:
+            # Better to say the truth than to invent a cause: everything
+            # above was empty, so the envelope itself is the evidence.
+            keys = ", ".join(sorted(k for k in env if k != "usage"))[:160]
+            bits.append("the CLI flagged an error but named no reason; "
+                        f"envelope had: {keys}")
+        return finish(state="error", error="; ".join(bits)[:300],
                       cost=env.get("total_cost_usd"))
 
     raw = env.get("result", "")

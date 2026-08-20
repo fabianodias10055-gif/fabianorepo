@@ -4657,6 +4657,14 @@ function bulkBusy(st) {
   return (st.items || []).some(function (i) { return i.state === "polishing"; });
 }
 
+/* Counted off the rows rather than off st.done, which counts anything no
+   longer waiting, a failure included. */
+function bulkCount(st, state) {
+  return (st.items || []).filter(function (i) { return i.state === state; }).length;
+}
+function bulkDrafted(st) { return bulkCount(st, "drafted") + bulkCount(st, "sent"); }
+function bulkFailed(st) { return bulkCount(st, "failed"); }
+
 /* How well the vault backed this particular answer, as the model scored
    it. Same component and same 60/30 thresholds as the single-question
    view: a row that reads 24% here should read 24% there, and look it. */
@@ -4710,11 +4718,17 @@ function bulkRender(st) {
   h += '<div class="figstat" style="border-top:0;padding-top:0">'
     + '<div><span class="k">system</span><span class="v">' + esc(st.system_name) + "</span></div>"
     + '<div><span class="k">questions</span><span class="v">' + fmt(n) + "</span></div>"
-    + '<div><span class="k">drafted</span><span class="v">' + fmt(st.done) + "</span></div>"
+    + '<div><span class="k">drafted</span><span class="v">' + fmt(bulkDrafted(st))
+    + "</span></div>"
+    /* Failures were only shown once sending began, and st.done counts them
+       as progress, so a run could read "drafted 88 of 103" with 38 of those
+       88 broken and nothing on the card saying so. */
+    + (bulkFailed(st)
+       ? '<div><span class="k">failed</span><span class="v warn">'
+         + fmt(bulkFailed(st)) + "</span></div>" : "")
     + (st.phase === "sending" || st.phase === "done"
        ? '<div><span class="k">sent</span><span class="v">' + fmt(st.sent) + "</span></div>"
-         + '<div><span class="k">failed</span><span class="v' + (st.failed ? " warn" : "")
-         + '">' + fmt(st.failed) + "</span></div>" : "")
+       : "")
     + "</div>";
 
   if (bulkRunning(st)) {
