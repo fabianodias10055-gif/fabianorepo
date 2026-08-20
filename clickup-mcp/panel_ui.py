@@ -16,6 +16,7 @@ literals through a thousand lines of CSS.
 """
 
 import re
+from datetime import date
 from html import escape
 
 PAGE = 25  # rows per page; the pager offers 25 / 50 / 100
@@ -1908,6 +1909,9 @@ var state = {
   sys: params.get("sys") || "all",
   df: params.get("df") || "all",
   q: params.get("q") || "",
+  /* A backfill drops years of archaeology in beside this week's work.
+     Both belong in the queue; only one of them is worth a morning. */
+  age: params.get("age") || "all",
   sort: params.get("sort") || "triage",
   dir: params.get("dir") || "desc"
 };
@@ -1919,6 +1923,7 @@ function syncUrl() {
   if (state.st !== "open") p.set("st", state.st);
   if (state.sys !== "all") p.set("sys", state.sys);
   if (state.df !== "all") p.set("df", state.df);
+  if (state.age !== "all") p.set("age", state.age);
   if (state.q) p.set("q", state.q);
   if (state.sort !== "triage" || state.dir !== "desc") { p.set("sort", state.sort); p.set("dir", state.dir); }
   var qs = p.toString();
@@ -2016,8 +2021,28 @@ function syncSortChips() {
 var visRows = [];      /* the rows on the current page */
 var matchRows = [];    /* everything matching the filters, across pages */
 function isOpen(r) { return r.dataset.st === "no-source" || r.dataset.st === "escalated"; }
+/* How old a question is, in days, from the date it was asked. Read off
+   QDATA rather than a data attribute for the same reason the search text
+   is: three thousand extra attributes cost a reflow and buy nothing. */
+var AGE_WINDOW = { "30d": 30, "90d": 90, "12m": 365 };
+function ageOk(r) {
+  if (state.age === "all") return true;
+  var q = QDATA[r.dataset.id];
+  if (!q || !q.date) return false;
+  /* Whole days, floored, because the chip's count is calendar arithmetic
+     done in Python. Left fractional, a question asked exactly 30 days ago
+     reads as 30.6 here and falls outside a chip that counted it, so the
+     number on the chip and the number of rows disagreed by four. */
+  var days = Math.floor((Date.now() - Date.parse(q.date + "T00:00:00")) / 86400000);
+  /* "older" is the other half of the cut, so nothing becomes unreachable
+     by narrowing: the archaeology is a click away rather than buried. */
+  if (state.age === "old") return days > 365;
+  return days <= AGE_WINDOW[state.age];
+}
+
 function match(r) {
   if (state.ch !== "all" && r.dataset.ch !== state.ch) return false;
+  if (!ageOk(r)) return false;
   if (state.st === "open") { if (!isOpen(r)) return false; }
   else if (state.st !== "all" && r.dataset.st !== state.st) return false;
   if (state.sys !== "all" && r.dataset.sys !== state.sys) return false;
@@ -2316,6 +2341,7 @@ function clearFilters() {
   setGroup("st", "open");   /* back to the working queue, not the archive */
   setSort("triage");
   setGroup("df", "all");
+  setGroup("age", "all");
   state.sys = "all";
   $("#sysSel").value = "all";
   state.q = "";
@@ -5930,6 +5956,16 @@ def _overview_cards(d: dict) -> str:
     )
 
 
+def _age_days(iso: str, today: date) -> int:
+    """Days since a question was asked. A missing or malformed date reads
+    as ancient rather than as today, so it never sneaks into a recent cut."""
+    try:
+        y, m, d = (int(x) for x in iso[:10].split("-"))
+        return (today - date(y, m, d)).days
+    except (ValueError, TypeError):
+        return 10 ** 6
+
+
 def _filters(questions: list) -> str:
     ch_counts: dict[str, int] = {}
     st_counts: dict[str, int] = {}
@@ -5989,6 +6025,31 @@ def _filters(questions: list) -> str:
             continue
         parts.append(f'<span class="fchip" data-k="df" data-v="{df}" aria-pressed="false">'
                      f'{df} <span class="fc-n">{_fmt(cnt)}</span></span>')
+    # The counts are of open questions, not of everything in the window:
+    # the reason to cut by date is to see how much of the queue is this
+    # month's work rather than a backfill's archaeology.
+    parts.append('<span class="fsep"></span>')
+    parts.append('<span class="fchip on" data-k="age" data-v="all" aria-pressed="true" '
+                 'title="Every question, however old">Any time</span>')
+    today = date.today()
+    for key, days, label in (("30d", 30, "30 days"), ("90d", 90, "90 days"),
+                             ("12m", 365, "12 months")):
+        cnt = sum(1 for q in questions
+                  if q["status"] in ("no-source", "escalated")
+                  and 0 <= _age_days(q.get("date", ""), today) <= days)
+        if not cnt:
+            continue
+        parts.append(f'<span class="fchip" data-k="age" data-v="{key}" aria-pressed="false" '
+                     f'title="Asked in the last {label}, still open">'
+                     f'{label} <span class="fc-n">{_fmt(cnt)}</span></span>')
+    older = sum(1 for q in questions
+                if q["status"] in ("no-source", "escalated")
+                and _age_days(q.get("date", ""), today) > 365)
+    if older:
+        parts.append('<span class="fchip" data-k="age" data-v="old" aria-pressed="false" '
+                     'title="Open for more than a year. Mostly people who have '
+                     'long since moved on, kept reachable rather than hidden">'
+                     f'over a year <span class="fc-n">{_fmt(older)}</span></span>')
     parts.append('<span class="fsep"></span>')
     parts.append('<select id="sysSel" class="fchip" aria-label="Filter by system">'
                  '<option value="all">All systems</option>'
