@@ -5936,7 +5936,8 @@ def _filters(questions: list) -> str:
     for q in questions:
         ch_counts[q["channel"]] = ch_counts.get(q["channel"], 0) + 1
         st_counts[q["status"]] = st_counts.get(q["status"], 0) + 1
-    statuses = [s for s in ("no-source", "escalated", "answered", "out-of-scope", "unknown")
+    statuses = [s for s in ("no-source", "escalated", "answered", "praise",
+                            "out-of-scope", "unknown")
                 if s in st_counts]
 
     sys_counts: dict[str, int] = {}

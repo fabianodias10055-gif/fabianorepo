@@ -351,6 +351,9 @@ STATUS_CLASS = {
     "escalated": "info",
     "no-source": "crit",
     "out-of-scope": "mute",
+    # Not work, and deliberately not counted as open: the bell is for
+    # people waiting. It is here so what landed well is readable somewhere.
+    "praise": "ok",
 }
 
 NAME_BY_SLUG = {slug: name for slug, name, _c in CATALOG}

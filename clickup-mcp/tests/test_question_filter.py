@@ -93,3 +93,50 @@ def test_a_forum_title_is_the_question():
     title = "Ledge System doesn't work on 5.7"
     assert not c.looks_like_question(body)
     assert c.looks_like_question(title + ". " + body)
+
+
+# ---- one filter, two platforms ----
+import question_filter as qf
+
+
+def test_a_youtube_question_is_shorter_than_a_chat_one():
+    """Comments are terser. The 25 floor killed 33 real ones like these."""
+    for text in ("will this work in alsv4?", "Wow is this replicated?",
+                 "Is this tut ue5.3?", "where are the anims from"):
+        assert qf.classify(text, qf.MIN_COMMENT) == qf.QUESTION, text
+        # And the same text is correctly too thin to be a chat message.
+        assert qf.classify(text, qf.MIN_CHAT) != qf.QUESTION, text
+
+
+def test_the_youtube_filter_used_to_miss_these():
+    """No question mark, no leading question word, still a support request."""
+    for text in ("Press F logic doesn't work for me in 5.4",
+                 "my problem is that when I drop a physic item it goes through the floor",
+                 "starting at 10:05, did not mentioned or show how it was been fixed"):
+        assert qf.classify(text, qf.MIN_COMMENT) == qf.QUESTION, text
+
+
+def test_praise_comes_back_labelled_instead_of_discarded():
+    for text in ("Thank you so much bro keep up the great work",
+                 "Best tutorial, thank you", "You are a legend, thank you so much!"):
+        assert qf.classify(text, qf.MIN_COMMENT) == qf.PRAISE, text
+
+
+def test_a_complaint_wearing_a_compliment_is_still_a_question():
+    """The guard is for messages that are ONLY praise, so it runs last."""
+    text = ("Is it really not possible to do this with the hands attaching to "
+            "the box, the whole sliding makes it look so bad. Awesome tutorial tho")
+    assert qf.classify(text, qf.MIN_COMMENT) == qf.QUESTION
+
+
+def test_a_bare_youtube_link_is_not_a_question():
+    """Its own query string used to pass the question-mark test."""
+    assert qf.classify("Tutorial: https://www.youtube.com/watch?v=fJHAtQmrj4U",
+                       qf.MIN_COMMENT) == ""
+
+
+def test_the_two_collectors_share_one_implementation():
+    """They drifted once. This fails if a second copy appears."""
+    import collect_discord, collect_youtube
+    assert collect_discord._classify is qf.classify
+    assert collect_youtube.qf.classify is qf.classify

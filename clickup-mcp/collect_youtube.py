@@ -29,6 +29,8 @@ from datetime import datetime
 from pathlib import Path
 from urllib import error, parse, request
 
+import question_filter as qf
+
 try:
     from dotenv import load_dotenv
 except ImportError:  # dotenv is optional here
@@ -173,13 +175,20 @@ def fetch_comments(video_id: str, max_pages: int = 10) -> list[dict]:
     return out
 
 
+def classify(text: str) -> str:
+    """QUESTION, PRAISE or "" for one comment.
+
+    This used to be five lines of its own: a question mark, or a leading
+    question word. Measured against the 2,009 archived comments it dropped
+    222 real requests that the Discord rules catch, "Press F logic doesn't
+    work for me in 5.4" among them, so both channels now read from
+    question_filter and only the length floor differs.
+    """
+    return qf.classify(text, qf.MIN_COMMENT)
+
+
 def looks_like_question(text: str) -> bool:
-    t = text.strip().lower()
-    if len(t) < MIN_QUESTION_LEN:
-        return False
-    if "?" in t:
-        return True
-    return any(t.startswith(w + " ") for w in QUESTION_WORDS)
+    return classify(text) == qf.QUESTION
 
 
 def _norm_author(name: str) -> str:
@@ -559,7 +568,8 @@ def write_inbox(rows: list[dict], dry: bool) -> int:
         # A deep link straight to the comment (lc=) so opening it lands on the
         # exact thread instead of the top of the video.
         watch_url = f"https://www.youtube.com/watch?v={r['video_id']}&lc={r['id']}"
-        status = "answered" if r.get("answered") else "no-source"
+        status = ("praise" if r.get("praise")
+                  else "answered" if r.get("answered") else "no-source")
         reply_line = ""
         if r.get("reply"):
             reply_line = f"reply: {' '.join(r['reply'].split())[:800]}\n"
@@ -645,7 +655,7 @@ def main() -> int:
 
     created = updated = skipped = 0
     inbox_rows: list[dict] = []
-    total_comments = total_unanswered = total_answered = 0
+    total_comments = total_unanswered = total_answered = total_praise = 0
 
     for v in videos:
         folder = known.get(v["id"])
@@ -674,6 +684,15 @@ def main() -> int:
                 total_unanswered += 1
                 inbox_rows.append({
                     **c, "system": system,
+                    "video_id": v["id"], "video_folder": folder.name,
+                })
+            elif (_norm_author(c["author"]) != _norm_author(channel_name)
+                  and classify(c["text"]) == qf.PRAISE):
+                # Not work and never counted as open. Kept because it is the
+                # only record of which video actually landed.
+                total_praise += 1
+                inbox_rows.append({
+                    **c, "system": system, "praise": True,
                     "video_id": v["id"], "video_folder": folder.name,
                 })
             elif (_norm_author(c["author"]) != _norm_author(channel_name)

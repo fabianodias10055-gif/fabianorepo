@@ -349,85 +349,22 @@ def refresh_members(guild_id: str, vault: Path) -> int:
 # asking outright, and they rarely use a question mark: "it crashes when I
 # jump", "I cant get it to work in 5.6". Requiring a "?" filed all of those
 # as ordinary chatter and they never reached the panel.
-PROBLEM_MARKERS = (
-    "doesn't work", "does not work", "dont work", "not working", "won't work",
-    "wont work", "isn't working", "isnt working", "stopped working",
-    "crash", "error", "bug", "broken", "stuck", "freeze", "glitch",
-    "can't", "cant ", "cannot", "unable to", "fails", "failing", "failed",
-    "issue", "problem", "not able", "no idea how", "dont know how",
-    "don't know how", "i need help", "need help", "help me", "any help",
-    "i need the", "i want to", "im trying", "i'm trying", "trying to",
-    "does not have", "doesn't have", "i dont see", "i don't see",
-    "not showing", "not appearing", "missing", "wrong",
-    # "the montage is not playing", "the trace is not detecting": the shape
-    # is "<thing> is not <verb>ing", which no single phrase above catches.
+# The filter itself lives in question_filter so YouTube uses the same one.
+# Two copies drifted once already: the YouTube half was five lines and
+# dropped 222 real requests this one catches.
+from question_filter import (  # noqa: E402
+    CLOSERS, NEGATED_VERB, OFFERS, PRAISE, PROBLEM_MARKERS, QUESTION,
+    STUCK_REPORT, classify as _classify,
 )
-NEGATED_VERB = re.compile(r"\b(is|are|was|were|does|do|did|will|wont|won.t)\s+not\s+\w+")
-# Every phrase above describes the thing that is broken. None of them
-# describe the person, and someone who has already been helped once often
-# reports the second failure entirely in the first person: "I put it on the
-# handgun slot and the pickup plays now, but aim and reload are still doing
-# the same thing so now I'm stumped". That message has no question mark, no
-# leading question word and no marker, so it was dropped and the customer
-# was left waiting. Over the whole logged history this pattern admits
-# eleven messages, so it is a narrow door, not a second front gate.
-STUCK_REPORT = re.compile(
-    r"\bi(?:.?m|\s+am)\s+(?:\w+\s+){0,2}"
-    r"(?:stumped|stuck|lost|clueless|confused|struggling|at a loss)\b"
-    # The fix was tried and it did not take.
-    r"|\bstill\s+(?:doing the same|the same|not working|no luck|nothing)\b"
-    # A question asked as a statement, which is how most follow-ups arrive.
-    r"|\bi\s+(?:still\s+)?(?:dont|don.t|can.t|cant|cannot)\s+"
-    r"(?:know|figure|understand|get)\s+(?:out\s+)?(?:why|how|what|where)\b")
-# A message that is only praise or thanks is not a request, even when it
-# happens to contain a marker word.
-CLOSERS = ("thank", "thanks", "tks", "obrigad", "worked", "solved", "fixed it",
-           "amazing", "awesome", "great work", "great stuff", "congrat",
-           "nice work", "love it", "keep it up", "well done")
 
 
-_URL_ONLY = re.compile(r"https?://\S+")
-# "Nice, if you need help, we're here" is someone offering, and it carries
-# the same words as someone asking. Reading the offer as a request files a
-# helper's kindness in the queue as work to do.
-OFFERS = ("if you need help", "if u need help", "we're here", "were here",
-          "happy to help", "here to help", "let me know if you need",
-          "feel free to ask", "you can ask")
+def classify(text: str) -> str:
+    """QUESTION, PRAISE or "" for a chat message."""
+    return _classify(text, MIN_QUESTION_LEN)
 
 
 def looks_like_question(text: str) -> bool:
-    t = " ".join(text.split()).lower()
-    # A pasted link with nothing around it says nothing to search on and
-    # nothing to answer; the length test passes it because a URL is long.
-    if len(_URL_ONLY.sub("", t).strip()) < MIN_QUESTION_LEN:
-        return False
-    if len(t) < MIN_QUESTION_LEN:
-        return False
-    if "?" not in t and any(o in t for o in OFFERS):
-        return False
-    # Someone closing a thread often uses a marker word in passing
-    # ("this is not the first time I buy from you"). Gratitude with no
-    # question mark is a thank-you, not a request.
-    if len(t) < 160 and "?" not in t and any(c in t for c in CLOSERS):
-        return False
-    # Someone closing a thread often uses a marker word in passing ("this
-    # is not the first time I buy from you"). Gratitude with no question
-    # mark is a thank-you, not a request.
-    if len(t) < 160 and "?" not in t and any(c in t for c in CLOSERS):
-        return False
-    has_marker = (any(m in t for m in PROBLEM_MARKERS)
-                  or bool(NEGATED_VERB.search(t))
-                  or bool(STUCK_REPORT.search(t)))
-    if has_marker:
-        return True
-    if "?" in t:
-        return True
-    if any(t.startswith(w + " ") for w in QUESTION_WORDS):
-        return True
-    # Short and grateful: someone closing a thread, not opening one.
-    if len(t) < 120 and any(c in t for c in CLOSERS):
-        return False
-    return False
+    return classify(text) == QUESTION
 
 
 def fetch_messages(channel_id: str, after: str | None, hard_cap: int) -> list[dict]:
@@ -707,7 +644,7 @@ def main() -> int:
     channels = list(dict.fromkeys(channels))
 
     rows: list[dict] = []
-    read = answered_n = split_n = 0
+    read = answered_n = split_n = praise_n = 0
     t0 = time.time()
 
     for cid in channels:
@@ -769,7 +706,8 @@ def main() -> int:
             if str(author.get("id", "")) in staff:
                 continue          # a staff message is an answer, not a question
             text = resolve_mentions(" ".join((m.get("content") or "").split()), m)
-            if not looks_like_question(text):
+            kind = classify(text)
+            if kind != QUESTION:
                 # In a forum the title is where the problem goes and the
                 # first message is often only a video: "Ledge System doesn't
                 # work on 5.7" sat unread for six months because nothing in
@@ -778,9 +716,30 @@ def main() -> int:
                 # its text changed.
                 title = opens.get(m["id"], "")
                 joined = f"{title}. {text}".strip() if title else ""
-                if not joined or not looks_like_question(joined):
-                    continue
-                text = joined
+                if joined and classify(joined) == QUESTION:
+                    text, kind = joined, QUESTION
+
+            # Praise is not work and never counts as open, so it is filed
+            # whole: no splitting into parts, no hunt for a staff reply.
+            if kind == PRAISE:
+                rows.append({
+                    "date": (m.get("timestamp") or "")[:10],
+                    "author": author_handle(author),
+                    "text": text[:1200],
+                    "status": "praise",
+                    "reply": "",
+                    "context": "",
+                    "source": f"dc:{m['id']}",
+                    "channel_name": name,
+                    "thread": thread_of.get(m["id"], ""),
+                    "url": (f"https://discord.com/channels/{guild or '@me'}/"
+                            f"{m.get('channel_id', cid)}/{m['id']}"),
+                })
+                praise_n += 1
+                continue
+            if kind != QUESTION:
+                continue
+
             answer = find_answer(m, messages, staff)
             context = preceding_context(m, messages)
             reply = (resolve_mentions(" ".join((answer.get("content") or "").split()),
@@ -832,6 +791,8 @@ def main() -> int:
     verb = "would be " if args.dry_run else ""
     print(f"\nmessages read: {read} \u00b7 questions found: {len(rows)} "
           f"({answered_n} already answered by staff)")
+    if praise_n:
+        print(f"praise, filed apart from the queue: {praise_n}")
     if split_n:
         print(f"messages carrying more than one question, split apart: {split_n}")
     print(f"{verb}added to the inbox: {added} (new ones only) \u00b7 "
