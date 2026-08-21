@@ -1295,6 +1295,12 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
 /* The subset the vault actually backed, so it carries the ok line
    rather than the accent that means "everything, now". */
 .btn.tiny.bulkconfsend { border-color:var(--ok-line); color:var(--ok); }
+.btn.tiny.bulkconfsend:disabled { opacity:.45; }
+.conffloor { display:inline-flex; align-items:center; gap:5px;
+  font-size:var(--t-xs); color:var(--ink2); }
+.conffloor input { width:58px; padding:4px 6px; font:inherit;
+  color:var(--ink); background:var(--surface2);
+  border:1px solid var(--line); border-radius:var(--r-sm); }
 .btn.tiny.bulkconfsend:hover { background:var(--ok-bg); border-color:var(--ok); }
 .btn.tiny.bulksend1:hover { background:var(--warn-bg);
   border-color:var(--warn); }
@@ -4489,6 +4495,13 @@ document.addEventListener("click", function (ev) {
 
 /* Typing filters the whole list rather than the ten that used to show. */
 document.addEventListener("input", function (ev) {
+  if (ev.target.id === "bulkfloor") {
+    var v = parseInt(ev.target.value, 10);
+    if (isNaN(v)) return;               /* mid-edit empty box: wait for a number */
+    BULK_CONF_FLOOR = Math.max(0, Math.min(100, v));
+    bulkSyncFloor();
+    return;
+  }
   if (!ev.target.matches(".lfind")) return;
   var q = ev.target.value.toLowerCase();
   $$("tr.lkrow").forEach(function (r) {
@@ -4703,6 +4716,42 @@ function bulkInBand(it, band) {
   if (band === "none") return c === 0;
   return true;
 }
+/* The floor moved, so the pieces that quote it move with it. Done in
+   place rather than by re-rendering: rebuilding the list would drop any
+   reply you had edited by hand but not sent yet, and would take the caret
+   out of the box you are typing in. */
+function bulkSyncFloor() {
+  var st = LAST_BULK;
+  if (!st) return;
+  var conf = bulkSendable(st).filter(function (i) {
+    return bulkConfOf(i) >= BULK_CONF_FLOOR; }).length;
+  var n = $("#bulkconfn"), pct = $("#bulkconfpct"), eta = $("#bulkconfeta");
+  if (n) n.textContent = fmt(conf);
+  if (pct) pct.textContent = BULK_CONF_FLOOR;
+  if (eta) eta.textContent = "spaced, about "
+    + bulkSpan(gapMid(BULK_GAP) * Math.max(0, conf - 1));
+  var btn = $("#bulkconfnow");
+  if (btn) btn.disabled = !conf;
+  /* The bands are named after the floor, so they follow it and the filter
+     keeps agreeing with the button beside it. */
+  $$(".bulkband").forEach(function (b) {
+    var band = b.dataset.band, label;
+    if (band === "high") label = BULK_CONF_FLOOR + "% and up";
+    else if (band === "mid") label = "60 to " + (BULK_CONF_FLOOR - 1) + "%";
+    else if (band === "low") label = "under 60%";
+    else if (band === "none") label = "not drafted yet";
+    else label = "all";
+    var count = (st.items || []).filter(function (i) {
+      return bulkInBand(i, band); }).length;
+    b.textContent = label + " " + fmt(count);
+  });
+  $$(".bulkitem").forEach(function (el) {
+    var it = (st.items || []).filter(function (i) {
+      return i.id === el.dataset.id; })[0];
+    if (it) el.style.display = bulkInBand(it, BULK_CONF_BAND) ? "" : "none";
+  });
+}
+
 function bulkSendable(st) {
   return (st.items || []).filter(function (i) {
     return i.draft && (i.state === "drafted" || i.state === "failed");
@@ -4827,11 +4876,20 @@ function bulkRender(st) {
           var conf = bulkSendable(st).filter(function (i) {
             return bulkConfOf(i) >= BULK_CONF_FLOOR;
           }).length;
-          if (!conf) return "";
+          /* Drawn even at zero, with the button disabled. Hiding it when
+             nothing clears the floor hid the only control that can lower
+             the floor, which is the one moment you need it. */
           var mins = gapMid(BULK_GAP) * Math.max(0, conf - 1);
-          return '<button class="btn tiny bulkconfsend" id="bulkconfnow">Send the '
-            + fmt(conf) + " above " + BULK_CONF_FLOOR + "%</button>"
-            + '<span class="note">spaced, about ' + bulkSpan(mins) + "</span>";
+          return '<span class="conffloor"><label for="bulkfloor">at or above</label>'
+            + '<input type="number" id="bulkfloor" min="0" max="100" step="5" value="'
+            + BULK_CONF_FLOOR + '" aria-label="Confidence floor to send at">'
+            + "<span>%</span></span>"
+            + '<button class="btn tiny bulkconfsend" id="bulkconfnow"'
+            + (conf ? "" : " disabled") + ">Send the "
+            + '<b id="bulkconfn">' + fmt(conf) + "</b> above "
+            + '<b id="bulkconfpct">' + BULK_CONF_FLOOR + "</b>%</button>"
+            + '<span class="note" id="bulkconfeta">spaced, about '
+            + bulkSpan(mins) + "</span>";
         })()
       + '<span class="figlab">gap</span><span class="seg" role="group">'
       + Object.keys(BULK_GAPS).map(function (g) {
@@ -4840,7 +4898,8 @@ function bulkRender(st) {
             + "</button>";
         }).join("")
       + "</span>"
-      + '<span class="note">spaced takes about ' + bulkSpan(avg) + "</span>"
+      + '<span class="note" id="bulkspacedeta">spaced takes about '
+      + bulkSpan(avg) + "</span>"
       + '<span class="note bigmsg" id="bulksendmsg"></span></div>';
   }
   if (bulkRunning(st))
@@ -4988,7 +5047,17 @@ document.addEventListener("click", function (ev) {
     return;
   }
   var g = ev.target.closest(".bulkgap");
-  if (g) { BULK_GAP = g.dataset.gap; bulkTick(); return; }
+  if (g) {
+    BULK_GAP = g.dataset.gap;
+    $$(".bulkgap").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.dataset.gap === BULK_GAP)); });
+    var whole = LAST_BULK ? bulkSendable(LAST_BULK).length : 0;
+    var eta = $("#bulkspacedeta");
+    if (eta) eta.textContent = "spaced takes about "
+      + bulkSpan(gapMid(BULK_GAP) * Math.max(0, whole - 1));
+    bulkSyncFloor();
+    return;
+  }
 
   var pol = ev.target.closest(".bulkpolish");
   if (pol) {
@@ -5041,7 +5110,9 @@ document.addEventListener("click", function (ev) {
   var band = ev.target.closest(".bulkband");
   if (band) {
     BULK_CONF_BAND = band.dataset.band;
-    bulkTick();
+    $$(".bulkband").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.dataset.band === BULK_CONF_BAND)); });
+    bulkSyncFloor();
     return;
   }
 
