@@ -1289,6 +1289,15 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
   font-family:var(--ui); font-size:var(--t-xs); }
 .regen:hover { text-decoration:underline; }
 .btn.ai { border-color:var(--info-line); color:var(--info); }
+/* Polish rewrites text and can be redone; Send publishes under your
+   name and cannot. They were the same grey button side by side. */
+.btn.tiny.bulksend1 { border-color:var(--warn-line); color:var(--warn); }
+/* The subset the vault actually backed, so it carries the ok line
+   rather than the accent that means "everything, now". */
+.btn.tiny.bulkconfsend { border-color:var(--ok-line); color:var(--ok); }
+.btn.tiny.bulkconfsend:hover { background:var(--ok-bg); border-color:var(--ok); }
+.btn.tiny.bulksend1:hover { background:var(--warn-bg);
+  border-color:var(--warn); }
 .btn.ai:hover { background:var(--info-bg); border-color:var(--info); }
 .conf { display:inline-flex; gap:7px; align-items:center; font-size:var(--t-2xs);
   font-weight:700; white-space:nowrap; padding:2px 8px; border-radius:var(--r-full);
@@ -1836,7 +1845,12 @@ if (!LIVE) {
 var holdUntil = 0;
 var lastTouch = Date.now();
 var pending = false;     /* a newer build exists but now is a bad moment */
-["pointerdown", "keydown", "input"].forEach(function (ev) {
+/* Scrolling is reading. The wheel raises "wheel" and "scroll", neither
+   of which was here, so someone working down a long queue never
+   registered as busy and the page reloaded out from under them at the
+   next rebuild, which during a drafting run is every few minutes. */
+["pointerdown", "keydown", "input", "wheel", "scroll", "touchmove"]
+  .forEach(function (ev) {
   addEventListener(ev, function () { lastTouch = Date.now(); }, true);
 });
 /* Reloading while someone is reading a question or typing an answer throws
@@ -4662,6 +4676,25 @@ function bulkBusy(st) {
 
 /* Counted off the rows rather than off st.done, which counts anything no
    longer waiting, a failure included. */
+/* The floor the "send the confident ones" button uses, and the band the
+   list is filtered to. Both live here so the button's count and the rows
+   you can see are always answering the same question. */
+var BULK_CONF_FLOOR = 85;
+var BULK_CONF_BAND = "all";
+function bulkConfOf(it) { return typeof it.conf === "number" ? it.conf : 0; }
+function bulkInBand(it, band) {
+  var c = bulkConfOf(it);
+  if (band === "high") return c >= BULK_CONF_FLOOR;
+  if (band === "mid") return c >= 60 && c < BULK_CONF_FLOOR;
+  if (band === "low") return c > 0 && c < 60;
+  if (band === "none") return c === 0;
+  return true;
+}
+function bulkSendable(st) {
+  return (st.items || []).filter(function (i) {
+    return i.draft && (i.state === "drafted" || i.state === "failed");
+  });
+}
 function bulkCount(st, state) {
   return (st.items || []).filter(function (i) { return i.state === state; }).length;
 }
@@ -4686,7 +4719,9 @@ function bulkConf(it) {
     + c + "%</span>";
 }
 
+var LAST_BULK = null;
 function bulkRender(st) {
+  LAST_BULK = st;
   var box = $("#bulkbody");
   if (!box) return;
   var busy = bulkRunning(st);
@@ -4769,6 +4804,16 @@ function bulkRender(st) {
     h += '<div class="figbar"><button class="btn tiny primary" id="bulknow">'
       + "Send all " + fmt(ok) + " now</button>"
       + '<button class="btn tiny" id="bulkspaced">Send one at a time</button>'
+      + (function () {
+          /* Only the ones the vault actually backed. A row with no score is
+             not counted as confident: unknown is not high. */
+          var conf = bulkSendable(st).filter(function (i) {
+            return bulkConfOf(i) >= BULK_CONF_FLOOR;
+          }).length;
+          if (!conf) return "";
+          return '<button class="btn tiny bulkconfsend" id="bulkconfnow">Send the '
+            + fmt(conf) + " above " + BULK_CONF_FLOOR + "%</button>";
+        })()
       + '<span class="figlab">gap</span><span class="seg" role="group">'
       + '<button type="button" class="bulkgap" data-gap="twomin" aria-pressed="'
       + (BULK_GAP === "twomin") + '">about 2 min</button>'
@@ -4780,9 +4825,31 @@ function bulkRender(st) {
   if (bulkRunning(st))
     h += '<div class="figbar"><button class="btn tiny" id="bulkstop">Stop</button></div>';
 
+  /* Filtering hides rows rather than dropping them, so an edit typed into
+     a row you then filter away still travels with the send. */
+  var bands = [["all", "all"], ["high", BULK_CONF_FLOOR + "% and up"],
+               ["mid", "60 to " + (BULK_CONF_FLOOR - 1) + "%"],
+               ["low", "under 60%"], ["none", "not drafted yet"]];
+  var anyConf = (st.items || []).some(function (i) { return bulkConfOf(i); });
+  if (anyConf) {
+    h += '<div class="figbar"><span class="figlab">confidence</span>'
+      + '<span class="seg" role="group">'
+      + bands.map(function (b) {
+          var n = (st.items || []).filter(function (i) {
+            return bulkInBand(i, b[0]); }).length;
+          return '<button type="button" class="bulkband" data-band="' + b[0]
+            + '" aria-pressed="' + (BULK_CONF_BAND === b[0]) + '">'
+            + esc(b[1]) + " " + fmt(n) + "</button>";
+        }).join("")
+      + "</span></div>";
+  }
+
   h += '<div class="bulklist">';
   st.items.forEach(function (it) {
-    h += '<div class="bulkitem" data-id="' + esc(it.id) + '">'
+    var shown = bulkInBand(it, BULK_CONF_BAND);
+    h += '<div class="bulkitem" data-id="' + esc(it.id) + '"'
+      + (shown ? "" : ' style="display:none"') + ">";
+    h += ''
       + '<div class="bulkhead"><span class="slug">' + esc(it.code || "?") + "</span>"
       + '<span class="bulkwho">' + esc(it.who) + " · " + esc(it.channel) + "</span>"
       + '<span class="bulkst bs-' + esc(it.state) + '">'
@@ -4938,18 +5005,34 @@ document.addEventListener("click", function (ev) {
     return;
   }
 
+  var band = ev.target.closest(".bulkband");
+  if (band) {
+    BULK_CONF_BAND = band.dataset.band;
+    bulkTick();
+    return;
+  }
+
   var now = ev.target.closest("#bulknow"), spaced = ev.target.closest("#bulkspaced");
-  if (now || spaced) {
+  var confOnly = ev.target.closest("#bulkconfnow");
+  if (now || spaced || confOnly) {
     var mode = spaced ? "spaced" : "now";
-    var count = $$(".bulkdraft").filter(function (t) { return t.value.trim(); }).length;
+    var floor = confOnly ? BULK_CONF_FLOOR : 0;
+    /* Counted off the same rule the server will apply, so the number in the
+       confirmation is the number that goes out. */
+    var count = confOnly
+      ? (LAST_BULK ? bulkSendable(LAST_BULK).filter(function (i) {
+          return bulkConfOf(i) >= BULK_CONF_FLOOR; }).length : 0)
+      : $$(".bulkdraft").filter(function (t) { return t.value.trim(); }).length;
     var gapWords = BULK_GAP === "twomin" ? "one about every 2 minutes"
                                         : "one every 50 to 300 seconds";
     if (!confirm("Send " + count + " public replies"
+                 + (confOnly ? " scored " + BULK_CONF_FLOOR + "% or higher" : "")
                  + (spaced ? ", " + gapWords : ", all at once")
                  + "? This posts under your name and cannot be taken back.")) return;
     var sm = $("#bulksendmsg");
     if (sm) sm.textContent = "starting...";
-    bulkPost({ action: "send", mode: mode, edits: bulkEdits(), gap: BULK_GAP })
+    bulkPost({ action: "send", mode: mode, edits: bulkEdits(), gap: BULK_GAP,
+               min_conf: floor })
       .then(function (r) {
         if (!r.ok) {
           /* Beside the button that was pressed. This landed next to the

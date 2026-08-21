@@ -84,6 +84,7 @@ CATALOG = [
     ("hang-and-swing", "Hang and Swing", "locomotion"),
     ("ladder", "Ladder", "locomotion"),
     ("ledge-system", "Ledge System", "locomotion"),
+    ("gasp-ledge-mover", "GASP Ledge Mover", "locomotion"),
     ("motion-matching", "Motion Matching", "locomotion"),
     ("narrow-passage", "Narrow Passage", "locomotion"),
     ("obstacle-avoidance", "Obstacle Avoidance", "locomotion"),
@@ -3265,11 +3266,18 @@ def _bulk_draft_body() -> None:
     _finish("ready", "")
 
 
-def bulk_send(mode: str, edits: dict, gap: str = "wide") -> dict:
+def bulk_send(mode: str, edits: dict, gap: str = "wide",
+              min_conf: int = 0) -> dict:
     """Send the drafts. mode is 'now' or 'spaced'.
 
     edits carries whatever you changed in the review list, keyed by question
     id, so what goes out is what you read, not what the model first wrote.
+
+    min_conf sends only the rows the model scored at or above it. A row
+    below the floor is left exactly as it was, drafted and readable, not
+    skipped: it is a good answer being held for a person to look at, and
+    marking it skipped would say the opposite. A row with no score at all
+    counts as below any floor, because unknown is not the same as high.
     """
     if _bulk_busy():
         return {"ok": False, "error": f"already {_bulk['phase']}; stop it first"}
@@ -3282,6 +3290,8 @@ def bulk_send(mode: str, edits: dict, gap: str = "wide") -> dict:
             text = (edits or {}).get(item["id"], item["draft"])
             item["draft"] = (text or "").strip()
             if item["state"] in ("drafted", "failed") and item["draft"]:
+                if min_conf and int(item.get("conf") or 0) < min_conf:
+                    continue
                 item["state"] = "queued"
                 ready += 1
             elif not item["draft"]:
@@ -5410,9 +5420,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(bulk_draft(str(payload.get("system", ""))))
             if act == "send":
                 mode = "spaced" if payload.get("mode") == "spaced" else "now"
+                try:
+                    floor = int(payload.get("min_conf") or 0)
+                except (TypeError, ValueError):
+                    floor = 0
                 return self._send_json(bulk_send(
                     mode, payload.get("edits") or {},
-                    str(payload.get("gap", "wide"))))
+                    str(payload.get("gap", "wide")), max(0, min(100, floor))))
             if act == "polish":
                 return self._send_json(bulk_polish(
                     str(payload.get("id", "")), str(payload.get("text", "")),
