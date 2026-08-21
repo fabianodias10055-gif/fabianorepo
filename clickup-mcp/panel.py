@@ -3036,7 +3036,8 @@ def deliver_reply(qid: str, answer: str, force: bool = False,
 # that is the order they appear in; the page reads this dict rather than
 # repeating the numbers, which is how "about 2 min" and "50 to 300s" came
 # to be written into the JS three times over.
-BULK_GAPS = {"fast": (50, 120), "twomin": (90, 150), "wide": (50, 300)}
+BULK_GAPS = {"rapid": (10, 30), "fast": (50, 120), "twomin": (90, 150),
+             "wide": (50, 300)}
 
 _bulk = {
     "phase": "idle",      # idle | drafting | ready | sending | done | stopped
