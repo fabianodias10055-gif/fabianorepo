@@ -4810,8 +4810,12 @@ function bulkRender(st) {
   if (st.note) h += '<p class="figwhy">' + esc(st.note) + "</p>";
   h += bulkMoney(st.cost);
 
-  if (st.phase === "ready") {
-    var ok = st.items.filter(function (i) { return i.draft; }).length;
+  /* Drawn whenever there is something to send and nothing in flight, not
+     only in "ready". A stopped run is the same reviewed list with a
+     different label on it, and hiding the bar there left no way to send
+     the drafts already paid for. */
+  if (!bulkRunning(st) && bulkSendable(st).length) {
+    var ok = bulkSendable(st).length;
     var mid = gapMid(BULK_GAP);
     var avg = mid * Math.max(0, ok - 1);
     h += '<div class="figbar"><button class="btn tiny primary" id="bulknow">'

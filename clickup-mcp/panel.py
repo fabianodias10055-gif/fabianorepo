@@ -3101,6 +3101,11 @@ def _bulk_load() -> None:
         kept["phase"] = "ready"
         kept["note"] = ("the panel restarted while this run was going; "
                         "nothing was lost and nothing is sending")
+    # Queued means "the run is about to take this one", so outside a running
+    # phase it is a lie: nothing is coming for it. A stop used to leave rows
+    # there and they counted as neither sent nor sendable, which is sixteen
+    # finished answers no button offered to do anything with.
+    if kept.get("phase") not in ("drafting", "sending"):
         for item in kept["items"]:
             if item.get("state") == "queued":
                 item["state"] = "drafted" if item.get("draft") else "waiting"
@@ -3284,7 +3289,12 @@ def bulk_send(mode: str, edits: dict, gap: str = "wide",
     """
     if _bulk_busy():
         return {"ok": False, "error": f"already {_bulk['phase']}; stop it first"}
-    if _bulk["phase"] != "ready":
+    # "ready" is a list waiting to be read; "stopped" and "done" are the
+    # same list after a run ended. Only "ready" was allowed, so pressing
+    # Stop locked the remaining drafts in for good: the card hid its send
+    # bar and this refused anyway, and the only way out was to draft the
+    # whole system again.
+    if _bulk["phase"] not in ("ready", "stopped", "done"):
         return {"ok": False, "error": "draft the answers first"}
 
     with _bulk_lock:
@@ -3500,8 +3510,19 @@ def _finish(phase: str, note: str) -> None:
 
 
 def bulk_stop() -> dict:
+    """Stop the run and give the queue back as reviewable drafts.
+
+    A row already marked queued was never returned to "drafted", so after a
+    stop it counted as neither sent nor sendable: sixteen good answers sat
+    in a state nothing offers to send. Whatever had not gone out yet is a
+    draft again, which is what it actually is.
+    """
     with _bulk_lock:
         _bulk["stop"] = True
+        for item in _bulk["items"]:
+            if item["state"] == "queued":
+                item["state"] = "drafted" if item.get("draft") else "waiting"
+    _bulk_save()
     return {"ok": True}
 
 # --------------------------------------------------------------------------
