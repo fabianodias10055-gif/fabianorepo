@@ -153,12 +153,37 @@ def save_to_env(client_id: str, client_secret: str, refresh_token: str) -> None:
     ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _stored_client() -> dict:
+    """The client id and secret kept from the last successful setup.
+
+    A refresh token is the part that gets revoked; the client credentials
+    behind it do not change. Asking someone to go back to the Cloud Console
+    and re-download a file whose contents are already on this machine is a
+    dead end at the exact moment they need this to work, so the JSON file
+    is the first place looked and no longer the only one.
+    """
+    try:
+        from secrets_store import get_secret
+    except ImportError:
+        import os
+        def get_secret(name, default=""):        # noqa: E306
+            return os.getenv(name, default)
+    return {"client_id": get_secret("YOUTUBE_OAUTH_CLIENT_ID") or "",
+            "client_secret": get_secret("YOUTUBE_OAUTH_CLIENT_SECRET") or ""}
+
+
 def main() -> int:
-    secret = load_client_secret()
+    if CLIENT_SECRET_PATH.is_file():
+        secret = load_client_secret()
+    else:
+        secret = _stored_client()
+        if secret.get("client_id"):
+            print("Using the client id and secret saved by the last setup; "
+                  "only the refresh token is being replaced.")
     client_id = secret.get("client_id", "")
     client_secret = secret.get("client_secret", "")
     if not (client_id and client_secret):
-        print("ERROR: client_secret.json is missing client_id or client_secret.")
+        load_client_secret()      # prints where to get the file, then exits
         return 1
 
     redirect_uri = f"http://127.0.0.1:{REDIRECT_PORT}/"
