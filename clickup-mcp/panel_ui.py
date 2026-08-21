@@ -892,7 +892,7 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .bulkst.bs-failed { color:var(--crit); }
 .bulkst.bs-drafted { color:var(--accent); }
 .bulkq { margin:var(--s2) 0; font-size:var(--t-sm); color:var(--ink2); }
-.bulkdraft { width:100%; min-height:78px; font:inherit; font-size:var(--t-sm);
+.bulkdraft { width:100%; min-height:150px; font:inherit; font-size:var(--t-sm);
   color:var(--ink); background:var(--surface2); border:1px solid var(--line);
   border-radius:var(--r-sm); padding:var(--s3); resize:vertical; }
 .bulkdraft[readonly] { opacity:.75; }
@@ -4889,6 +4889,18 @@ function bulkRender(st) {
                          document.activeElement.selectionEnd] : null;
 
   box.innerHTML = h + "</div>";
+  /* Sized to what is in it rather than to a number picked once. These
+     replies run from two lines to five paragraphs, and a fixed height is
+     either wasted space or a box you have to scroll inside to read the
+     answer you are about to publish. The cap is there so one very long
+     draft does not push every other row off the screen; past it the box
+     scrolls as before. Only rows on screen: an offscreen textarea reports
+     a scrollHeight of zero and would collapse to the floor. */
+  $$(".bulkdraft").forEach(function (t) {
+    if (t.offsetParent === null) return;
+    t.style.height = "auto";
+    t.style.height = Math.min(t.scrollHeight + 2, 460) + "px";
+  });
 
   $$(".bulkitem", box).forEach(function (el) {
     var t = $(".bulkdraft", el);
