@@ -2943,6 +2943,16 @@ def link_suggest(phrase: str, links: list) -> dict:
 
 
 
+# "sent" means it reached the person. When the platform refuses and only
+# the vault is updated, the row says "filed": the answer exists and is
+# searchable, but nobody has read it. Calling that sent, in the same green,
+# is how a revoked YouTube token looked like forty delivered replies.
+def _sent_state(res: dict) -> tuple[str, str]:
+    if res.get("posted_to_platform"):
+        return "sent", "posted"
+    return "filed", res.get("platform_message", "recorded in the vault only")
+
+
 def deliver_reply(qid: str, answer: str, force: bool = False,
                   offer: dict | None = None) -> dict:
     """Post one answer and record it. The single path for every sender.
@@ -3309,8 +3319,8 @@ def bulk_send_one(qid: str, text: str) -> dict:
     res = deliver_reply(qid, text, offer={"source": "bulk-one",
                                           "system": _bulk["system"]})
     if res.get("ok"):
-        _mark_id(qid, "sent", "posted" if res.get("posted_to_platform")
-                 else res.get("platform_message", "recorded in the vault only"))
+        state, msg = _sent_state(res)
+        _mark_id(qid, state, msg)
         with _bulk_lock:
             _bulk["sent"] += 1
     else:
@@ -3401,9 +3411,8 @@ def _bulk_send_body(mode: str, gap: str = "wide") -> None:
         res = deliver_reply(item["id"], item["draft"],
                             offer={"source": "bulk", "system": _bulk["system"]})
         if res.get("ok"):
-            msg = ("posted" if res.get("posted_to_platform")
-                   else res.get("platform_message", "recorded in the vault only"))
-            _mark(idx, "sent", msg)
+            state, msg = _sent_state(res)
+            _mark(idx, state, msg)
             with _bulk_lock:
                 _bulk["sent"] += 1
         else:

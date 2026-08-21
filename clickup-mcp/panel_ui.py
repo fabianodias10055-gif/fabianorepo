@@ -886,6 +886,9 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .bulkst { margin-left:auto; font-family:var(--mono); font-size:var(--t-2xs);
   color:var(--ink3); }
 .bulkst.bs-sent { color:var(--ok); }
+/* Recorded in the vault, refused by the platform. Amber because the
+   answer exists and nobody has read it. */
+.bulkst.bs-filed { color:var(--warn); }
 .bulkst.bs-failed { color:var(--crit); }
 .bulkst.bs-drafted { color:var(--accent); }
 .bulkq { margin:var(--s2) 0; font-size:var(--t-sm); color:var(--ink2); }
@@ -4662,7 +4665,11 @@ function bulkBusy(st) {
 function bulkCount(st, state) {
   return (st.items || []).filter(function (i) { return i.state === state; }).length;
 }
-function bulkDrafted(st) { return bulkCount(st, "drafted") + bulkCount(st, "sent"); }
+function bulkDrafted(st) {
+  return bulkCount(st, "drafted") + bulkCount(st, "sent")
+    + bulkCount(st, "filed");
+}
+function bulkFiled(st) { return bulkCount(st, "filed"); }
 function bulkFailed(st) { return bulkCount(st, "failed"); }
 
 /* How well the vault backed this particular answer, as the model scored
@@ -4727,8 +4734,14 @@ function bulkRender(st) {
        ? '<div><span class="k">failed</span><span class="v warn">'
          + fmt(bulkFailed(st)) + "</span></div>" : "")
     + (st.phase === "sending" || st.phase === "done"
-       ? '<div><span class="k">sent</span><span class="v">' + fmt(st.sent) + "</span></div>"
+       ? '<div><span class="k">sent</span><span class="v">'
+         + fmt(bulkCount(st, "sent")) + "</span></div>"
        : "")
+    /* Shown whenever there is one, in any phase: a revoked token turns
+       every send into one of these and the run otherwise looks healthy. */
+    + (bulkFiled(st)
+       ? '<div><span class="k">filed, not delivered</span>'
+         + '<span class="v warn">' + fmt(bulkFiled(st)) + "</span></div>" : "")
     + "</div>";
 
   if (bulkRunning(st)) {
@@ -4781,7 +4794,7 @@ function bulkRender(st) {
       + (it.draft || it.state === "drafted"
          ? '<textarea class="bulkdraft" ' + (st.phase === "sending" ? "readonly" : "")
            + ">" + esc(it.draft) + "</textarea>"
-           + (it.state === "sent" ? ""
+           + (it.state === "sent" || it.state === "filed" ? ""
               : '<div class="bulkone">'
                 + '<button class="btn tiny bulkpolish">Polish text</button>'
                 + '<button class="btn tiny bulksend1">Send this one</button>'
