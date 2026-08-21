@@ -3031,9 +3031,12 @@ def deliver_reply(qid: str, answer: str, force: bool = False,
 # people get an answer.
 # --------------------------------------------------------------------------
 
-# How far apart a spaced run puts each reply. Both are random inside their
-# range, so the rhythm never looks mechanical.
-BULK_GAPS = {"wide": (50, 300), "twomin": (90, 150)}
+# How far apart a spaced run puts each reply, random inside the range so
+# the rhythm never looks mechanical. Ordered slowest-typing-first because
+# that is the order they appear in; the page reads this dict rather than
+# repeating the numbers, which is how "about 2 min" and "50 to 300s" came
+# to be written into the JS three times over.
+BULK_GAPS = {"fast": (50, 120), "twomin": (90, 150), "wide": (50, 300)}
 
 _bulk = {
     "phase": "idle",      # idle | drafting | ready | sending | done | stopped
@@ -4645,6 +4648,9 @@ def scan() -> dict:
         "sync": sync_report(),
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "epoch": int(time.time()),
+        # Read by the page so the gap buttons, the time estimate and
+        # the confirmation wording all come from one definition.
+        "bulk_gaps": BULK_GAPS,
         "systems": systems,
         "videos": videos,
         "questions": questions,

@@ -1665,6 +1665,10 @@ FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' "
 
 JS = """
 var EPOCH = __EPOCH__, LIVE = __LIVE__, PAGE = __PAGE__;
+/* {name: [low, high]} straight from BULK_GAPS. The labels, the time
+   estimate and the words in the confirmation are all derived from
+   this, so a gap is added in one place. */
+var BULK_GAPS = __BULK_GAPS__;
 var PANEL_TOKEN = "__TOKEN__";
 /* Every mutating call carries the launch token. A cross-site page can send
    a request but cannot read this file, so it cannot forge one. */
@@ -4612,7 +4616,16 @@ document.addEventListener("click", function (ev) {
    the list between the two steps is editable and is the point of the
    feature, not a formality. */
 var BULK_POLL = null;
-var BULK_GAP = "twomin";
+var BULK_GAP = "fast";
+/* Midpoint of a gap, and the words for the confirmation, both read off
+   BULK_GAPS so a new range needs no second edit here. */
+function gapRange(name) { return BULK_GAPS[name] || [50, 300]; }
+function gapMid(name) { var r = gapRange(name); return (r[0] + r[1]) / 2; }
+function gapLabel(name) { var r = gapRange(name); return r[0] + " to " + r[1] + "s"; }
+function gapWords(name) {
+  var r = gapRange(name);
+  return "one every " + r[0] + " to " + r[1] + " seconds";
+}
 
 function bulkPost(body) {
   return fetch("/bulk", {
@@ -4799,7 +4812,7 @@ function bulkRender(st) {
 
   if (st.phase === "ready") {
     var ok = st.items.filter(function (i) { return i.draft; }).length;
-    var mid = BULK_GAP === "twomin" ? 120 : 175;
+    var mid = gapMid(BULK_GAP);
     var avg = mid * Math.max(0, ok - 1);
     h += '<div class="figbar"><button class="btn tiny primary" id="bulknow">'
       + "Send all " + fmt(ok) + " now</button>"
@@ -4811,14 +4824,18 @@ function bulkRender(st) {
             return bulkConfOf(i) >= BULK_CONF_FLOOR;
           }).length;
           if (!conf) return "";
+          var mins = gapMid(BULK_GAP) * Math.max(0, conf - 1);
           return '<button class="btn tiny bulkconfsend" id="bulkconfnow">Send the '
-            + fmt(conf) + " above " + BULK_CONF_FLOOR + "%</button>";
+            + fmt(conf) + " above " + BULK_CONF_FLOOR + "%</button>"
+            + '<span class="note">spaced, about ' + bulkSpan(mins) + "</span>";
         })()
       + '<span class="figlab">gap</span><span class="seg" role="group">'
-      + '<button type="button" class="bulkgap" data-gap="twomin" aria-pressed="'
-      + (BULK_GAP === "twomin") + '">about 2 min</button>'
-      + '<button type="button" class="bulkgap" data-gap="wide" aria-pressed="'
-      + (BULK_GAP === "wide") + '">50 to 300s</button></span>'
+      + Object.keys(BULK_GAPS).map(function (g) {
+          return '<button type="button" class="bulkgap" data-gap="' + esc(g)
+            + '" aria-pressed="' + (BULK_GAP === g) + '">' + esc(gapLabel(g))
+            + "</button>";
+        }).join("")
+      + "</span>"
       + '<span class="note">spaced takes about ' + bulkSpan(avg) + "</span>"
       + '<span class="note bigmsg" id="bulksendmsg"></span></div>';
   }
@@ -5027,7 +5044,10 @@ document.addEventListener("click", function (ev) {
   var now = ev.target.closest("#bulknow"), spaced = ev.target.closest("#bulkspaced");
   var confOnly = ev.target.closest("#bulkconfnow");
   if (now || spaced || confOnly) {
-    var mode = spaced ? "spaced" : "now";
+    /* The confident subset goes out spaced too. Seventeen replies landing
+       in the same second reads as a script whoever receives them, which is
+       the thing the gap exists to avoid. */
+    var mode = (spaced || confOnly) ? "spaced" : "now";
     var floor = confOnly ? BULK_CONF_FLOOR : 0;
     /* Counted off the same rule the server will apply, so the number in the
        confirmation is the number that goes out. */
@@ -5035,11 +5055,10 @@ document.addEventListener("click", function (ev) {
       ? (LAST_BULK ? bulkSendable(LAST_BULK).filter(function (i) {
           return bulkConfOf(i) >= BULK_CONF_FLOOR; }).length : 0)
       : $$(".bulkdraft").filter(function (t) { return t.value.trim(); }).length;
-    var gapWords = BULK_GAP === "twomin" ? "one about every 2 minutes"
-                                        : "one every 50 to 300 seconds";
+    var words = gapWords(BULK_GAP);
     if (!confirm("Send " + count + " public replies"
                  + (confOnly ? " scored " + BULK_CONF_FLOOR + "% or higher" : "")
-                 + (spaced ? ", " + gapWords : ", all at once")
+                 + (spaced ? ", " + words : ", all at once")
                  + "? This posts under your name and cannot be taken back.")) return;
     var sm = $("#bulksendmsg");
     if (sm) sm.textContent = "starting...";
@@ -7340,6 +7359,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
     js = (JS.replace("__EPOCH__", str(d["epoch"]))
             .replace("__LIVE__", "true" if live else "false")
             .replace("__PAGE__", str(PAGE))
+            .replace("__BULK_GAPS__", embed(d.get("bulk_gaps") or {}))
             .replace("__TOKEN__", token)
             .replace("__AI_CACHE__", embed(d.get("ai_cache") or {}))
             .replace("__QDATA__", embed(_question_payload(d["questions"])))
