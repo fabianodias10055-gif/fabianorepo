@@ -88,6 +88,20 @@ def get_secret(name: str, default: str = "") -> str:
     return stored or default
 
 
+def forget_secret(name: str) -> None:
+    """Drop the cached copy so the next read goes back to the store.
+
+    The cache exists because the panel asks for the same token on every
+    request and each miss is a Windows API call. It also means a credential
+    replaced while the panel is running stays invisible to it: signing in
+    again wrote a fresh refresh token to the store and the process kept
+    presenting the revoked one until somebody restarted it. Whoever learns
+    a secret has stopped working calls this, and the next attempt sees
+    whatever is there now.
+    """
+    _cache.pop(name, None)
+
+
 def looks_like_secret(value: str) -> str:
     """Empty when the value could be a credential, else why it cannot be.
 

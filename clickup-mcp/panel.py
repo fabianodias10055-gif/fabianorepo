@@ -2322,7 +2322,18 @@ def _youtube_access_token() -> tuple[str | None, str]:
     except urlerror.HTTPError as exc:
         # Google says no. A revoked or expired refresh token lands here, and
         # it is the one case where "set OAuth up again" is the right advice.
-        return None, ("auth" if exc.code in (400, 401) else f"http-{exc.code}")
+        if exc.code in (400, 401):
+            # Google refused this refresh token. If somebody has signed in
+            # again since the process started, the replacement is already in
+            # the store and only the cache is hiding it, so the next attempt
+            # gets to see it rather than waiting for a restart.
+            try:
+                from secrets_store import forget_secret
+                forget_secret("YOUTUBE_REFRESH_TOKEN")
+            except ImportError:
+                pass
+            return None, "auth"
+        return None, f"http-{exc.code}"
     except (urlerror.URLError, TimeoutError, OSError):
         return None, "network"
     except (KeyError, ValueError):
