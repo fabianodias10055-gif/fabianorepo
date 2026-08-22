@@ -5028,7 +5028,20 @@ function bulkEdits() {
 /* Changing the picker redraws. Without this the card kept showing the
    previous run until something else happened to poll. */
 document.addEventListener("change", function (ev) {
-  if (ev.target && ev.target.id === "bulksys") bulkTick();
+  if (ev.target && ev.target.id === "bulksys") {
+    /* Picking a system used to re-read the run that was already there, so
+       the card answered with the last system's numbers and a line about
+       pressing the button that spends money. Reading the queue is free, so
+       it is read. */
+    var picked = ev.target.value;
+    if (!picked) { bulkTick(); return; }
+    bulkPost({ action: "preview", system: picked }).then(function (r) {
+      var msg = $("#bulkmsg");
+      if (msg) msg.textContent = r && r.ok ? "" : (r && r.error) || "";
+      bulkTick();
+    });
+    return;
+  }
 });
 
 document.addEventListener("click", function (ev) {

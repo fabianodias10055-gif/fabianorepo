@@ -3160,8 +3160,16 @@ def _bulk_busy() -> bool:
     return _bulk["phase"] in ("drafting", "sending")
 
 
-def bulk_draft(system: str) -> dict:
-    """Draft an answer for every unanswered question of one system."""
+def bulk_draft(system: str, start: bool = True) -> dict:
+    """Draft an answer for every unanswered question of one system.
+
+    With start=False it builds the same list and stops there. Picking a
+    system used to show nothing until you pressed the button that spends
+    money, so the only way to see what was waiting under Ledge System was
+    to start paying for it. Reading the queue is free; the list is built
+    the same way either way rather than by a second copy that could
+    disagree with this one about what counts as waiting.
+    """
     if _bulk_busy():
         return {"ok": False, "error": f"already {_bulk['phase']}; stop it first"}
 
@@ -3194,9 +3202,17 @@ def bulk_draft(system: str) -> dict:
                       "msg": "written earlier, no new cost" if draft else ""})
 
     with _bulk_lock:
-        _bulk.update(phase="drafting", system=system, system_name=name, mode="",
+        _bulk.update(phase="drafting" if start else "ready",
+                     system=system, system_name=name, mode="",
                      done=had, sent=0, failed=0, next_at=0.0, stop=False,
                      note="", started_at=time.time(), items=items)
+    if not start:
+        left = len(items) - had
+        _finish("ready", (f"{had} of {len(items)} already written and free to "
+                          f"send; {left} would be drafted") if left
+                else "every answer here is already written")
+        return {"ok": True, "queued": len(queue), "system_name": name,
+                "already": had}
     if had == len(items):
         _finish("ready", f"every answer here was already written; "
                          f"nothing new was generated")
@@ -5459,6 +5475,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json({"ok": True, **bulk_state()})
             if act == "stop":
                 return self._send_json(bulk_stop())
+            if act == "preview":
+                return self._send_json(bulk_draft(str(payload.get("system", "")),
+                                                  start=False))
             if act == "draft":
                 return self._send_json(bulk_draft(str(payload.get("system", ""))))
             if act == "send":
