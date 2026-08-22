@@ -883,7 +883,8 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .bulkitem { border:1px solid var(--line); border-radius:var(--r-md);
   padding:var(--s3); background:var(--surface); }
 .bulkhead { display:flex; gap:var(--s3); align-items:center; flex-wrap:wrap; }
-.bulkwho { color:var(--ink3); font-size:var(--t-xs); }
+.bulkwho { color:var(--ink3); font-size:var(--t-xs);
+  display:inline-flex; align-items:center; gap:5px; }
 .bulkst { margin-left:auto; font-family:var(--mono); font-size:var(--t-2xs);
   color:var(--ink3); }
 .bulkst.bs-sent { color:var(--ok); }
@@ -4937,7 +4938,9 @@ function bulkRender(st) {
       + (shown ? "" : ' style="display:none"') + ">";
     h += ''
       + '<div class="bulkhead"><span class="slug">' + esc(it.code || "?") + "</span>"
-      + '<span class="bulkwho">' + esc(it.who) + " · " + esc(it.channel) + "</span>"
+      + '<span class="bulkwho">' + bicon(it.channel, 13) + esc(it.who)
+      + (it.date ? ' <span class="note">' + esc(it.date) + "</span>" : "")
+      + "</span>"
       + '<span class="bulkst bs-' + esc(it.state) + '">'
       + (it.state === "queued" && st.phase === "sending" ? "waiting its turn"
          : esc(it.state))

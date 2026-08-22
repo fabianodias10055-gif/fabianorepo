@@ -3110,6 +3110,13 @@ def _bulk_load() -> None:
         for item in kept["items"]:
             if item.get("state") == "queued":
                 item["state"] = "drafted" if item.get("draft") else "waiting"
+    # A row saved mid-call belongs to a thread that died with the process.
+    # Left as it was, _bulk_busy would read it as work in flight forever
+    # and refuse every draft and send from then on.
+    for item in kept["items"]:
+        if item.get("state") in IN_FLIGHT:
+            item["state"] = "drafted" if item.get("draft") else "waiting"
+            item["msg"] = "the panel restarted while this one was running"
     # Rows drafted before this run carried a score have one in the cache
     # already: the model returned it, _normalize kept it and save_ai_result
     # wrote it next to the text. Reading it back here is free and means the
@@ -3156,8 +3163,24 @@ def bulk_state() -> dict:
     return st
 
 
+# States that mean a thread is inside a model call for this row right now.
+IN_FLIGHT = ("drafting", "polishing", "sending")
+
+
 def _bulk_busy() -> bool:
-    return _bulk["phase"] in ("drafting", "sending")
+    """Is anything running, at the run level or in a single row.
+
+    The phase only moves for a whole-system run. Drafting or polishing one
+    row leaves it at "ready", so everything that rebuilds the list was free
+    to do it mid-call: refreshing the page re-read the picker, the preview
+    rebuilt items from the vault, and the row being written went back to
+    waiting while its thread was still working. It read as the run having
+    stopped, and if the picker had moved to another system the finished
+    answer landed in a list that no longer held that question.
+    """
+    if _bulk["phase"] in ("drafting", "sending"):
+        return True
+    return any(i.get("state") in IN_FLIGHT for i in _bulk["items"])
 
 
 def bulk_draft(system: str, start: bool = True) -> dict:
@@ -3193,6 +3216,10 @@ def bulk_draft(system: str, start: bool = True) -> dict:
                       "who": q.get("who", ""),
                       "asked": " ".join((q.get("text") or "").split())[:400],
                       "channel": q.get("channel", ""),
+                      # Shown on the row: when it was asked is half of
+                      # whether to answer it, and the queue reaches back
+                      # four years.
+                      "date": q.get("date", ""),
                       "draft": draft,
                       # The cache keeps the score alongside the text, so a
                       # row filled from it opens with the same bar a fresh
