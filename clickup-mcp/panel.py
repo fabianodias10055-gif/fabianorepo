@@ -3380,6 +3380,64 @@ def bulk_send_one(qid: str, text: str) -> dict:
 
 
 
+def bulk_draft_one(qid: str, extra: str = "") -> dict:
+    """Draft one row of the list, without starting the whole system.
+
+    The preview shows what is waiting; before this the only thing you could
+    do with a waiting row was pay for every other row beside it. Drafting
+    one is the same model call the run makes, on its own thread, marked
+    back into the item so the card's poll draws it arriving.
+    """
+    if _bulk_busy():
+        return {"ok": False, "error": f"already {_bulk['phase']}; stop it first"}
+
+    with _bulk_lock:
+        item = next((it for it in _bulk["items"] if it["id"] == qid), None)
+        if item is None:
+            return {"ok": False, "code": "stale",
+                    "error": "this list is from an older run; refreshing"}
+        if item["state"] in ("sent", "sending", "polishing", "drafting"):
+            return {"ok": False, "error": f"already {item['state']}"}
+        item["state"] = "drafting"
+        item["msg"] = "writing this one"
+    _bulk_save()
+
+    def work() -> None:
+        try:
+            question = find_question_by_id(qid)
+            if not question:
+                _mark_id(qid, "waiting", "the question left the vault")
+                return
+            room, why = _spend_room()
+            if not room:
+                _mark_id(qid, "waiting", why)
+                return
+            job = start_ai_job(question, "draft", extra)
+            waited, patience = 0.0, AI_TIMEOUT + 20
+            while waited < patience:
+                time.sleep(1.0)
+                waited += 1.0
+                st = ai_job_status(job)
+                if st.get("state") == "done":
+                    answer = (st.get("answer") or "").strip()
+                    if answer:
+                        _mark_id(qid, "drafted", "", answer, st.get("confidence"))
+                    else:
+                        _mark_id(qid, "waiting", "came back empty")
+                    return
+                if st.get("state") in ("error", "unknown"):
+                    _mark_id(qid, "waiting",
+                             st.get("error") or "the model call failed")
+                    return
+            _mark_id(qid, "waiting",
+                     f"no answer after {int(patience // 60)} minutes")
+        except Exception as exc:                   # noqa: BLE001
+            _mark_id(qid, "waiting", f"{type(exc).__name__}: {exc}"[:120])
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"ok": True}
+
+
 def bulk_polish(qid: str, text: str, instruction: str) -> dict:
     """Rework one drafted reply to an instruction, in place.
 
@@ -5495,6 +5553,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(bulk_send(
                     mode, payload.get("edits") or {},
                     str(payload.get("gap", "wide")), max(0, min(100, floor))))
+            if act == "draft_one":
+                return self._send_json(bulk_draft_one(
+                    str(payload.get("id", "")), str(payload.get("extra", ""))))
             if act == "polish":
                 return self._send_json(bulk_polish(
                     str(payload.get("id", "")), str(payload.get("text", "")),

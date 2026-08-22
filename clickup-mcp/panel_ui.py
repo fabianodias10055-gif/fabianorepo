@@ -862,6 +862,7 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 .qclearq:hover { background:var(--warn-bg); }
 
 .bulkst.bs-polishing { color:var(--accent); }
+.bulkst.bs-drafting { color:var(--accent); }
 
 .bigmsg { color:var(--warn); font-weight:600; }
 .bulkst.bs-queued { color:var(--ink3); }
@@ -4697,7 +4698,8 @@ function bulkRunning(st) {
 }
 function bulkBusy(st) {
   if (bulkRunning(st)) return true;
-  return (st.items || []).some(function (i) { return i.state === "polishing"; });
+  return (st.items || []).some(function (i) {
+    return i.state === "polishing" || i.state === "drafting"; });
 }
 
 /* Counted off the rows rather than off st.done, which counts anything no
@@ -4807,18 +4809,22 @@ function bulkRender(st) {
                 st.phase === "stopped";
   var stale = picked && settled && st.system &&
               picked.value && picked.value !== st.system;
-  if (stale) {
-    box.innerHTML = '<p class="figwhy">The last run was ' + esc(st.system_name)
-      + ", " + fmt(st.done) + " of " + fmt(st.items.length)
-      + " drafted. Press Draft answers to start "
+  /* Said above the list, not instead of it. Returning here hid every
+     drafted answer whenever the picker named something else, which it does
+     on any fresh load: the picker opens on the first system with work and
+     the run that persisted is usually a different one. The answers are
+     paid for and readable either way. */
+  var staleNote = stale
+    ? '<p class="figwhy">Showing the last run, ' + esc(st.system_name)
+      + ", " + fmt(bulkDrafted(st)) + " of " + fmt(st.items.length)
+      + " drafted. Press Draft answers to switch to "
       + esc(picked.selectedOptions[0] ? picked.selectedOptions[0].textContent
                                       : picked.value)
-      + "; those drafts are kept and cost nothing to show again.</p>"
-      + bulkMoney(st.cost);
-    return;
-  }
+      + "; these are kept and cost nothing to come back to.</p>"
+    : "";
 
   var n = st.items.length;
+  h += staleNote;
   h += '<div class="figstat" style="border-top:0;padding-top:0">'
     + '<div><span class="k">system</span><span class="v">' + esc(st.system_name) + "</span></div>"
     + '<div><span class="k">questions</span><span class="v">' + fmt(n) + "</span></div>"
@@ -4945,7 +4951,12 @@ function bulkRender(st) {
               : '<div class="bulkone">'
                 + '<button class="btn tiny bulkpolish">Polish text</button>'
                 + '<button class="btn tiny bulksend1">Send this one</button>'
-                + '<span class="note b1msg"></span></div>') : "")
+                + '<span class="note b1msg"></span></div>')
+         : it.state === "drafting" ? ""
+         : '<div class="bulkone"><button class="btn tiny bulkdraft1">'
+           + "Draft this one</button>"
+           + '<span class="note">one call, about US$ 1</span>'
+           + '<span class="note b1msg"></span></div>')
       + "</div>";
   });
   /* Keep what you typed. The poll rebuilds this whole card every two
@@ -5069,6 +5080,22 @@ document.addEventListener("click", function (ev) {
     if (eta) eta.textContent = "spaced takes about "
       + bulkSpan(gapMid(BULK_GAP) * Math.max(0, whole - 1));
     bulkSyncFloor();
+    return;
+  }
+
+  var d1 = ev.target.closest(".bulkdraft1");
+  if (d1) {
+    var dit = d1.closest(".bulkitem");
+    var dmsg = $(".b1msg", dit);
+    askContext($(".bulkq", dit).textContent, function (note) {
+      dmsg.textContent = "writing…";
+      bulkPost({ action: "draft_one", id: dit.dataset.id, extra: note })
+        .then(function (r) {
+          if (!r.ok) { dmsg.textContent = r.error; return; }
+          dmsg.textContent = "";
+          bulkWatch();
+        });
+    });
     return;
   }
 
