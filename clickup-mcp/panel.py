@@ -5048,9 +5048,24 @@ def build(live: bool) -> dict:
     return data
 
 
+# Panel/ is skipped below because the panel writes there and watching its
+# own output would loop. These two are the exception: collectors write
+# them and the panel only reads them, so they are input like any note. The
+# money numbers were coming from a Patreon export refreshed hours earlier
+# that nothing had noticed, and the page kept showing a third of the real
+# figures until some unrelated note happened to change.
+PANEL_INPUTS = ("patreon-members.json", "discord-members.json")
+
+
 def fingerprint() -> tuple:
     """Cheap change detector: (path, mtime, size) for every note in the vault."""
     items = []
+    for name in PANEL_INPUTS:
+        try:
+            st = (VAULT / "Panel" / name).stat()
+            items.append((name, st.st_mtime, st.st_size))
+        except OSError:
+            pass
     # Discord/ is an archive the panel never parses; watching thousands
     # of files there would rebuild the page on every backup write.
     skip = {".obsidian", ".trash", ".git", "Discord"}
