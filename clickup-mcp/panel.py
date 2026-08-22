@@ -4517,7 +4517,7 @@ def build_people(questions: list[dict]) -> list[dict]:
     for q in questions:
         p = people.setdefault(q["who"], {
             "who": q["who"], "channel": q["channel"],
-            "subscriber": q["subscriber"], "asked": 0, "open": 0,
+            "subscriber": q["subscriber"], "asked": 0, "praise": 0, "open": 0,
             "esc": 0, "last": q["date"],
             # When they first turned up, which is how long you have known
             # them and the difference between a new face and a regular.
@@ -4527,7 +4527,13 @@ def build_people(questions: list[dict]) -> list[dict]:
             # the difference between a viewer and someone in the community.
             "channels": {},
         })
-        p["asked"] += 1
+        # Praise is an entry from this person, and it is not a question.
+        # Counting it as one made 158 people who have only ever said thank
+        # you show up as people who had asked something.
+        if q["status"] == "praise":
+            p["praise"] += 1
+        else:
+            p["asked"] += 1
         if q["date"] and q["date"] < p["first"]:
             p["first"] = q["date"]
         if q["channel"]:

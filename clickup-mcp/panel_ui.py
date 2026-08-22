@@ -5870,7 +5870,14 @@ def _business_card(d: dict) -> str:
                 + (f'<br><span class="note">{sub}</span>' if sub else "")
                 + "</span></div>")
 
-    rows = line("people who have asked something", _fmt(len(people)))
+    # Everyone in `people` has written something; only some of it was a
+    # question. The label says asked, so the count means asked.
+    askers = sum(1 for p in people if p["asked"])
+    # Said without this, the number just drops by 158 one afternoon and
+    # reads as people lost rather than people recounted.
+    only_praise = sum(1 for p in people if not p["asked"] and p["praise"])
+    rows = line("people who have asked something", _fmt(askers),
+                f"{_fmt(only_praise)} more only left praise" if only_praise else "")
     if pat:
         rows += line("paying right now", _fmt(pat.get("paying", 0)),
                      f"of {_fmt(pat.get('total', 0))} on Patreon")
