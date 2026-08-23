@@ -4953,6 +4953,10 @@ function bulkRender(st) {
            + (it.state === "sent" || it.state === "filed" ? ""
               : '<div class="bulkone">'
                 + '<button class="btn tiny bulkpolish">Polish text</button>'
+                /* Same action a waiting row uses. start_ai_job only rejoins
+                   a job still running, so this is a fresh read of the vault
+                   rather than the cached answer coming back. */
+                + '<button class="btn tiny bulkdraft1">Draft again</button>'
                 + '<button class="btn tiny bulksend1">Send this one</button>'
                 + '<span class="note b1msg"></span></div>')
          : it.state === "drafting" ? ""
