@@ -2467,6 +2467,7 @@ function composerFor(qid) {
   parts.push('<div class="detbtns">'
     + '<button class="btn tiny" data-ai="search">Find existing answer</button>'
     + '<button class="btn tiny ai" data-ai="draft">Draft with Claude</button>'
+    + refsField()
     + '<button class="btn tiny" data-ctx>What is this about?</button>'
     + '<button class="btn tiny" data-mark="'
     + (q.status === "answered" ? "no-source" : "answered") + '">'
@@ -2509,7 +2510,8 @@ function composerFor(qid) {
          written, so a note would have nothing to change. */
       if (b.dataset.ai !== "draft") { runAi(wrap, b.dataset.ai, false); return; }
       askContext(q.text || "", function (extra) {
-        runAi(wrap, "draft", !!extra, extra);
+        var full = draftNote(det, extra);
+        runAi(wrap, "draft", !!full, full);
       });
     });
   });
@@ -4801,6 +4803,15 @@ function refsField() {
     + '" aria-label="How many video references to cite"></label>';
 }
 
+/* What actually reaches the model: the count first, then whatever you
+   typed. Both draft buttons go through here so the queue card and the
+   inbox row cannot end up meaning different things by the same field. */
+function draftNote(container, typed) {
+  var want = refsNote(container);
+  if (!want) return typed || "";
+  return typed ? want + String.fromCharCode(10) + typed : want;
+}
+
 function refsNote(row) {
   var box = $(".bulkrefs", row);
   var n = box ? parseInt(box.value, 10) : NaN;
@@ -5158,9 +5169,8 @@ document.addEventListener("click", function (ev) {
          keeps its old text and its buttons while the new one is written,
          so wiping this made a working two-minute call look like a dead
          button. The poll replaces it when the answer lands. */
-      var want = refsNote(dit);
-      var full = want ? (note ? want + String.fromCharCode(10) + note : want) : note;
-      bulkPost({ action: "draft_one", id: dit.dataset.id, extra: full })
+      bulkPost({ action: "draft_one", id: dit.dataset.id,
+                 extra: draftNote(dit, note) })
         .then(function (r) {
           if (!r.ok) { dmsg.textContent = r.error; return; }
           bulkWatch();
