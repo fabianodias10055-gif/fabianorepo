@@ -4981,6 +4981,12 @@ function bulkRender(st) {
                 ? document.activeElement.closest(".bulkitem").dataset.id : "";
   var caret = focused ? [document.activeElement.selectionStart,
                          document.activeElement.selectionEnd] : null;
+  /* The queue scrolls inside .bulklist, not down the page, so replacing
+     the card's markup builds a fresh container starting at the top. While
+     anything is drafting this render runs every two seconds, which is why
+     scrolling down the list kept throwing you back to the first row. */
+  var wasList = $(".bulklist", box);
+  var listTop = wasList ? wasList.scrollTop : 0;
 
   box.innerHTML = h + "</div>";
   /* Sized to what is in it rather than to a number picked once. These
@@ -4995,6 +5001,11 @@ function bulkRender(st) {
     t.style.height = "auto";
     t.style.height = Math.min(t.scrollHeight + 2, 460) + "px";
   });
+  /* After the boxes are sized, not before: the list is short until they
+     grow, so a scrollTop set first is clamped to a height that does not
+     exist yet and lands near the top anyway. */
+  var nowList = $(".bulklist", box);
+  if (nowList && listTop) nowList.scrollTop = listTop;
 
   $$(".bulkitem", box).forEach(function (el) {
     var t = $(".bulkdraft", el);
