@@ -123,6 +123,29 @@ def list_videos(playlist_id: str, limit: int | None) -> list[dict]:
             return videos
 
 
+def videos_by_id(ids: list[str]) -> list[dict]:
+    """Fetch named videos directly, in the shape list_videos returns.
+
+    The uploads playlist holds public videos only, so an unlisted one is
+    invisible to a walk of it however many times you run. The whole Learn
+    Blueprints series is unlisted, which is why none of it had a folder.
+    Asked for by id, YouTube hands it over like any other video of yours.
+    """
+    out: list[dict] = []
+    for i in range(0, len(ids), 50):
+        data = api_get("videos", {"part": "snippet,contentDetails",
+                                  "id": ",".join(ids[i:i + 50])})
+        for it in data.get("items", []):
+            sn = it["snippet"]
+            out.append({
+                "id": it["id"],
+                "title": sn["title"],
+                "published": sn["publishedAt"][:10],
+                "description": sn.get("description", ""),
+            })
+    return out
+
+
 def video_stats(ids: list[str]) -> dict[str, dict]:
     out = {}
     for i in range(0, len(ids), 50):
@@ -613,6 +636,10 @@ def main() -> int:
     ap.add_argument("--channel", default=CHANNEL_ID)
     ap.add_argument("--vault", default=str(VAULT))
     ap.add_argument("--max-videos", type=int, default=None)
+    ap.add_argument("--video-id", default="",
+                    help="one or more video ids, comma separated. Use this "
+                         "for unlisted videos: they are not in the uploads "
+                         "playlist and no amount of re-running finds them.")
     ap.add_argument("--force", action="store_true",
                     help="refetch comments even when the count has not changed")
     ap.add_argument("--dry-run", action="store_true")
@@ -647,8 +674,15 @@ def main() -> int:
     uploads = ch["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
     print(f"channel: {channel_name}")
 
-    videos = list_videos(uploads, args.max_videos)
-    print(f"videos found: {len(videos)}")
+    if args.video_id:
+        wanted = [v.strip() for v in args.video_id.split(",") if v.strip()]
+        videos = videos_by_id(wanted)
+        missing = set(wanted) - {v["id"] for v in videos}
+        print(f"videos asked for by id: {len(videos)}"
+              + (f", not found: {sorted(missing)}" if missing else ""))
+    else:
+        videos = list_videos(uploads, args.max_videos)
+        print(f"videos found: {len(videos)}")
 
     stats = video_stats([v["id"] for v in videos])
     known = existing_folders()
