@@ -192,7 +192,10 @@ def from_docs() -> list[dict]:
         # three different projects, and "where is the punch montage" has a
         # different answer in each; an answer that does not say which project
         # it describes is worse than no answer for the other two.
-        question = f"{system}{' ' + tier if tier else ''} - {heading}"
+        # Prefer the build folder when a system ships several builds, so two
+        # builds of the same tier cannot collide on an identical heading.
+        scope = sec.get("variant") or tier
+        question = f"{system}{' ' + scope if scope else ''} - {heading}"
         key = norm(question)
         if key in seen:
             continue
