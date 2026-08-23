@@ -2011,20 +2011,23 @@ Your job: search this vault (the current directory) and draft the reply.
   are free, what each subscription tier includes, and the short links to
   hand out. Answer where-do-I-get-the-assets questions from it, and give
   its locodev.dev short links rather than raw URLs.
-- Reference/<channel>/00 - Video index.md indexes somebody else's channel,
-  one row per video, searchable by node name. Mathew Wadstein has a video
-  on very nearly every Blueprint node. When the question is what a node
-  does, link his video for it and say in a line what it covers; do not
-  restate his explanation, and never present his video as ours. It is a
-  pointer, not a source: nothing in that file says how anything works, so
-  never cite it as evidence for an answer.
-- Reference/<channel>/transcripts/ holds transcripts of that channel, kept
-  with its owner's permission, which each note records. Use them to find
-  WHERE something is explained, then link that moment: every block carries
-  its start time and the link is already built. Cite by pointing, never by
-  reproducing: a line or two to say what is there is fine, a paragraph of
-  somebody else's speech pasted into a reply is not, whatever the
-  permission says. The words stay his; the link is what we hand over.
+- Reference/<channel>/ holds other people's tutorials, kept with their
+  permission. Eight channels are in there and about 3,400 transcripts.
+  Some have a 00 - Video index.md listing every video of that channel;
+  transcripts/ holds the transcripts themselves, sometimes grouped into
+  topic folders with their own 00 - Topics.md. Each note's frontmatter
+  carries the creator in `source:` and the video in `url:`, and its body is
+  blocks of speech, each one already a link to that second of the video.
+  Search these when the question is about Unreal itself rather than about
+  one of our systems: what a node does, how a feature works, why an engine
+  behaviour happens.
+  Two rules, and they are not optional. Cite by linking the moment you
+  found, never by reproducing the speech: a line saying what is covered
+  there is right, a paragraph of somebody's words pasted into our reply is
+  not, whatever the permission allows. And credit whoever `source:` names,
+  by name, every time; these are eight different people's work and a
+  transcript filed under the wrong one would put their video out under
+  another's name.
 - Systems/<slug>/06 - Open questions.md lists what the community is still
   asking about that system: use it to see how often and in which words
   this same problem repeats. It is demand, never a source: nothing in it
