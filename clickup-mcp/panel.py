@@ -76,6 +76,7 @@ WEIGHT_TOTAL = sum(f[3] for f in FACETS)
 MIN_CONTENT = 80
 
 CATALOG = [
+    ("character-leaning", "Character Leaning", "locomotion"),
     ("climb", "Climb", "locomotion"),
     ("crawl-locomotion", "Crawl Locomotion", "locomotion"),
     ("directional-ledge", "Directional Ledge", "locomotion"),
@@ -84,7 +85,6 @@ CATALOG = [
     ("hang-and-swing", "Hang and Swing", "locomotion"),
     ("ladder", "Ladder", "locomotion"),
     ("ledge-system", "Ledge System", "locomotion"),
-    ("gasp-ledge-mover", "GASP Ledge Mover", "locomotion"),
     ("motion-matching", "Motion Matching", "locomotion"),
     ("narrow-passage", "Narrow Passage", "locomotion"),
     ("obstacle-avoidance", "Obstacle Avoidance", "locomotion"),
@@ -1167,6 +1167,32 @@ def tier_of(path: Path) -> str:
     for part in parts:
         if part in TIER_FOLDERS:
             return part
+        # A system can ship as several builds of the same tier, e.g.
+        # "GASP Ledge Mover 5.7 Premium" next to "GASP Ledge CMC 5.5 Premium".
+        # The tier is the trailing word, so Premium/Standard filtering keeps
+        # working while the folder still names the build.
+        if part.rsplit(" ", 1)[-1] in TIER_FOLDERS:
+            return part.rsplit(" ", 1)[-1]
+    return ""
+
+
+def variant_of(path: Path) -> str:
+    """The build folder a note sits in, when the system ships several.
+
+    Returns the whole folder name, e.g. "GASP Ledge CMC 5.5 Standard", or ""
+    for a system filed under a plain tier folder. Two builds of one system
+    answer the same question differently, so the build name has to reach the
+    bot or the two sets of answers collide and one is silently dropped.
+    """
+    try:
+        parts = path.relative_to(VAULT / "Systems").parts[1:-1]
+    except ValueError:
+        return ""
+    for part in parts:
+        if part in TIER_FOLDERS:
+            return ""
+        if part.rsplit(" ", 1)[-1] in TIER_FOLDERS:
+            return part
     return ""
 
 
@@ -1401,7 +1427,7 @@ def doc_sections() -> list[dict]:
         if len(body) < MIN_SECTION:
             continue
         out.append({"path": path, "slug": system_of(path), "tier": tier_of(path),
-                    "heading": heading, "body": body})
+                    "variant": variant_of(path), "heading": heading, "body": body})
     return out
 
 
