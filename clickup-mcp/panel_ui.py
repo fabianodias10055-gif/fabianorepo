@@ -4933,6 +4933,11 @@ function bulkRender(st) {
 
   h += '<div class="bulklist">';
   st.items.forEach(function (it) {
+    /* A row mid-call keeps its old answer on screen, so without this the
+       buttons stay pressable and a second click starts a second billed
+       call over the top of the first. */
+    var busyRow = it.state === "drafting" || it.state === "polishing";
+    var inflight = busyRow ? " disabled" : "";
     var shown = bulkInBand(it, BULK_CONF_BAND);
     h += '<div class="bulkitem" data-id="' + esc(it.id) + '"'
       + (shown ? "" : ' style="display:none"') + ">";
@@ -4952,12 +4957,16 @@ function bulkRender(st) {
            + ">" + esc(it.draft) + "</textarea>"
            + (it.state === "sent" || it.state === "filed" ? ""
               : '<div class="bulkone">'
-                + '<button class="btn tiny bulkpolish">Polish text</button>'
+                + '<button class="btn tiny bulkpolish"' + inflight
+                + ">Polish text</button>"
                 /* Same action a waiting row uses. start_ai_job only rejoins
                    a job still running, so this is a fresh read of the vault
                    rather than the cached answer coming back. */
-                + '<button class="btn tiny bulkdraft1">Draft again</button>'
-                + '<button class="btn tiny bulksend1">Send this one</button>'
+                + '<button class="btn tiny bulkdraft1"' + inflight
+                + ">Draft again</button>"
+                + '<button class="btn tiny bulksend1"' + inflight
+                + ">Send this one</button>"
+                + (busyRow ? '<span class="note">writing a new one…</span>' : "")
                 + '<span class="note b1msg"></span></div>')
          : it.state === "drafting" ? ""
          : '<div class="bulkone"><button class="btn tiny bulkdraft1">'
@@ -5106,11 +5115,15 @@ document.addEventListener("click", function (ev) {
     var dit = d1.closest(".bulkitem");
     var dmsg = $(".b1msg", dit);
     askContext($(".bulkq", dit).textContent, function (note) {
-      dmsg.textContent = "writing…";
+      dmsg.textContent = "writing… about two minutes";
+      /* Left standing rather than cleared on success. Clearing it was the
+         only thing on the row that had changed: an already drafted row
+         keeps its old text and its buttons while the new one is written,
+         so wiping this made a working two-minute call look like a dead
+         button. The poll replaces it when the answer lands. */
       bulkPost({ action: "draft_one", id: dit.dataset.id, extra: note })
         .then(function (r) {
           if (!r.ok) { dmsg.textContent = r.error; return; }
-          dmsg.textContent = "";
           bulkWatch();
         });
     });
