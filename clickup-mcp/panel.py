@@ -2011,6 +2011,13 @@ Your job: search this vault (the current directory) and draft the reply.
   are free, what each subscription tier includes, and the short links to
   hand out. Answer where-do-I-get-the-assets questions from it, and give
   its locodev.dev short links rather than raw URLs.
+- Reference/<channel>/00 - Video index.md indexes somebody else's channel,
+  one row per video, searchable by node name. Mathew Wadstein has a video
+  on very nearly every Blueprint node. When the question is what a node
+  does, link his video for it and say in a line what it covers; do not
+  restate his explanation, and never present his video as ours. It is a
+  pointer, not a source: nothing in that file says how anything works, so
+  never cite it as evidence for an answer.
 - Systems/<slug>/06 - Open questions.md lists what the community is still
   asking about that system: use it to see how often and in which words
   this same problem repeats. It is demand, never a source: nothing in it
