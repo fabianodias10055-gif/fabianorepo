@@ -36,10 +36,30 @@ _VID = re.compile(r"[A-Za-z0-9_-]{11}")
 _TS = re.compile(r"(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})")
 _CUE_NUM = re.compile(r"^\d+$")
 _TAG = re.compile(r"<[^>]+>")
+# YouTube's own transcript panel copies as "MM:SS text", with a bare stamp
+# on the following line marking where the line ends. That is what a person
+# gets when they press copy, so it is what arrives.
+_PANEL = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?\s+(\S.*)$")
 
 
 def seconds_of(h: str, m: str, s: str) -> int:
     return int(h) * 3600 + int(m) * 60 + int(s)
+
+
+def parse_panel(text: str) -> list[tuple[int, str]]:
+    """(second, line) from the transcript panel's copy format."""
+    out: list[tuple[int, str]] = []
+    for raw in text.splitlines():
+        m = _PANEL.match(raw.strip())
+        if not m:
+            continue
+        a, b, c, body = m.groups()
+        # "1:02:03 text" is h:m:s; "01:02 text" is m:s. Three groups or two.
+        at = (seconds_of(a, b, c) if c else int(a) * 60 + int(b))
+        body = body.strip()
+        if body and (not out or out[-1][1] != body):
+            out.append((at, body))
+    return out
 
 
 def parse_captions(text: str) -> list[tuple[int, str]]:
@@ -111,6 +131,36 @@ def index_titles(channel: str) -> dict:
     return out
 
 
+def titles_to_ids(channel: str) -> dict:
+    """topic -> video_id, using the same splitter that built the index.
+
+    The files come named after the title, minus the characters Windows
+    refuses, so there is no id to read. Both sides are put through
+    collect_reference.split_title rather than compared raw: one definition
+    of what a title means, so the two cannot disagree about it.
+    """
+    import collect_reference as ref
+    out: dict[str, list] = {}
+    for vid, topic in index_titles(channel).items():
+        out.setdefault(topic_key(topic), []).append(vid)
+    return out
+
+
+_SQUASH = re.compile(r"[^a-z0-9]+")
+
+
+def topic_key(name: str) -> str:
+    """A title reduced to what survives being turned into a filename.
+
+    Windows refuses / ? : and the rest, so "ComboBox - Get / Set Selected
+    Option" reaches us as "ComboBox - Get  Set Selected Option", two spaces
+    where the slash was. Comparing letters and digits only makes both sides
+    the same string without having to guess which character went missing.
+    """
+    import collect_reference as ref
+    return _SQUASH.sub(" ", ref.split_title(name)[1].lower()).strip()
+
+
 def video_id_of(path: Path) -> str:
     """The id inside the filename, if the exporter kept it there."""
     stem = path.stem
@@ -158,10 +208,37 @@ def write_note(folder: Path, vid: str, title: str, blocks: list, src: Path,
     return path
 
 
+def read_sources(src: Path) -> list[tuple[str, str]]:
+    """(name, text) for every caption file, from a folder or a .zip.
+
+    A zip is what arrives when somebody exports in bulk, so unpacking it by
+    hand first is a step with nothing in it.
+    """
+    wanted = (".vtt", ".srt", ".txt")
+    if src.is_file() and src.suffix.lower() == ".zip":
+        import zipfile
+        with zipfile.ZipFile(src) as z:
+            return [(Path(n).name, z.read(n).decode("utf-8", "replace"))
+                    for n in z.namelist()
+                    if Path(n).suffix.lower() in wanted and not n.endswith("/")]
+    if src.is_dir():
+        return [(f.name, f.read_text(encoding="utf-8", errors="replace"))
+                for f in sorted(src.rglob("*"))
+                if f.suffix.lower() in wanted]
+    return []
+
+
+def cues_of(name: str, text: str) -> list:
+    """Whichever of the three shapes this file is in."""
+    if Path(name).suffix.lower() in (".vtt", ".srt"):
+        return parse_captions(text)
+    return parse_panel(text)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--from", dest="src", required=True,
-                    help="folder of .vtt or .srt files the owner exported")
+                    help="a folder or a .zip of .vtt, .srt or .txt files")
     ap.add_argument("--channel", required=True)
     ap.add_argument("--granted-by", required=True,
                     help="who gave permission, in their own name")
@@ -172,8 +249,8 @@ def main() -> int:
     args = ap.parse_args()
 
     src = Path(args.src)
-    if not src.is_dir():
-        print(f"ERROR: {src} is not a folder")
+    if not src.exists():
+        print(f"ERROR: {src} does not exist")
         return 1
     if not args.note:
         print("ERROR: --note is required. Say where the permission is written "
@@ -181,38 +258,51 @@ def main() -> int:
         return 1
 
     grant = {"by": args.granted_by, "on": args.granted_on, "note": args.note}
-    titles = index_titles(args.channel)
+    by_id = index_titles(args.channel)
+    by_topic = titles_to_ids(args.channel)
     folder = VAULT / "Reference" / yt.safe_name(args.channel) / "transcripts"
 
-    files = sorted(p for p in src.rglob("*")
-                   if p.suffix.lower() in (".vtt", ".srt"))
+    files = read_sources(src)
     if not files:
-        print(f"no .vtt or .srt files under {src}")
+        print(f"no .vtt, .srt or .txt files in {src}")
         return 1
 
-    done = skipped = 0
-    for f in files:
-        vid = video_id_of(f)
+    done, unmatched, empty, ambiguous = 0, [], [], []
+    for name, text in files:
+        stem = Path(name).stem
+        # The id if the exporter kept it, otherwise the title, which is all
+        # a transcript-panel copy is named after.
+        vid = video_id_of(Path(name))
         if not vid:
-            print(f"  skipped, no video id in the name: {f.name}")
-            skipped += 1
+            hits = by_topic.get(topic_key(stem)) or []
+            if len(hits) > 1:
+                ambiguous.append(name)
+                continue
+            vid = hits[0] if hits else ""
+        if not vid:
+            unmatched.append(name)
             continue
-        cues = parse_captions(f.read_text(encoding="utf-8", errors="replace"))
+        cues = cues_of(name, text)
         if not cues:
-            print(f"  skipped, no cues read: {f.name}")
-            skipped += 1
+            empty.append(name)
             continue
-        blocks = paragraphs(cues)
-        write_note(folder, vid, titles.get(vid, ""), blocks, f, grant, args.dry_run)
+        write_note(folder, vid, by_id.get(vid, ""), paragraphs(cues),
+                   Path(name), grant, args.dry_run)
         done += 1
 
     verb = "would import" if args.dry_run else "imported"
-    print(f"{verb} {done} transcripts into {folder}")
-    if skipped:
-        print(f"{skipped} skipped")
-    if not titles:
-        print("note: no video index found for this channel, so titles are "
-              "blank. Run collect_reference.py first and re-run to fill them.")
+    print(f"{verb} {done} of {len(files)} into {folder}")
+    for label, rows in (("no video matched, name it after the title or the id",
+                         unmatched),
+                        ("more than one video has this title", ambiguous),
+                        ("no timings read", empty)):
+        if rows:
+            print(chr(10) + f"{len(rows)} {label}:")
+            for r in rows[:8]:
+                print(f"  {r}")
+    if not by_id:
+        print("note: no video index for this channel. Run collect_reference.py "
+              "first so titles and ids can be matched.")
     return 0
 
 
