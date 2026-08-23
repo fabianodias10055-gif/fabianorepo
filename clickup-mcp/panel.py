@@ -2018,6 +2018,13 @@ Your job: search this vault (the current directory) and draft the reply.
   restate his explanation, and never present his video as ours. It is a
   pointer, not a source: nothing in that file says how anything works, so
   never cite it as evidence for an answer.
+- Reference/<channel>/transcripts/ holds transcripts of that channel, kept
+  with its owner's permission, which each note records. Use them to find
+  WHERE something is explained, then link that moment: every block carries
+  its start time and the link is already built. Cite by pointing, never by
+  reproducing: a line or two to say what is there is fine, a paragraph of
+  somebody else's speech pasted into a reply is not, whatever the
+  permission says. The words stay his; the link is what we hand over.
 - Systems/<slug>/06 - Open questions.md lists what the community is still
   asking about that system: use it to see how often and in which words
   this same problem repeats. It is demand, never a source: nothing in it
