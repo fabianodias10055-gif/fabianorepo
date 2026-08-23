@@ -7137,12 +7137,23 @@ def _bulk_card(d: dict) -> str:
         if q["status"] != "answered" and slug not in ("-", "", None):
             counts[slug] = counts.get(slug, 0) + 1
             names.setdefault(slug, q.get("system_name") or slug)
+    # Every system in the catalog, not only the ones with a queue. Built
+    # from questions alone, a system nobody has asked about had no option
+    # at all, so it could not be picked, and the panel looked like it had
+    # forgotten a product that is on sale. Character Leaning has eight
+    # questions in the vault and none of them tagged, which is exactly the
+    # case worth being able to open and look at.
+    catalog = [(sy["slug"], sy.get("name") or sy["slug"])
+               for sy in d.get("systems") or [] if sy.get("slug")]
+    for slug, name in catalog:
+        counts.setdefault(slug, 0)
+        names.setdefault(slug, name)
     if not counts:
         return ""
     opts = "".join(
         f'<option value="{escape(slug, quote=True)}">'
         f'{escape(names.get(slug, slug))} ({n} waiting)</option>'
-        for slug, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+        for slug, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
     return (
         '<section class="card" data-view="questions" id="bulkanswer">'
         '<h2><span class="he">📣</span>Answer a whole system</h2>'
