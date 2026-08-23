@@ -1300,6 +1300,12 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
 .btn.tiny.bulkconfsend:disabled { opacity:.45; }
 .conffloor { display:inline-flex; align-items:center; gap:5px;
   font-size:var(--t-xs); color:var(--ink2); }
+.refsbox { display:inline-flex; align-items:center; gap:4px;
+  font-size:var(--t-2xs); color:var(--ink3); }
+.refsbox input { width:52px; padding:3px 5px; font:inherit;
+  font-size:var(--t-xs); color:var(--ink);
+  background:var(--surface2); border:1px solid var(--line);
+  border-radius:var(--r-sm); }
 .conffloor input { width:58px; padding:4px 6px; font:inherit;
   color:var(--ink); background:var(--surface2);
   border:1px solid var(--line); border-radius:var(--r-sm); }
@@ -4497,6 +4503,13 @@ document.addEventListener("click", function (ev) {
 
 /* Typing filters the whole list rather than the ten that used to show. */
 document.addEventListener("input", function (ev) {
+  if (ev.target.classList && ev.target.classList.contains("bulkrefs")) {
+    /* Remembered so the next render, and the next row, opens on the number
+       you last chose rather than resetting under you every two seconds. */
+    BULK_REFS = ev.target.value;
+    $$(".bulkrefs").forEach(function (b) { if (b !== ev.target) b.value = BULK_REFS; });
+    return;
+  }
   if (ev.target.id === "bulkfloor") {
     var v = parseInt(ev.target.value, 10);
     if (isNaN(v)) return;               /* mid-edit empty box: wait for a number */
@@ -4709,6 +4722,9 @@ function bulkBusy(st) {
    list is filtered to. Both live here so the button's count and the rows
    you can see are always answering the same question. */
 var BULK_CONF_FLOOR = 85;
+/* How many videos from Reference/ a draft should cite. Empty means
+   let it decide from how many things the question actually names. */
+var BULK_REFS = "";
 var BULK_CONF_BAND = "all";
 function bulkConfOf(it) { return typeof it.conf === "number" ? it.conf : 0; }
 function bulkInBand(it, band) {
@@ -4773,6 +4789,27 @@ function bulkFailed(st) { return bulkCount(st, "failed"); }
 /* How well the vault backed this particular answer, as the model scored
    it. Same component and same 60/30 thresholds as the single-question
    view: a row that reads 24% here should read 24% there, and look it. */
+/* Sits beside whichever draft button is on the row. Left empty it changes
+   nothing and the draft cites one video per thing the question names; a
+   number makes that the target instead. It rides in on the note rather
+   than as a parameter of its own, which also means the job key changes
+   with it: asking for five after asking for two is a new call, not the
+   old answer coming back. */
+function refsField() {
+  return '<label class="refsbox">refs<input type="number" class="bulkrefs" '
+    + 'min="0" max="12" placeholder="auto" value="' + esc(BULK_REFS)
+    + '" aria-label="How many video references to cite"></label>';
+}
+
+function refsNote(row) {
+  var box = $(".bulkrefs", row);
+  var n = box ? parseInt(box.value, 10) : NaN;
+  if (isNaN(n) || n < 1) return "";
+  return "Cite " + n + " video reference" + (n === 1 ? "" : "s")
+    + " from the vault in this reply, the ones that best fit what the "
+    + "message asks about.";
+}
+
 function bulkConf(it) {
   if (it.state !== "drafted" && it.state !== "sent") return "";
   var c = typeof it.conf === "number" ? it.conf : 0;
@@ -4963,14 +5000,14 @@ function bulkRender(st) {
                    a job still running, so this is a fresh read of the vault
                    rather than the cached answer coming back. */
                 + '<button class="btn tiny bulkdraft1"' + inflight
-                + ">Draft again</button>"
+                + ">Draft again</button>" + refsField()
                 + '<button class="btn tiny bulksend1"' + inflight
                 + ">Send this one</button>"
                 + (busyRow ? '<span class="note">writing a new one…</span>' : "")
                 + '<span class="note b1msg"></span></div>')
          : it.state === "drafting" ? ""
          : '<div class="bulkone"><button class="btn tiny bulkdraft1">'
-           + "Draft this one</button>"
+           + "Draft this one</button>" + refsField()
            + '<span class="note">one call, about US$ 1</span>'
            + '<span class="note b1msg"></span></div>')
       + "</div>";
@@ -5121,7 +5158,9 @@ document.addEventListener("click", function (ev) {
          keeps its old text and its buttons while the new one is written,
          so wiping this made a working two-minute call look like a dead
          button. The poll replaces it when the answer lands. */
-      bulkPost({ action: "draft_one", id: dit.dataset.id, extra: note })
+      var want = refsNote(dit);
+      var full = want ? (note ? want + String.fromCharCode(10) + note : want) : note;
+      bulkPost({ action: "draft_one", id: dit.dataset.id, extra: full })
         .then(function (r) {
           if (!r.ok) { dmsg.textContent = r.error; return; }
           bulkWatch();

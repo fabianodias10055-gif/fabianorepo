@@ -1918,7 +1918,11 @@ VOICE_RULES = """- Write it the way the channel owner writes: direct, practical,
   trailing "..". Never in a node name, a variable, a URL, a timestamp, a
   version number or a file path, where a slip stops being charm and starts
   costing somebody an hour.
-- Under 120 words unless the fix genuinely needs numbered steps."""
+- Under 120 words of your own prose unless the fix genuinely needs numbered
+  steps. Links and their one-line labels do not count towards that: they
+  are the cheapest part of the reply to read and the most expensive part to
+  go and find, so a citation should never be dropped to make room for a
+  sentence."""
 
 
 def _voice() -> str:
@@ -2023,8 +2027,23 @@ Your job: search this vault (the current directory) and draft the reply.
   blocks of speech, each one already a link to that second of the video.
   Search these BEFORE answering whenever the question names an engine node,
   function, class or feature rather than one of our systems: what a node
-  does, how a feature works, why the engine behaves the way it does. Grep
-  the node's name across Reference/ and open what comes back.
+  does, how a feature works, why the engine behaves the way it does.
+  List EVERY engine thing the message names before you start writing, not
+  just the first one. "Timeline is not more performant than Event Tick"
+  names two, and answering it with one Timeline link leaves half the
+  message unanswered. Grep each name across Reference/ separately and open
+  what comes back for each.
+  Then give one link per thing you found. Two concepts, two links; four,
+  four. There is no cap and no virtue in stopping at two: each one saves
+  somebody a search, and the ones you leave out are the ones they have to
+  go and find themselves.
+  If the owner's note asks for a number of video references, that number is
+  the target and it outranks your own judgement of how many are needed.
+  Fewer only when the vault genuinely has no more that fit, and then say
+  which concept you could not cover rather than filling the gap with a
+  video that is nearly about it. Only skip a concept when nothing in Reference/
+  covers it, and say so plainly rather than padding the list with a video
+  that is nearly about it.
   When you find it, give the moment, not the video: the blocks carry the
   second they start at and the link is already built with &t= on it, so
   "Ali Elzoheiry walks through Gameplay Tags at 6:41: <that link>" is the
