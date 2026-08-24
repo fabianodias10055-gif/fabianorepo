@@ -4494,6 +4494,25 @@ document.addEventListener("click", function (ev) {
       });
     return;
   }
+  var ed = ev.target.closest(".lkedit");
+  if (ed) {
+    /* Opens the same drilldown a click on the row opens, then puts the
+       caret in the field that matters, so the button is a shortcut rather
+       than a second way of doing it. */
+    var erow = ed.closest("tr.lkrow");
+    var edet = erow.nextElementSibling;
+    if (!edet.classList.contains("open")) {
+      edet.classList.add("open");
+      erow.setAttribute("aria-expanded", "true");
+      ltDetail($(".ldet", edet), erow.dataset.prefix, erow.dataset.slug);
+    }
+    setTimeout(function () {
+      var f = $(".lurl", edet);
+      if (f) { f.focus(); f.select(); }
+    }, 400);
+    return;
+  }
+
   var row = ev.target.closest("tr.lkrow");
   if (row && !ev.target.closest("button")) {
     var det = row.nextElementSibling;
@@ -5652,7 +5671,11 @@ function renderLinks(d) {
       + '<td class="num">' + fmt(l.clicks_1h) + "</td>"
       + '<td class="num">' + fmt(l.clicks_7d) + "</td>"
       + '<td class="num">' + fmt(l.total_clicks) + "</td>"
-      + '<td class="num"><button class="btn tiny" data-copy="'
+      /* The destination has always been editable, inside the row that
+         opens when you click it. Nothing on the row said so, so it read as
+         a table you could only copy from. */
+      + '<td class="num"><button class="btn tiny lkedit">edit</button>'
+      + '<button class="btn tiny" data-copy="'
       + esc(shortUrl(l.prefix, l.slug)) + '">copy</button></td></tr>'
       + '<tr class="lkdet"><td colspan="5"><div class="ldet"></div></td></tr>';
   });
