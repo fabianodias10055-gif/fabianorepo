@@ -7648,31 +7648,41 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
                 .replace(" ", "\u2028")
                 .replace(" ", "\u2029"))
 
-    js = (JS.replace("__EPOCH__", str(d["epoch"]))
-            .replace("__LIVE__", "true" if live else "false")
-            .replace("__PAGE__", str(PAGE))
-            .replace("__BULK_GAPS__", embed(d.get("bulk_gaps") or {}))
-            .replace("__TOKEN__", token)
-            .replace("__AI_CACHE__", embed(d.get("ai_cache") or {}))
-            .replace("__QDATA__", embed(_question_payload(d["questions"])))
-            .replace("__LOOKUPS__", embed(_row_lookups()))
-            .replace("__SRCDET__", embed(d.get("source_details") or {}))
-            .replace("__CHARTS__", embed(_chart_payload(d)))
-            .replace("__BRANDS__", embed(list(_BRAND)))
-            .replace("__MANUAL_STATUS__", embed(list(manual_status)))
-            .replace("__CRM__", embed({
-                p["who"]: {"status": (p.get("note") or {}).get("status", ""),
-                           "next": (p.get("note") or {}).get("next", ""),
-                           "tags": (p.get("note") or {}).get("tags", []),
-                           "notes": (p.get("note") or {}).get("notes", ""),
-                           "derived": p.get("status", "")}
-                for p in d["people"]
-                if (p.get("note") or p.get("status"))}))
-            .replace("__PATRONS__", embed({
-                h: {"name": p["name"], "tiers": p["tiers"],
-                    "monthly": p["monthly_cents"], "lifetime": p["lifetime_cents"],
-                    "since": p["since"], "paying": p["paying"]}
-                for h, p in (d.get("patrons") or {}).items()})))
+    subs = {
+        "__EPOCH__": str(d["epoch"]),
+        "__LIVE__": "true" if live else "false",
+        "__PAGE__": str(PAGE),
+        "__BULK_GAPS__": embed(d.get("bulk_gaps") or {}),
+        "__TOKEN__": token,
+        "__AI_CACHE__": embed(d.get("ai_cache") or {}),
+        "__QDATA__": embed(_question_payload(d["questions"])),
+        "__LOOKUPS__": embed(_row_lookups()),
+        "__SRCDET__": embed(d.get("source_details") or {}),
+        "__CHARTS__": embed(_chart_payload(d)),
+        "__BRANDS__": embed(list(_BRAND)),
+        "__MANUAL_STATUS__": embed(list(manual_status)),
+        "__CRM__": embed({
+            p["who"]: {"status": (p.get("note") or {}).get("status", ""),
+                       "next": (p.get("note") or {}).get("next", ""),
+                       "tags": (p.get("note") or {}).get("tags", []),
+                       "notes": (p.get("note") or {}).get("notes", ""),
+                       "derived": p.get("status", "")}
+            for p in d["people"]
+            if (p.get("note") or p.get("status"))}),
+        "__PATRONS__": embed({
+            h: {"name": p["name"], "tiers": p["tiers"],
+                "monthly": p["monthly_cents"], "lifetime": p["lifetime_cents"],
+                "since": p["since"], "paying": p["paying"]}
+            for h, p in (d.get("patrons") or {}).items()}),
+    }
+    # One pass over the template, not a chain of .replace() calls. Each later
+    # replace in the chain rescanned everything the earlier ones had already
+    # inserted, so a question whose text contained a token like __LOOKUPS__
+    # (a commenter can type it) had that token, sitting inside the QDATA JSON
+    # string, replaced with a raw JSON object: invalid JavaScript, and the
+    # whole page went dead. re.sub never reprocesses what the replacement
+    # returns, so an inserted value carrying a token is left exactly as is.
+    js = re.sub(r"__[A-Z_]+__", lambda m: subs.get(m.group(0), m.group(0)), JS)
 
     # The timings and file counts moved to Admin, where someone looking for
     # them is looking for them. On every other screen they were noise at the
