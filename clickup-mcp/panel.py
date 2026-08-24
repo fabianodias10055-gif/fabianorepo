@@ -1719,7 +1719,7 @@ def _spend_room(cost: float = 0.0) -> tuple[bool, str]:
             _ai_spend["usd"] += cost
             try:
                 AI_SPEND_PATH.parent.mkdir(parents=True, exist_ok=True)
-                AI_SPEND_PATH.write_text(json.dumps(_ai_spend), encoding="utf-8")
+                _write_atomic(AI_SPEND_PATH, json.dumps(_ai_spend))
             except OSError:
                 pass                     # the day keeps working from memory
             return True, ""
@@ -1778,7 +1778,7 @@ def save_ai_result(question: dict, mode: str, result: dict) -> None:
         path = _ai_cache_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            path.write_text(json.dumps(cache), encoding="utf-8")
+            _write_atomic(path, json.dumps(cache))
         except OSError:
             pass  # a cache write failure must never break the reply flow
 
@@ -3142,6 +3142,7 @@ _bulk = {
     "reserving": False,
 }
 _bulk_lock = threading.Lock()
+_bulk_persist_lock = threading.Lock()
 
 
 
@@ -3178,8 +3179,16 @@ BULK_STATE_PATH = VAULT / "Panel" / "bulk-run.json"
 
 def _bulk_save() -> None:
     try:
+        # Serialized under the state lock so the snapshot is internally
+        # consistent, then written under its own lock so two savers cannot
+        # race the same temp file. _write_atomic replaces in one step, so a
+        # crash mid-write leaves the previous whole file, not a truncated
+        # one that _bulk_load would read as an empty queue.
+        with _bulk_lock:
+            data = json.dumps(_bulk)
         BULK_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        BULK_STATE_PATH.write_text(json.dumps(_bulk), encoding="utf-8")
+        with _bulk_persist_lock:
+            _write_atomic(BULK_STATE_PATH, data)
     except (OSError, TypeError, ValueError):
         pass          # a lost snapshot is survivable; a crashed run is not
 
@@ -4166,7 +4175,7 @@ def youtube_channel_stats(max_age_hours: int = 6) -> dict:
     }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(out), encoding="utf-8")
+        _write_atomic(path, json.dumps(out))
     except OSError:
         pass
     return out
@@ -5218,7 +5227,7 @@ def _update_history(out: Path, d: dict) -> list:
     hist = hist[-400:]
 
     try:
-        path.write_text(json.dumps(hist), encoding="utf-8")
+        _write_atomic(path, json.dumps(hist))
     except OSError:
         pass  # a failed history write must never block the panel itself
     return hist
