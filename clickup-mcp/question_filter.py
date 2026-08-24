@@ -34,10 +34,34 @@ PROBLEM_MARKERS = (
     "does not have", "doesn't have", "i dont see", "i don't see",
     "not showing", "not appearing", "missing", "wrong",
 )
+# The subset of the markers above that also appear inside an offer of help
+# ("if you need help, we're here"). Kept out of the signal that overrides
+# the offer gate, so a plain offer is not read as the request it is
+# describing, then counted again once past that gate.
+HELP_MARKERS = ("i need help", "need help", "help me", "any help")
 # "the montage is not playing", "the trace is not detecting": the shape is
 # "<thing> is not <verb>ing", which no single phrase above catches.
 NEGATED_VERB = re.compile(
     r"\b(is|are|was|were|does|do|did|will|wont|won.t)\s+not\s+\w+")
+
+# Not every request reports something broken. "if you can think of a better
+# solution, lemme know" is asking for help as plainly as "how do I", but it
+# opens with "if", carries no problem word and no question mark, so all
+# three gates above missed it and it fell through as chatter. These are the
+# phrases that ask for a solution, a suggestion or a better way, kept
+# specific enough that a statement ("thanks for the advice", "I recommend
+# this asset") does not trip them.
+REQUEST_MARKERS = (
+    "better solution", "better way", "better approach", "better method",
+    "better idea", "better option",
+    "any suggestion", "suggestions", "any idea", "any ideas",
+    "any advice", "advice on", "need advice",
+    "any recommendation", "recommendations",
+    "is there a way", "is there any way", "is there a better", "any way to",
+    "best way to", "best approach",
+    "any pointers", "point me",
+    "how would you", "how would i", "what would you",
+)
 
 # Every phrase above describes the thing that is broken. None describe the
 # person, and someone already helped once often reports the second failure
@@ -92,14 +116,29 @@ def classify(text: str, min_len: int = MIN_CHAT) -> str:
         return ""
     if len(t) < min_len:
         return ""
-    if "?" not in t and any(o in t for o in OFFERS):
+
+    # Whether there is a real problem or request underneath, computed before
+    # the offer test rather than after it: "it doesn't work; let me know if
+    # you need details" is a genuine report that merely contains an offer
+    # phrase, and dropping it on the offer alone lost the problem it opened
+    # with. The help words are left out of this signal on purpose, because
+    # "if you need help, we're here" is an offer whose only problem-like
+    # words ARE the offer; every other problem marker is kept.
+    asked = (any(m in t for m in PROBLEM_MARKERS if m not in HELP_MARKERS)
+             or any(m in t for m in REQUEST_MARKERS)
+             or NEGATED_VERB.search(t)
+             or STUCK_REPORT.search(t))
+
+    # An offer of help carries the same words as a request. Drop it only
+    # when there is no question mark and nothing but the offer's own help
+    # words underneath, so a genuine ask that happens to include an offer
+    # phrase survives.
+    if "?" not in t and not asked and any(o in t for o in OFFERS):
         return ""
 
-    if (any(m in t for m in PROBLEM_MARKERS)
-            or NEGATED_VERB.search(t)
-            or STUCK_REPORT.search(t)):
-        return QUESTION
-    if "?" in t:
+    # Past the offer gate, the help words count again: "help me set up the
+    # trace" with no offer around it is a request like any other.
+    if asked or "?" in t or any(m in t for m in HELP_MARKERS):
         return QUESTION
     if any(t.startswith(w + " ") for w in QUESTION_WORDS):
         return QUESTION

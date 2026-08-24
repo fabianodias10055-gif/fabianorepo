@@ -140,3 +140,34 @@ def test_the_two_collectors_share_one_implementation():
     import collect_discord, collect_youtube
     assert collect_discord._classify is qf.classify
     assert collect_youtube.qf.classify is qf.classify
+
+
+def test_a_soft_request_for_a_better_solution_is_a_question():
+    """No problem word, no question mark, opens with "if": all three gates
+    missed it, and it fell through as chatter. It is asking for help as
+    plainly as "how do I". This is the message the panel visibly dropped."""
+    text = ("if u can think of a better solution for it, lemme know, "
+            "id really appreciate it")
+    assert qf.classify(text, qf.MIN_COMMENT) == qf.QUESTION
+
+
+def test_asking_for_suggestions_or_a_better_way_is_a_question():
+    for text in ("any suggestions on how to make the arena bigger",
+                 "is there a better way to spawn enemies here",
+                 "if anyone has a better approach let me know"):
+        assert qf.classify(text, qf.MIN_COMMENT) == qf.QUESTION, text
+
+
+def test_a_problem_report_that_contains_an_offer_phrase_survives():
+    """The offer gate used to run before the problem test, so a real report
+    that happened to include "let me know if you need" died on the offer."""
+    text = "It doesn't work when I equip; let me know if you need more details"
+    assert qf.classify(text, qf.MIN_COMMENT) == qf.QUESTION
+
+
+def test_a_plain_offer_of_help_is_still_dropped():
+    """The offer's own "need help" words must not read as the request it is
+    describing. These carry no problem or request of their own."""
+    for text in ("if you need help, we're here happy to help anytime",
+                 "let me know if you need anything, glad to assist"):
+        assert qf.classify(text, qf.MIN_COMMENT) == "", text
