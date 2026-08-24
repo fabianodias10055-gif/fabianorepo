@@ -54,3 +54,15 @@ def test_the_functions_the_card_needs_are_defined():
                  "function bulkSendable", "function refsNote",
                  "function askContext"):
         assert name in js, f"{name} is missing from the built page"
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not on PATH")
+def test_check_js_blocks_a_broken_script():
+    """_check_js is the gate build() reads: it must return a reason for a
+    broken script (so the build keeps the last good page) and "" for a good
+    one. It used to only print a warning and let build() publish the broken
+    page anyway, which is how a dead page shipped twice."""
+    good = "<html><body><script>var x = 1; function f(){ return x; }</script></body></html>"
+    broken = "<html><body><script>var x = ; function f({ return }</script></body></html>"
+    assert panel._check_js(good) == ""
+    assert panel._check_js(broken), "a broken script must return a blocking reason"

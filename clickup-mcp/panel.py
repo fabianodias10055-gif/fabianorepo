@@ -5274,23 +5274,26 @@ def _update_history(out: Path, d: dict) -> list:
     return hist
 
 
-def _check_js(html: str) -> None:
+def _check_js(html: str) -> str:
     """Syntax-check the page's script before it ships.
 
     The behaviour layer is a Python string, so one collapsed escape breaks
     the whole script and the page silently loses every interaction while
-    still looking correct. That happened; a parse check catches it at build
-    time instead of in the browser. Skipped silently when node is absent:
-    this is a safety net, never a build dependency.
+    still looking correct. That happened, twice; a parse check catches it at
+    build time instead of in the browser. Returns "" when the script parses
+    or cannot be checked (no node), or a short reason when node reports an
+    error, so build() can keep the last good page rather than publish this
+    one. Skipped silently when node is absent: a safety net, not a build
+    dependency, and a checker that itself fails must never block a build.
     """
     import shutil
     import subprocess
     node = shutil.which("node")
     if not node:
-        return
+        return ""
     i, j = html.rfind("<script>"), html.rfind("</script>")
     if i < 0 or j < i:
-        return
+        return ""
     js = html[i + len("<script>"):j]
     tmp = Path(os.environ.get("TEMP", ".")) / "locodev_panel_check.js"
     try:
@@ -5300,10 +5303,10 @@ def _check_js(html: str) -> None:
                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if proc.returncode != 0:
             first = (proc.stderr or "").strip().splitlines()
-            print("WARNING: generated JS has a syntax error: "
-                  + " | ".join(first[:3]))
+            return " | ".join(first[:3]) or "node --check reported an error"
+        return ""
     except Exception:  # noqa: BLE001 - a broken checker must not block a build
-        pass
+        return ""
     finally:
         try:
             tmp.unlink()
@@ -5360,7 +5363,17 @@ def build(live: bool) -> dict:
             data["history"] = _update_history(out, data)
             (out / "00 - Operations Center.md").write_text(render_markdown(data), encoding="utf-8")
             html = render_html(data, live)
-            _check_js(html)
+            js_error = _check_js(html)
+            if js_error:
+                # A collapsed escape breaks the whole inline script and the
+                # page loses every interaction while still looking correct.
+                # Keep the last good panel.html and status.json rather than
+                # publish this; the next build after the fix ships normally.
+                # epoch is left untouched, so no browser reloads onto a dead
+                # page.
+                print("BUILD BLOCKED: generated JS has a syntax error, "
+                      "keeping the previous page: " + js_error)
+                return data
             _write_atomic(out / "panel.html", html)
             _write_atomic(
                 out / "status.json",
