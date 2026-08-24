@@ -3136,6 +3136,10 @@ _bulk = {
     "system": "", "system_name": "", "mode": "",
     "items": [], "done": 0, "sent": 0, "failed": 0,
     "next_at": 0.0, "stop": False, "note": "", "started_at": 0.0,
+    # Set while a start is building its list, before it commits a real
+    # phase. Reads as busy so a second start cannot slip through the window
+    # between the busy check and the commit. Never persisted as a live run.
+    "reserving": False,
 }
 _bulk_lock = threading.Lock()
 
@@ -3270,9 +3274,29 @@ def _bulk_busy() -> bool:
     stopped, and if the picker had moved to another system the finished
     answer landed in a list that no longer held that question.
     """
+    if _bulk.get("reserving"):
+        return True
     if _bulk["phase"] in ("drafting", "sending"):
         return True
     return any(i.get("state") in IN_FLIGHT for i in _bulk["items"])
+
+
+def _claim_bulk() -> bool:
+    """Reserve the run atomically. The busy check and the reservation are
+    one locked step, so two Draft or Send clicks arriving together cannot
+    both pass. Returns False if anything is already running or reserved."""
+    with _bulk_lock:
+        if _bulk_busy():
+            return False
+        _bulk["reserving"] = True
+        return True
+
+
+def _release_claim() -> None:
+    """Give a reservation back when a start bailed before committing a real
+    phase (an empty queue, or an error while building the list)."""
+    with _bulk_lock:
+        _bulk["reserving"] = False
 
 
 def bulk_draft(system: str, start: bool = True) -> dict:
@@ -3285,62 +3309,71 @@ def bulk_draft(system: str, start: bool = True) -> dict:
     the same way either way rather than by a second copy that could
     disagree with this one about what counts as waiting.
     """
-    if _bulk_busy():
+    if not _claim_bulk():
         return {"ok": False, "error": f"already {_bulk['phase']}; stop it first"}
+    # The run is reserved now. Every path out either commits a real phase
+    # (the update below clears the reservation) or releases it in the
+    # finally, so a start that bailed cannot wedge the next one.
+    committed = False
+    try:
+        name = next((n for s, n, _f in CATALOG if s == system), system)
+        queue = [q for q in parse_questions()
+                 if q.get("system") == system and q["status"] != "answered"]
+        if not queue:
+            return {"ok": False, "error": f"nothing unanswered under {name}"}
 
-    name = next((n for s, n, _f in CATALOG if s == system), system)
-    queue = [q for q in parse_questions()
-             if q.get("system") == system and q["status"] != "answered"]
-    if not queue:
-        return {"ok": False, "error": f"nothing unanswered under {name}"}
+        # Whatever was already written is filled in before the first model
+        # call, so the list opens showing every answer that exists rather
+        # than an empty queue that fills over half an hour. These cost
+        # nothing: they are the same cache the Suggest button writes to.
+        items, had = [], 0
+        for q in queue:
+            hit = cached_ai_result(q, "draft") or {}
+            draft = (hit.get("answer") or "").strip()
+            if draft:
+                had += 1
+            items.append({"id": q["id"], "code": q.get("code", ""),
+                          "who": q.get("who", ""),
+                          "asked": " ".join((q.get("text") or "").split())[:400],
+                          "channel": q.get("channel", ""),
+                          # Shown on the row: when it was asked is half of
+                          # whether to answer it, and the queue reaches back
+                          # four years.
+                          "date": q.get("date", ""),
+                          "draft": draft,
+                          # The cache keeps the score alongside the text, so
+                          # a row filled from it opens with the same bar a
+                          # fresh one earns rather than an empty one.
+                          "conf": int(hit.get("confidence") or 0) if draft else 0,
+                          "state": "drafted" if draft else "waiting",
+                          "msg": "written earlier, no new cost" if draft else ""})
 
-    # Whatever was already written is filled in before the first model call,
-    # so the list opens showing every answer that exists rather than an
-    # empty queue that fills over half an hour. These cost nothing: they
-    # are the same cache the Suggest button writes to.
-    items, had = [], 0
-    for q in queue:
-        hit = cached_ai_result(q, "draft") or {}
-        draft = (hit.get("answer") or "").strip()
-        if draft:
-            had += 1
-        items.append({"id": q["id"], "code": q.get("code", ""),
-                      "who": q.get("who", ""),
-                      "asked": " ".join((q.get("text") or "").split())[:400],
-                      "channel": q.get("channel", ""),
-                      # Shown on the row: when it was asked is half of
-                      # whether to answer it, and the queue reaches back
-                      # four years.
-                      "date": q.get("date", ""),
-                      "draft": draft,
-                      # The cache keeps the score alongside the text, so a
-                      # row filled from it opens with the same bar a fresh
-                      # one earns rather than an empty one.
-                      "conf": int(hit.get("confidence") or 0) if draft else 0,
-                      "state": "drafted" if draft else "waiting",
-                      "msg": "written earlier, no new cost" if draft else ""})
-
-    with _bulk_lock:
-        _bulk.update(phase="drafting" if start else "ready",
-                     system=system, system_name=name, mode="",
-                     done=had, sent=0, failed=0, next_at=0.0, stop=False,
-                     note="", started_at=time.time(), items=items)
-    if not start:
-        left = len(items) - had
-        _finish("ready", (f"{had} of {len(items)} already written and free to "
-                          f"send; {left} would be drafted") if left
-                else "every answer here is already written")
+        with _bulk_lock:
+            _bulk.update(phase="drafting" if start else "ready",
+                         system=system, system_name=name, mode="",
+                         done=had, sent=0, failed=0, next_at=0.0, stop=False,
+                         note="", started_at=time.time(), items=items,
+                         reserving=False)
+        committed = True
+        if not start:
+            left = len(items) - had
+            _finish("ready", (f"{had} of {len(items)} already written and free "
+                              f"to send; {left} would be drafted") if left
+                    else "every answer here is already written")
+            return {"ok": True, "queued": len(queue), "system_name": name,
+                    "already": had}
+        if had == len(items):
+            _finish("ready", f"every answer here was already written; "
+                             f"nothing new was generated")
+            return {"ok": True, "queued": len(queue), "system_name": name,
+                    "already": had}
+        _bulk_save()
+        threading.Thread(target=_bulk_draft_worker, daemon=True).start()
         return {"ok": True, "queued": len(queue), "system_name": name,
                 "already": had}
-    if had == len(items):
-        _finish("ready", f"every answer here was already written; "
-                         f"nothing new was generated")
-        return {"ok": True, "queued": len(queue), "system_name": name,
-                "already": had}
-    _bulk_save()
-    threading.Thread(target=_bulk_draft_worker, daemon=True).start()
-    return {"ok": True, "queued": len(queue), "system_name": name,
-            "already": had}
+    finally:
+        if not committed:
+            _release_claim()
 
 
 def _bulk_draft_worker() -> None:
@@ -3362,7 +3395,7 @@ def _bulk_draft_body() -> None:
     makes, so a question already drafted today costs nothing again and the
     daily ceiling is accounted for in one place rather than two.
     """
-    for idx, item in enumerate(list(_bulk["items"])):
+    for item in list(_bulk["items"]):
         if _bulk["stop"]:
             _finish("stopped", "stopped while drafting")
             return
@@ -3370,7 +3403,7 @@ def _bulk_draft_body() -> None:
             continue          # filled from the cache when the run was queued
         question = find_question_by_id(item["id"])
         if not question:
-            _mark(idx, "failed", "question no longer in the vault")
+            _mark_id(item["id"], "failed", "question no longer in the vault")
             continue
 
         room, why = _spend_room()
@@ -3397,15 +3430,16 @@ def _bulk_draft_body() -> None:
                 return
             st = ai_job_status(job)
             if st.get("state") == "done":
-                _mark(idx, "drafted", "", (st.get("answer") or "").strip(),
-                      st.get("confidence"))
+                _mark_id(item["id"], "drafted", "",
+                         (st.get("answer") or "").strip(), st.get("confidence"))
                 break
             if st.get("state") in ("error", "unknown"):
-                _mark(idx, "failed", st.get("error") or "the model call failed")
+                _mark_id(item["id"], "failed",
+                         st.get("error") or "the model call failed")
                 break
         else:
-            _mark(idx, "failed",
-                  f"no answer after {int(patience // 60)} minutes")
+            _mark_id(item["id"], "failed",
+                     f"no answer after {int(patience // 60)} minutes")
 
     _finish("ready", "")
 
@@ -3423,17 +3457,21 @@ def bulk_send(mode: str, edits: dict, gap: str = "wide",
     marking it skipped would say the opposite. A row with no score at all
     counts as below any floor, because unknown is not the same as high.
     """
-    if _bulk_busy():
-        return {"ok": False, "error": f"already {_bulk['phase']}; stop it first"}
-    # "ready" is a list waiting to be read; "stopped" and "done" are the
-    # same list after a run ended. Only "ready" was allowed, so pressing
-    # Stop locked the remaining drafts in for good: the card hid its send
-    # bar and this refused anyway, and the only way out was to draft the
-    # whole system again.
-    if _bulk["phase"] not in ("ready", "stopped", "done"):
-        return {"ok": False, "error": "draft the answers first"}
-
     with _bulk_lock:
+        # Checked and claimed under one lock so a second Send, or a Draft
+        # arriving together, cannot both pass. Reading a settled phase and
+        # then mutating in a separate step was the window two overlapping
+        # sends slipped through.
+        if _bulk_busy():
+            return {"ok": False,
+                    "error": f"already {_bulk['phase']}; stop it first"}
+        # "ready" is a list waiting to be read; "stopped" and "done" are the
+        # same list after a run ended. Only "ready" was allowed, so pressing
+        # Stop locked the remaining drafts in for good: the card hid its
+        # send bar and this refused anyway, and the only way out was to
+        # draft the whole system again.
+        if _bulk["phase"] not in ("ready", "stopped", "done"):
+            return {"ok": False, "error": "draft the answers first"}
         ready = 0
         for item in _bulk["items"]:
             text = (edits or {}).get(item["id"], item["draft"])
@@ -3449,7 +3487,8 @@ def bulk_send(mode: str, edits: dict, gap: str = "wide",
         if not ready:
             return {"ok": False, "error": "no draft has any text in it"}
         _bulk.update(phase="sending", mode=mode, sent=0, failed=0,
-                     stop=False, note="", started_at=time.time())
+                     stop=False, note="", started_at=time.time(),
+                     reserving=False)
     _bulk_save()
     threading.Thread(target=_bulk_send_worker, args=(mode, gap), daemon=True).start()
     return {"ok": True, "sending": ready, "mode": mode, "gap": gap}
@@ -3519,10 +3558,13 @@ def bulk_draft_one(qid: str, extra: str = "") -> dict:
     one is the same model call the run makes, on its own thread, marked
     back into the item so the card's poll draws it arriving.
     """
-    if _bulk_busy():
-        return {"ok": False, "error": f"already {_bulk['phase']}; stop it first"}
-
     with _bulk_lock:
+        # Busy check inside the same lock that claims the row, so it cannot
+        # pass while a whole-system start is between its check and its
+        # commit.
+        if _bulk_busy():
+            return {"ok": False,
+                    "error": f"already {_bulk['phase']}; stop it first"}
         item = next((it for it in _bulk["items"] if it["id"] == qid), None)
         if item is None:
             return {"ok": False, "code": "stale",
