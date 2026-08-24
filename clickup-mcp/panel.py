@@ -3463,6 +3463,15 @@ def bulk_send_one(qid: str, text: str) -> dict:
     for the eighty-eighth. It goes through deliver_reply like every other
     sender, so the already-answered guard and the log are the same.
     """
+    # Validated before the row is touched. Setting state to "sending" first
+    # and then rejecting empty text left the row stuck in "sending" with no
+    # worker to finish it, and _bulk_busy reads that as work in flight
+    # forever: draft, polish, send and stop all then refuse until the panel
+    # is restarted. Trim and check before acquiring the lock.
+    text = (text or "").strip()
+    if not text:
+        return {"ok": False, "error": "nothing to send"}
+
     # Held by identity, not by position: the list is rebuilt wholesale by
     # bulk_draft, and an index resolved before a twenty-second post can name
     # a different question, or nothing at all, by the time it returns.
@@ -3481,10 +3490,13 @@ def bulk_send_one(qid: str, text: str) -> dict:
                     "error": "still polishing this one; it will be ready shortly"}
         if _bulk["phase"] == "sending" and item["state"] == "queued":
             return {"ok": False, "error": "the run is about to send this one"}
+        # What goes out is what you reviewed. Storing the edit before the
+        # send means a reload shows the text that was actually posted, and a
+        # send that fails does not silently revert the row to the model's
+        # first draft, losing your correction.
+        item["draft"] = text
         item["state"] = "sending"
-    text = (text or "").strip()
-    if not text:
-        return {"ok": False, "error": "nothing to send"}
+    _bulk_save()
 
     res = deliver_reply(qid, text, offer={"source": "bulk-one",
                                           "system": _bulk["system"]})
