@@ -1547,6 +1547,7 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
   display:grid; place-items:center; background:var(--accent-bg); color:var(--accent); }
 #toast[data-kind="good"] .ti { background:var(--ok-bg); color:var(--ok); }
 #toast[data-kind="bad"] .ti { background:var(--crit-bg); color:var(--crit); }
+#toast[data-kind="warn"] .ti { background:var(--warn-bg); color:var(--warn); }
 
 footer { margin-top:var(--s6); padding-top:var(--s4); border-top:1px solid var(--line);
   color:var(--ink3); font-size:var(--t-xs); font-family:var(--mono); }
@@ -1935,8 +1936,27 @@ $("#updbtn").addEventListener("click", function () {
   var b = $("#updbtn");
   b.disabled = true;
   b.classList.add("spin");
-  fetch("/rebuild", { method: "POST" })
-    .then(function () { toast("Rebuild requested; the page refreshes when it lands.", "info"); })
+  toast("Fetching the latest Discord questions, then rebuilding "
+    + "(up to a minute)...", "info");
+  fetch("/refresh", { method: "POST" })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      /* The rebuild always ran; the message is about the Discord pull that
+         ran before it. A failed pull still refreshed everything already
+         collected, so it is a warning, not a dead end, and it keeps the
+         reason the collector gave rather than a generic line. */
+      var dc = (d && d.discord) || {};
+      if (dc.ok) {
+        toast(dc.added
+          ? "Pulled " + dc.added + " new Discord question"
+            + (dc.added === 1 ? "" : "s") + "; the page refreshes when it lands."
+          : "No new Discord questions; refreshed everything else.", "good");
+      } else {
+        toast("Discord fetch: " + (dc.error || "did not run")
+          + ". Refreshed what was already collected.", "warn");
+      }
+      /* Left spinning: the rebuilt page reloads under it in a moment. */
+    })
     .catch(function () {
       toast("Could not reach the panel server.", "bad");
       b.disabled = false;
@@ -7623,7 +7643,9 @@ def _header(d: dict, live: bool) -> str:
         f'<input id="q" type="search" placeholder="Search questions, users, systems..." '
         f'autocomplete="off" aria-label="Search questions"><kbd>Ctrl K</kbd>'
         f'<div id="qres" class="qres hide" role="listbox"></div></div>'
-        f'<button class="btn primary" id="updbtn" aria-label="Rebuild the panel now">'
+        f'<button class="btn primary" id="updbtn" '
+        f'aria-label="Pull the latest Discord questions and rebuild" '
+        f'title="Fetches the latest Discord questions, then rebuilds">'
         f'{_icon("refresh", 14)}Update</button>'
         f'<button class="btn icon" id="filtbtn" aria-label="Jump to filters" title="Filters">'
         f'{_icon("filter", 15)}</button>'

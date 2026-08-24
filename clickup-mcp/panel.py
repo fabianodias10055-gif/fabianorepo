@@ -5303,6 +5303,11 @@ def _check_js(html: str) -> str:
 
 
 _build_lock = threading.Lock()
+# One on-demand Discord fetch at a time from the panel. The 15-minute
+# scheduled task runs the same collector; this only guards the panel's own
+# button against a double click, not against that task, whose runs are brief
+# and rarely overlap a manual pull.
+_collect_lock = threading.Lock()
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -5371,6 +5376,65 @@ def build(live: bool) -> dict:
         finally:
             _state["building"] = False
     return data
+
+
+def collect_discord_now(timeout: int = 120) -> dict:
+    """Run the Discord collector once, incrementally, and report what it
+    pulled, so the Update button can bring in the latest questions before it
+    rebuilds.
+
+    It is the same script the scheduled task runs, launched with this
+    interpreter (the watcher's venv, which has the token store and the
+    dependencies) and the panel's own environment, since the collector is a
+    trusted helper that needs the Discord token, not the model subprocess
+    that _child_env deliberately starves. Best-effort: any failure is
+    returned with its own category rather than folded into a generic
+    message, and the caller rebuilds regardless.
+    """
+    import subprocess
+    if not _collect_lock.acquire(blocking=False):
+        return {"ok": False, "category": "busy",
+                "error": "a Discord fetch is already running"}
+    try:
+        script = BASE_DIR / "collect_discord.py"
+        if not script.is_file():
+            return {"ok": False, "category": "missing",
+                    "error": "collect_discord.py is not next to panel.py"}
+        try:
+            proc = subprocess.run(
+                [sys.executable, str(script)],
+                cwd=str(BASE_DIR), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=timeout,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "category": "timeout",
+                    "error": f"the Discord fetch did not finish in {timeout}s"}
+        except FileNotFoundError:
+            return {"ok": False, "category": "python",
+                    "error": "could not launch python for the collector"}
+        except Exception as exc:  # noqa: BLE001 - never kill the server thread
+            return {"ok": False, "category": "unknown",
+                    "error": f"{type(exc).__name__}: {exc}"[:200]}
+
+        out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        if proc.returncode != 0:
+            # The collector prints a specific ERROR: line for the cases it
+            # knows (missing token, vault not found). Surface that, and tell
+            # a missing token apart from any other runtime failure rather
+            # than reporting every non-zero exit the same way.
+            m = re.search(r"^ERROR:\s*(.+)$", out, re.M)
+            reason = m.group(1).strip() if m else f"exit code {proc.returncode}"
+            category = "auth" if "DISCORD_BOT_TOKEN" in out else "runtime"
+            return {"ok": False, "category": category, "error": reason}
+
+        added = int(m.group(1)) if (m := re.search(
+            r"added to the inbox:\s*(\d+)", out)) else 0
+        read = int(mr.group(1)) if (mr := re.search(
+            r"messages read:\s*(\d+)", out)) else 0
+        return {"ok": True, "added": added, "read": read}
+    finally:
+        _collect_lock.release()
 
 
 # Panel/ is skipped below because the panel writes there and watching its
@@ -5545,6 +5609,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/rebuild":
             build(live=True)
             return self._send_json({"ok": True})
+
+        if self.path == "/refresh":
+            # The Update button: pull the latest Discord questions first,
+            # then rebuild so they are on the list. The pull is best-effort
+            # and the rebuild always runs, so a fetch that fails still
+            # refreshes everything already collected, with the reason
+            # attached rather than swallowed.
+            discord = collect_discord_now()
+            build(live=True)
+            return self._send_json({"ok": True, "discord": discord})
 
         if self.path == "/needs":
             # Re-reads the vault and returns just this card's rows. A full
