@@ -385,23 +385,32 @@ def _delta24(hist: list, key: str) -> int:
 # --------------------------------------------------------------------------
 
 _DARK_TOKENS = """
-    --ground:#0a0c11; --surface:#111620; --surface2:#161d29; --surface3:#1c2534;
-    --line:#212a38; --line2:#1a2230;
-    --ink:#e9edf4; --ink2:#98a3b5; --ink3:#838da1;
-    --accent:#6c8dff; --accent-ink:#0a0c11; --accent-bg:#161f38; --accent-line:#2b3d68;
-    --ok:#3ecf82; --ok-bg:#0f2a1e; --ok-line:#1c4834;
-    --warn:#e9a83c; --warn-bg:#2b2113; --warn-line:#4a3a1c;
-    --crit:#f2645a; --crit-bg:#2d1618; --crit-line:#502428;
-    --info:#a98bfa; --info-bg:#221c39; --info-line:#3a2f60;
-    /* chart series, validated for the dark surface (OKLCH band 0.48-0.67) */
+    /* Taken from blueprint.locodev.dev: pure black ground, 4% cards, 8%
+       raised, 15% lines, 64% secondary ink, and white as the primary.
+       The site is monochrome because a landing page only has to look like
+       one thing. This is a dashboard, so the status hues below stay: they
+       carry meaning that weight and position cannot, and a confidence bar
+       that is grey at 24% and grey at 92% has stopped saying anything. */
+    --ground:#000000; --surface:#0a0a0a; --surface2:#141414; --surface3:#1f1f1f;
+    --line:#262626; --line2:#1c1c1c;
+    --ink:#ffffff; --ink2:#a3a3a3; --ink3:#737373;
+    --accent:#ffffff; --accent-ink:#000000;
+    --accent-bg:rgba(255,255,255,.10); --accent-line:rgba(255,255,255,.22);
+    --ok:#3fcf8e; --ok-bg:#0d1f17; --ok-line:#1b3d2c;
+    --warn:#e5a13a; --warn-bg:#221a0d; --warn-line:#453519;
+    /* the site's own destructive, hsl(0 84% 60%) */
+    --crit:#ef4343; --crit-bg:#241010; --crit-line:#4a2020;
+    --info:#a78bfa; --info-bg:#1a1626; --info-line:#332a4d;
+    /* chart series, kept: validated against a near-black surface and pure
+       black only widens the contrast */
     --ch-main:#6684fa; --ch-warn:#bd8324; --ch-mute:#707b90;
-    --mute-bg:#1a2230;
-    --av-l:33%; --av-s:52%;
-    --e1:0 1px 2px rgba(0,0,0,.4);
-    --e2:0 2px 10px rgba(0,0,0,.45);
-    --e3:0 18px 44px rgba(0,0,0,.6);
-    --skel:linear-gradient(90deg,#161d29 25%,#1e2836 37%,#161d29 63%);
-    --glow-a:rgba(108,141,255,.10); --glow-b:rgba(169,139,250,.08);
+    --mute-bg:#1c1c1c;
+    --av-l:36%; --av-s:38%;
+    --e1:0 1px 2px rgba(0,0,0,.6);
+    --e2:0 2px 10px rgba(0,0,0,.7);
+    --e3:0 18px 44px rgba(0,0,0,.85);
+    --skel:linear-gradient(90deg,#141414 25%,#1f1f1f 37%,#141414 63%);
+    --glow-a:rgba(255,255,255,.05); --glow-b:rgba(255,255,255,.03);
 """
 
 CSS = """
@@ -413,20 +422,21 @@ CSS = """
   --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:20px; --s6:24px;
   --s7:28px; --s8:32px; --s10:40px;
   /* ---- radii ---- */
-  --r-xs:6px; --r-sm:8px; --r-md:10px; --r-lg:14px; --r-xl:18px; --r-full:999px;
+  --r-xs:6px; --r-sm:8px; --r-md:8px; --r-lg:12px; --r-xl:16px; --r-full:999px;
   /* ---- motion ---- */
   --dur:.16s; --ease:cubic-bezier(.2,.6,.3,1);
   /* ---- type faces ---- */
-  --ui:-apple-system,"Segoe UI Variable Text","Segoe UI",system-ui,Roboto,Arial,sans-serif;
-  --mono:"Cascadia Mono","SF Mono",Consolas,ui-monospace,monospace;
+  --ui:"Geist","GeistSans",-apple-system,"Segoe UI Variable Text","Segoe UI",system-ui,Roboto,Arial,sans-serif;
+  --mono:"Geist Mono","GeistMono","Cascadia Mono","SF Mono",Consolas,ui-monospace,monospace;
   /* ---- light palette ---- */
-  --ground:#f6f7f9; --surface:#ffffff; --surface2:#f7f8fa; --surface3:#eef1f5;
-  --line:#e5e8ee; --line2:#eef0f4;
-  --ink:#101319; --ink2:#5a6373; --ink3:#636d7f;
-  --accent:#365df5; --accent-ink:#ffffff; --accent-bg:#eaefff; --accent-line:#c9d6ff;
-  --ok:#127c42; --ok-bg:#e7f6ed; --ok-line:#c2e6d1;
-  --warn:#9a600a; --warn-bg:#fdf2df; --warn-line:#f2ddb4;
-  --crit:#cc3030; --crit-bg:#fdecec; --crit-line:#f6cfcf;
+  --ground:#ffffff; --surface:#ffffff; --surface2:#fafafa; --surface3:#f5f5f5;
+  --line:#e5e5e5; --line2:#f0f0f0;
+  --ink:#000000; --ink2:#525252; --ink3:#737373;
+  --accent:#000000; --accent-ink:#ffffff;
+  --accent-bg:rgba(0,0,0,.06); --accent-line:rgba(0,0,0,.18);
+  --ok:#0f7a44; --ok-bg:#e8f6ee; --ok-line:#c3e6d2;
+  --warn:#8a5a0c; --warn-bg:#fcf2e0; --warn-line:#f0dcb6;
+  --crit:#d13434; --crit-bg:#fdeded; --crit-line:#f5d0d0;
   --info:#6d3cf0; --info-bg:#f0ebfe; --info-line:#dcd0fb;
   /* chart series, validated for white (CVD dE >= 16 on every pair) */
   --ch-main:#365df5; --ch-warn:#9a600a; --ch-mute:#838da1;
@@ -5834,14 +5844,11 @@ def _tiles(d: dict, n_systems: int, below: str = "") -> str:
     what the operator decides on when opening the panel. Those numbers moved
     into the System pressure card, where they sit next to the systems they
     describe. What is left answers: how much is waiting, how much of it is
-    ready to answer, and how old the oldest one is.
+    ready to answer.
     """
     hist = d.get("history") or []
     qs = d["questions"]
     open_qs = [q for q in qs if q["status"] in ("no-source", "escalated")]
-    escalated = sum(1 for q in open_qs if q["status"] == "escalated")
-    ready = sum(1 for q in open_qs if q.get("difficulty") == "easy")
-    oldest = min((q["date"] for q in open_qs), default="")
 
     def series(key):
         return [p.get(key, 0) for p in hist][-60:]
@@ -5870,12 +5877,12 @@ def _tiles(d: dict, n_systems: int, below: str = "") -> str:
          f"from {_fmt(sum(1 for p in d['people'] if p['open']))} people, "
          f"nobody has replied yet",
          delta("open", False), _spark(series("open"), "a", "var(--accent)")),
-        ("", "alert", "c-red", "Asked for you by name", _fmt(escalated),
-         "they used your name, so a reply is expected", "", ""),
-        ("", "sparkle", "c-green", "You can answer these today", _fmt(ready),
-         "the answer is already written somewhere in your vault", "", ""),
-        ("", "flame", "c-amber", "Waiting the longest", escape(oldest or "-"),
-         "that person has had no reply since this day", "", ""),
+        # Three tiles used to sit here and were dropped as noise. "Asked for
+        # you by name" counted one question in fifteen hundred. "You can
+        # answer these today" read 754 off a vault-match score nobody acts
+        # on per tile. "Waiting the longest" showed a date from 2022, which
+        # is a fact about the archive rather than about today; the age
+        # filter on the queue answers that better and can be narrowed.
         ("", "check", "c-violet", "You have answered", f"{d['answer_rate']}%",
          f"{_fmt(sum(1 for q in qs if q['status'] == 'answered'))} of "
          f"{_fmt(len(qs))} people who asked", delta("rate", True, " pp"),
