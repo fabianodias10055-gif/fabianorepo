@@ -581,6 +581,44 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
 .spin svg { animation:rot .9s linear infinite; }
 @keyframes rot { to { transform:rotate(360deg); } }
 
+/* Bell feed: a dropdown under the bell with the sync line and a scrollable
+   list of what came in since the last build. */
+.bellwrap { position:relative; }
+.actbox { position:absolute; right:0; top:calc(100% + 8px); width:min(380px, 92vw);
+  max-height:min(72vh, 560px); display:flex; flex-direction:column;
+  background:var(--surface2); border:1px solid var(--line); border-radius:var(--r-lg);
+  box-shadow:var(--shadow-lg, 0 12px 32px rgba(0,0,0,.45)); z-index:60; overflow:hidden; }
+.actbox.hide { display:none; }
+.actbox .achead { display:flex; align-items:baseline; justify-content:space-between;
+  gap:8px; padding:12px 14px 8px; }
+.actbox .achead b { font-size:var(--t-sm); }
+.actbox .achead .acbuilt { color:var(--ink3); font-size:var(--t-2xs); font-family:var(--mono); }
+.acsync { display:flex; flex-direction:column; gap:2px; padding:2px 14px 10px;
+  border-bottom:1px solid var(--line); }
+.acsrc { display:flex; align-items:center; gap:8px; font-size:var(--t-xs); padding:3px 0; }
+.acsrc .acname { display:flex; align-items:center; gap:6px; min-width:88px; color:var(--ink); }
+.acsrc .account { color:var(--ink2); }
+.acsrc .acwhen { margin-left:auto; color:var(--ink3); font-family:var(--mono);
+  font-size:var(--t-2xs); }
+.acsrc .acdot { width:7px; height:7px; border-radius:var(--r-full); background:var(--ok); flex:none; }
+.acsrc .acdot.warn { background:var(--warn); }
+.acsrc .acdot.stale { background:var(--ink3); }
+.aclist { overflow-y:auto; padding:4px 0; }
+.acitem { display:flex; gap:10px; padding:8px 14px; border-bottom:1px solid var(--line2);
+  cursor:pointer; }
+.acitem:last-child { border-bottom:0; }
+.acitem:hover { background:var(--surface3); }
+.acitem .acav { flex:none; margin-top:2px; }
+.acitem .acbody { min-width:0; flex:1; }
+.acitem .acmeta { display:flex; align-items:center; gap:6px; font-size:var(--t-2xs);
+  color:var(--ink3); margin-bottom:2px; }
+.acitem .acmeta .acwho { color:var(--ink2); font-weight:600; }
+.acitem .acq { font-size:var(--t-xs); color:var(--ink); line-height:1.35;
+  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.acempty { padding:22px 14px; text-align:center; color:var(--ink3); font-size:var(--t-xs); }
+.acfoot { padding:8px 14px; border-top:1px solid var(--line); }
+.acfoot button { width:100%; }
+
 /* mobile nav, hidden on desktop */
 .mnav { display:none; gap:var(--s2); overflow-x:auto; padding:0 0 var(--s4);
   scrollbar-width:none; }
@@ -1718,6 +1756,10 @@ var PATRONS = __PATRONS__;
 var LOOKUPS = __LOOKUPS__;
 /* what each Admin source shows when opened */
 var SRCDET = __SRCDET__;
+/* The bell feed: {events:[...newest first], sources:[...], built}. events
+   are questions that appeared since the previous build, sources the
+   per-collector last-sync line above them. */
+var ACTIVITY = __ACTIVITY__;
 /* Full monthly history for every chart. The browser slices the window,
    fits the trend and extends the projection, so the whole series has to
    be here rather than the twelve months a server-drawn chart would send. */
@@ -5601,7 +5643,101 @@ $("#filtbtn").addEventListener("click", function () {
   void f.offsetWidth;
   f.classList.add("flash");
 });
-$("#bellbtn").addEventListener("click", function () { goView("questions"); });
+/* The bell opens a feed of what arrived since the last build and a line per
+   source saying when it last synced, rather than jumping straight to the
+   list. "See all waiting" inside it keeps the old jump one click away. */
+function acAgeH(h) {
+  if (h === null || h === undefined) return "no sync yet";
+  if (h < 1) return "just now";
+  if (h < 24) return Math.round(h) + "h ago";
+  return Math.round(h / 24) + "d ago";
+}
+function acDot(h) {
+  if (h === null || h === undefined) return "stale";
+  if (h < 2) return "";
+  if (h < 24) return "warn";
+  return "stale";
+}
+function acWhen(at) {
+  /* "YYYY-MM-DD HH:MM:SS" -> a timestamp ageText understands. The space
+     form is parsed unevenly across browsers, so make it ISO first. */
+  var ms = Date.parse((at || "").replace(" ", "T"));
+  return isNaN(ms) ? esc(at || "") : ageText(ms / 1000);
+}
+function renderActivity() {
+  var box = $("#activitybox");
+  if (!box) return;
+  var A = (typeof ACTIVITY === "object" && ACTIVITY) || {};
+  var sources = A.sources || [], events = A.events || [];
+  var h = '<div class="achead"><b>Recent activity</b>'
+    + '<span class="acbuilt">rebuilt ' + acWhen(A.built) + "</span></div>";
+
+  h += '<div class="acsync">';
+  sources.forEach(function (s) {
+    var count = s.count === null || s.count === undefined ? ""
+      : fmt(s.count) + (s.open ? " · " + fmt(s.open) + " open" : "");
+    h += '<div class="acsrc"><span class="acname">'
+      + '<span class="acdot ' + acDot(s.age_h) + '"></span>'
+      + bicon(s.name.toLowerCase(), 13) + esc(s.name) + "</span>"
+      + '<span class="account">' + count + "</span>"
+      + '<span class="acwhen" title="' + esc(s.every) + '">'
+      + esc(acAgeH(s.age_h)) + "</span></div>";
+  });
+  h += "</div>";
+
+  if (!events.length) {
+    h += '<div class="acempty">Nothing new since the last rebuild. '
+      + "New Discord and YouTube questions land here as they arrive.</div>";
+  } else {
+    h += '<div class="aclist">';
+    events.forEach(function (e) {
+      var sys = e.system ? " · " + esc(e.system) : "";
+      h += '<div class="acitem" data-id="' + esc(e.id) + '">'
+        + '<span class="acav">' + bicon((e.channel || "").toLowerCase(), 15) + "</span>"
+        + '<div class="acbody"><div class="acmeta">'
+        + '<span class="acwho">' + esc(e.who || "someone") + "</span>"
+        + sys + " · " + acWhen(e.at) + "</div>"
+        + '<div class="acq">' + esc(e.text || "") + "</div></div></div>";
+    });
+    h += "</div>";
+  }
+  h += '<div class="acfoot"><button class="btn tiny" id="acseeall">'
+    + "See all waiting \\u2192</button></div>";
+  box.innerHTML = h;
+}
+function acClose() {
+  var box = $("#activitybox"), b = $("#bellbtn");
+  if (box) box.classList.add("hide");
+  if (b) b.setAttribute("aria-expanded", "false");
+}
+$("#bellbtn").addEventListener("click", function (ev) {
+  ev.stopPropagation();
+  var box = $("#activitybox");
+  if (!box) { goView("questions"); return; }
+  var open = box.classList.contains("hide");
+  if (open) { renderActivity(); box.classList.remove("hide"); }
+  else { box.classList.add("hide"); }
+  this.setAttribute("aria-expanded", String(open));
+});
+$("#activitybox").addEventListener("click", function (ev) {
+  ev.stopPropagation();
+  if (ev.target.closest("#acseeall")) { acClose(); goView("questions"); return; }
+  var item = ev.target.closest(".acitem");
+  if (!item) return;
+  acClose();
+  goView("questions");
+  var row = $('.qrow[data-id="' + (window.CSS && CSS.escape
+    ? CSS.escape(item.dataset.id) : item.dataset.id) + '"]');
+  if (row) {
+    row.scrollIntoView({ block: "center" });
+    row.classList.add("flashcard");
+    setTimeout(function () { row.classList.remove("flashcard"); }, 1400);
+  }
+});
+document.addEventListener("click", function () { acClose(); });
+document.addEventListener("keydown", function (ev) {
+  if (ev.key === "Escape") acClose();
+});
 
 /* ---- keyboard: search focus, j/k navigation, n next-open ---- */
 var kIdx = -1;
@@ -7651,9 +7787,14 @@ def _header(d: dict, live: bool) -> str:
         f'{_icon("filter", 15)}</button>'
         f'<button class="btn" id="themebtn" aria-label="Switch color theme">'
         f'{theme_icons}<span class="tlabel">Auto</span></button>'
-        f'<button class="btn icon bell" id="bellbtn" aria-label="People waiting for an answer" '
-        f'title="People waiting for an answer">{_icon("bell", 15)}'
-        f'<span class="badge">{_fmt(d["open_q"])}</span></button></div>'
+        f'<div class="bellwrap">'
+        f'<button class="btn icon bell" id="bellbtn" aria-haspopup="true" '
+        f'aria-expanded="false" aria-label="Recent activity and sync status" '
+        f'title="What came in, and when each source last synced">'
+        f'{_icon("bell", 15)}'
+        f'<span class="badge">{_fmt(d["open_q"])}</span></button>'
+        f'<div id="activitybox" class="actbox hide" role="region" '
+        f'aria-label="Recent activity"></div></div></div>'
     )
 
 
@@ -7679,6 +7820,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
         "__AI_CACHE__": embed(d.get("ai_cache") or {}),
         "__QDATA__": embed(_question_payload(d["questions"])),
         "__LOOKUPS__": embed(_row_lookups()),
+        "__ACTIVITY__": embed(d.get("activity_payload") or {}),
         "__SRCDET__": embed(d.get("source_details") or {}),
         "__CHARTS__": embed(_chart_payload(d)),
         "__BRANDS__": embed(list(_BRAND)),

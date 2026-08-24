@@ -5336,6 +5336,105 @@ def _write_atomic(path: Path, text: str) -> None:
         pass
 
 
+ACTIVITY_CAP = 200
+
+
+def _update_activity(out: Path, questions: list, generated_at: str) -> list:
+    """What arrived since the last build, so the bell can show it.
+
+    A question's date is when it was posted, not when it reached the vault,
+    so a message written two days ago and collected today would sort into
+    the past and never read as new. "New" is instead the set of ids this
+    build has that the last one had not seen. On the first run there is no
+    prior set and every id would look new, so the seen set is seeded
+    quietly rather than flooding the feed with the whole backlog.
+    """
+    path = out / "activity.json"
+    try:
+        kept = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        kept = {}
+    seen = set(kept.get("seen") or [])
+    events = kept.get("events") or []
+
+    current = [q["id"] for q in questions]
+    current_set = set(current)
+    first_run = not seen
+    new_ids = set() if first_run else (current_set - seen)
+
+    def as_event(q: dict, at: str) -> dict:
+        sysname = (q.get("system_name")
+                   if q.get("system") not in ("-", "", None) else "")
+        return {"at": at, "id": q["id"], "channel": q.get("channel", ""),
+                "who": q.get("who", ""), "code": q.get("code", ""),
+                "system": sysname or "", "status": q.get("status", ""),
+                "text": " ".join((q.get("text") or "").split())[:140]}
+
+    fresh = []
+    if first_run:
+        # No prior build to diff against, so the feed would open empty on a
+        # fresh install. Seed it with the most recent questions, stamped
+        # with their own date, so there is something to read straight away;
+        # from here on only genuinely new ids are added, stamped with the
+        # build time they first appeared.
+        for q in questions[:ACTIVITY_CAP // 4]:
+            fresh.append(as_event(q, q.get("date") or generated_at))
+    elif new_ids:
+        # questions come newest-first, so the feed reads top-down.
+        for q in questions:
+            if q["id"] in new_ids:
+                fresh.append(as_event(q, generated_at))
+
+    if not fresh and current_set == seen:
+        return events        # nothing moved; leave the file untouched
+
+    events = (fresh + events)[:ACTIVITY_CAP]
+    try:
+        _write_atomic(path, json.dumps({"seen": current, "events": events}))
+    except (OSError, TypeError, ValueError):
+        pass
+    return events
+
+
+def _activity_payload(d: dict) -> dict:
+    """Feed plus the per-source sync line the bell shows above it.
+
+    The sync age is the mtime of each collector's own output, which every
+    run rewrites, so it reads "when the collector last ran" rather than
+    "when a question last changed"; a run that pulls nothing still counts as
+    a sync, which is what you want to see when checking a source is alive.
+    """
+    panel_dir = VAULT / "Panel"
+    now = time.time()
+
+    def age_h(name: str):
+        try:
+            return round((now - (panel_dir / name).stat().st_mtime) / 3600, 1)
+        except OSError:
+            return None
+
+    qs = d.get("questions") or []
+
+    def n(ch: str) -> int:
+        return sum(1 for q in qs if q.get("channel") == ch)
+
+    def opn(ch: str) -> int:
+        return sum(1 for q in qs if q.get("channel") == ch
+                   and q.get("status") in OPEN_STATUSES)
+
+    sources = [
+        {"name": "Discord", "age_h": age_h("discord-members.json"),
+         "count": n("discord"), "open": opn("discord"), "every": "every 15 min"},
+        {"name": "YouTube", "age_h": age_h("youtube-channel.json"),
+         "count": n("youtube"), "open": opn("youtube"),
+         "every": "a few times a day"},
+        {"name": "Patreon", "age_h": age_h("patreon-members.json"),
+         "count": None, "open": None, "every": "twice a day"},
+    ]
+    return {"events": d.get("activity") or [], "sources": sources,
+            "built": d.get("generated_at", "")}
+
+
 def build(live: bool) -> dict:
     """Serialized: the /reply handler and the watcher thread can both ask for
     a rebuild inside the same 2s window; unserialized, their interleaved
@@ -5354,6 +5453,9 @@ def build(live: bool) -> dict:
             out = VAULT / "Panel"
             out.mkdir(parents=True, exist_ok=True)
             data["history"] = _update_history(out, data)
+            data["activity"] = _update_activity(out, data["questions"],
+                                                data["generated_at"])
+            data["activity_payload"] = _activity_payload(data)
             (out / "00 - Operations Center.md").write_text(render_markdown(data), encoding="utf-8")
             html = render_html(data, live)
             js_error = _check_js(html)
