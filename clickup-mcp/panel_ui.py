@@ -2071,14 +2071,19 @@ function sortRows() {
       if (ra !== rb) return ra - rb;
       var ca = +a.r.dataset.cov || 0, cb = +b.r.dataset.cov || 0;
       if (ca !== cb) return cb - ca;            /* answerable first */
-      return a.r.dataset.date < b.r.dataset.date ? -1 : 1;  /* oldest first */
+      /* ts, not date: a dozen messages from one afternoon share a date, so
+         "oldest first" among them has to read the real instant to be true. */
+      return (+a.r.dataset.ts || 0) - (+b.r.dataset.ts || 0);  /* oldest first */
     }
     var av, bv;
     if (key === "who") { av = a.r.dataset.who; bv = b.r.dataset.who; }
     else if (key === "status") { av = a.r.dataset.st; bv = b.r.dataset.st; }
     else if (key === "system") { av = a.r.dataset.sys; bv = b.r.dataset.sys; }
     else if (key === "cov") { av = +a.r.dataset.cov || 0; bv = +b.r.dataset.cov || 0; }
-    else { av = a.r.dataset.date; bv = b.r.dataset.date; }
+    /* The Age column sorts on the exact instant, not the day: Discord ids
+       carry their own time, so the message posted last in a busy afternoon
+       sorts newest instead of landing mid-list where it read as missing. */
+    else { av = +a.r.dataset.ts || 0; bv = +b.r.dataset.ts || 0; }
     if (av < bv) return -dir;
     if (av > bv) return dir;
     return 0;
@@ -6598,6 +6603,31 @@ def _age_days(iso: str, today: date) -> int:
         return 10 ** 6
 
 
+def _sort_ts(q: dict) -> int:
+    """A millisecond instant to order a row by, finer than its date.
+
+    Discord collects only a day, so a dozen messages from one afternoon all
+    tie on date and the newest sort leaves them in file order: the message
+    posted last shows up in the middle of the day's block, not at the top,
+    which reads as "the latest one never arrived". A Discord message id is a
+    snowflake that carries its own creation time, so the exact instant is
+    already in hand without collecting anything new. YouTube ids are not
+    time ordered, so those fall back to the date at midnight and keep the
+    behaviour they had.
+    """
+    from datetime import datetime as _dt
+    src = q.get("id", "")
+    if src.startswith("dc:"):
+        num = src[3:].split("#", 1)[0]
+        if num.isdigit():
+            return (int(num) >> 22) + 1420070400000   # Discord epoch, ms
+    try:
+        y, m, d = (int(x) for x in (q.get("date") or "")[:10].split("-"))
+        return int(_dt(y, m, d).timestamp() * 1000)
+    except (ValueError, TypeError, OverflowError, OSError):
+        return 0
+
+
 def _filters(questions: list, systems: list) -> str:
     ch_counts: dict[str, int] = {}
     st_counts: dict[str, int] = {}
@@ -6745,6 +6775,7 @@ def _question_rows(questions: list) -> str:
             f' data-st="{escape(q["status"], quote=True)}"'
             f' data-sys="{escape(q["system"], quote=True)}"'
             f' data-date="{escape(q["date"], quote=True)}"'
+            f' data-ts="{_sort_ts(q)}"'
             f' data-who="{escape(q["who"].lower(), quote=True)}"'
             f' data-df="{escape(q.get("difficulty", ""), quote=True)}"'
             f' data-cov="{q.get("coverage", 0)}"></tr>'
