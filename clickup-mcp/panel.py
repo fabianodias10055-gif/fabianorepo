@@ -3144,6 +3144,15 @@ def deliver_reply(qid: str, answer: str, force: bool = False,
 # people get an answer.
 # --------------------------------------------------------------------------
 
+# What "waiting for an answer" means, in one place. A question is open when
+# it has no answer written yet (no-source) or was set aside for you
+# specifically (escalated). Praise, out-of-scope and unknown are not
+# questions to answer, and answered is done. The inbox filter's Open chip
+# uses the same two, and drafting a whole system must not reach past them:
+# paying a model to write a reply to "great tutorial!" is the exact waste
+# this names out of existence.
+OPEN_STATUSES = ("no-source", "escalated")
+
 # How far apart a spaced run puts each reply, random inside the range so
 # the rhythm never looks mechanical. Ordered slowest-typing-first because
 # that is the order they appear in; the page reads this dict rather than
@@ -3347,10 +3356,16 @@ def bulk_draft(system: str, start: bool = True) -> dict:
     committed = False
     try:
         name = next((n for s, n, _f in CATALOG if s == system), system)
+        # Only the ones actually waiting. This used to draft everything that
+        # was not answered, which swept in praise, out-of-scope and unknown
+        # and paid a model to reply to each: a "great tutorial!" got a
+        # support answer written for it. OPEN_STATUSES is the same set the
+        # inbox Open chip counts, so what the run drafts matches what the
+        # queue calls waiting.
         queue = [q for q in parse_questions()
-                 if q.get("system") == system and q["status"] != "answered"]
+                 if q.get("system") == system and q["status"] in OPEN_STATUSES]
         if not queue:
-            return {"ok": False, "error": f"nothing unanswered under {name}"}
+            return {"ok": False, "error": f"nothing waiting under {name}"}
 
         # Whatever was already written is filled in before the first model
         # call, so the list opens showing every answer that exists rather
