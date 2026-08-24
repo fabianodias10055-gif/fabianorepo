@@ -888,6 +888,11 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
 
 .flashcard { animation:flash 1.3s var(--ease); }
 
+/* Review replaces the queue: same card, one list on screen at a time. */
+#questions.reviewing .filters, #questions.reviewing #bulkbar,
+#questions.reviewing .scroll, #questions.reviewing #qempty,
+#questions.reviewing .pager, #questions.reviewing .cnt { display:none; }
+.bulkslim { align-items:center; }
 .bulklist { display:flex; flex-direction:column; gap:var(--s3);
   margin-top:var(--s3); max-height:60vh; overflow-y:auto; }
 .bulkitem { border:1px solid var(--line); border-radius:var(--r-md);
@@ -4445,31 +4450,35 @@ document.addEventListener("click", function (ev) {
   var vb = ev.target.closest("[data-vbulk]");
   if (vb) {
     /* A question carries its system's display name, not its slug, and the
-       picker is keyed by slug. Matching on the label is what makes the two
+       filter is keyed by slug. Matching on the label is what makes the two
        meet without shipping the slug into every question in the payload. */
     var sys = vb.dataset.vbulk;
     goView("questions");
-    var sel = $("#bulksys");
-    if (sel && sys) {
-      var hit = [].filter.call(sel.options, function (o) {
-        return o.textContent.indexOf(sys + " (") === 0;
-      })[0];
-      if (hit) sel.value = hit.value;
+    var sel = $("#sysSel");
+    var hit = sys && [].filter.call(sel.options, function (o) {
+      return o.textContent.indexOf(sys + " (") === 0;
+    })[0];
+    if (!hit) {
+      $("#bulkmsg").textContent =
+        "these questions are not filed under a catalog system yet";
+      return;
     }
-    var card = $("#bulkanswer");
-    if (card) {
-      card.scrollIntoView({ block: "start" });
-      card.classList.add("flashcard");
-      setTimeout(function () { card.classList.remove("flashcard"); }, 1400);
-      /* The button says Draft, so it drafts. It used to only preselect the
-         picker, which left you looking at whatever run was on screen from
-         before: the picker said Weapon System while the list below still
-         said Bow and Arrow, 2 questions. */
-      var run = $("#bulkrun");
-      if (run && !run.disabled && sel && sel.value) run.click();
-    }
-    if (sel && !sel.value) $("#bulkmsg").textContent =
-      "these questions are not filed under a catalog system yet";
+    /* Through the filter state, not just the control: the table under the
+       run should be showing the same system the run is about to draft. */
+    state.sys = hit.value;
+    sel.value = hit.value;
+    page = 0;
+    apply();
+    syncUrl();
+    var card = $("#questions");
+    card.scrollIntoView({ block: "start" });
+    card.classList.add("flashcard");
+    setTimeout(function () { card.classList.remove("flashcard"); }, 1400);
+    /* The button says Draft, so it drafts. It used to only preselect the
+       picker, which left you looking at whatever run was on screen from
+       before. */
+    var run = $("#bulkrun");
+    if (run && !run.disabled) run.click();
     return;
   }
   var sug = ev.target.closest(".lsuggest");
@@ -4743,8 +4752,13 @@ function bulkRunning(st) {
 }
 function bulkBusy(st) {
   if (bulkRunning(st)) return true;
+  /* "sending" belongs here too. A single Send this one puts one row into
+     "sending" while the run phase stays "ready"; without this a tab opened
+     during that send reads the run as settled, stops polling, and shows
+     the row's buttons live over an item that is already on its way out. */
   return (st.items || []).some(function (i) {
-    return i.state === "polishing" || i.state === "drafting"; });
+    return i.state === "polishing" || i.state === "drafting"
+        || i.state === "sending"; });
 }
 
 /* Counted off the rows rather than off st.done, which counts anything no
@@ -4861,48 +4875,103 @@ function bulkConf(it) {
     + c + "%</span>";
 }
 
+/* One card, two states: the queue (filters and the table) or the review
+   (the run's drafts and the send controls). Never both at once: they are
+   the same questions, and showing them twice on one screen was the
+   two-card layout this replaces. */
+var BULK_MODE = "queue";
+function bulkMode(m) {
+  BULK_MODE = m;
+  var card = $("#questions");
+  if (card) card.classList.toggle("reviewing", m === "review");
+  if (LAST_BULK) bulkRender(LAST_BULK);
+}
+
+/* Edits to review drafts, kept off the DOM so they survive a mode switch,
+   a two-second re-render and a full page reload. The textarea alone lost
+   them the moment Back to the queue replaced the card, or the panel
+   rebuilt and the browser reloaded. Mirrored to sessionStorage by id. */
+var BULK_EDITS = (function () {
+  try { return JSON.parse(sessionStorage.getItem("lp-bulk-edits") || "{}"); }
+  catch (e) { return {}; }
+})();
+function bulkEditsSave() {
+  try { sessionStorage.setItem("lp-bulk-edits", JSON.stringify(BULK_EDITS)); }
+  catch (e) {}
+}
+/* Snapshot whatever is typed into the visible review rows into the map,
+   before any render or mode switch wipes them. Only real edits: a textarea
+   still holding the server draft is left out so it can update freely. */
+function bulkCaptureEdits() {
+  var box = $("#bulkbody");
+  if (!box) return;
+  var moved = false;
+  $$(".bulkitem", box).forEach(function (el) {
+    var t = $(".bulkdraft", el);
+    if (t && t.value !== t.defaultValue) {
+      BULK_EDITS[el.dataset.id] = t.value; moved = true;
+    }
+  });
+  if (moved) bulkEditsSave();
+}
+/* A sent or filed row is done; its edit must not resurrect on the next
+   render or outlive the run in storage. */
+function bulkPruneSent(st) {
+  var moved = false;
+  (st.items || []).forEach(function (it) {
+    if ((it.state === "sent" || it.state === "filed")
+        && BULK_EDITS[it.id] !== undefined) {
+      delete BULK_EDITS[it.id]; moved = true;
+    }
+  });
+  if (moved) bulkEditsSave();
+}
+
 var LAST_BULK = null;
 function bulkRender(st) {
   LAST_BULK = st;
   var box = $("#bulkbody");
   if (!box) return;
+  /* Before anything below can replace the card (the queue-mode early
+     return included), save what is typed and drop edits for rows that
+     have since gone out. */
+  bulkCaptureEdits();
+  bulkPruneSent(st);
   var busy = bulkRunning(st);
-  $("#bulkrun").disabled = busy;
-  $("#bulksys").disabled = busy;
+  var run = $("#bulkrun");
+  if (run) run.disabled = busy;
 
   var h = "";
-  if (st.phase === "idle") {
-    box.innerHTML = '<p class="figwhy">Pick a system and it drafts an answer '
-      + "for every question still waiting under it. Nothing is sent until you "
-      + "have read them.</p>" + bulkMoney(st.cost);
+  if (st.phase === "idle") { box.innerHTML = ""; return; }
+
+  /* On the queue, a run folds down to one line above the table; the full
+     review only replaces the table when asked for. Rendering both at once
+     was the old two-card layout: the same questions listed twice on one
+     screen. */
+  if (BULK_MODE !== "review") {
+    var send = bulkSendable(st).length;
+    box.innerHTML = '<div class="figbar bulkslim">'
+      + '<span class="note">' + (busy
+        ? esc(st.phase === "drafting" ? "Drafting" : "Sending") + " "
+          + esc(st.system_name) + ", " + fmt(st.done) + " of "
+          + fmt(st.items.length)
+        : "Last run: " + esc(st.system_name) + " &middot; "
+          + fmt(bulkDrafted(st)) + " of " + fmt(st.items.length) + " drafted"
+          + (bulkFailed(st) ? " &middot; " + fmt(bulkFailed(st)) + " failed" : "")
+          + (send ? " &middot; " + fmt(send) + " ready to send" : ""))
+      + "</span>"
+      + '<button class="btn tiny" id="bulkreview">'
+      + (busy ? "Watch it run" : "Review and send") + "</button></div>";
     return;
   }
 
-  /* A finished run persists, and the picker can have moved on since. Show
-     it as what it is rather than beside a picker naming something else. */
-  var picked = $("#bulksys");
-  /* Any settled phase, not just ready: a stopped run persists too, and it
-     was the stopped one sitting under a picker naming something else. */
-  var settled = st.phase === "ready" || st.phase === "done" ||
-                st.phase === "stopped";
-  var stale = picked && settled && st.system &&
-              picked.value && picked.value !== st.system;
-  /* Said above the list, not instead of it. Returning here hid every
-     drafted answer whenever the picker named something else, which it does
-     on any fresh load: the picker opens on the first system with work and
-     the run that persisted is usually a different one. The answers are
-     paid for and readable either way. */
-  var staleNote = stale
-    ? '<p class="figwhy">Showing the last run, ' + esc(st.system_name)
-      + ", " + fmt(bulkDrafted(st)) + " of " + fmt(st.items.length)
-      + " drafted. Press Draft answers to switch to "
-      + esc(picked.selectedOptions[0] ? picked.selectedOptions[0].textContent
-                                      : picked.value)
-      + "; these are kept and cost nothing to come back to.</p>"
-    : "";
-
   var n = st.items.length;
-  h += staleNote;
+  /* The review replaces the queue, so the way back sits where the queue
+     went. The old card instead kept a note explaining which run this was,
+     because its own picker could name a different system than the run on
+     screen; one picker now, so the mismatch it apologised for is gone. */
+  h += '<div class="figbar" style="border-top:0;padding-top:0">'
+    + '<button class="btn tiny" id="bulkback">&larr; Back to the queue</button></div>';
   h += '<div class="figstat" style="border-top:0;padding-top:0">'
     + '<div><span class="k">system</span><span class="v">' + esc(st.system_name) + "</span></div>"
     + '<div><span class="k">questions</span><span class="v">' + fmt(n) + "</span></div>"
@@ -5061,11 +5130,7 @@ function bulkRender(st) {
 
      Edits win over the server's copy, since the server's copy is what you
      were correcting. */
-  var mine = {};
-  $$(".bulkitem", box).forEach(function (el) {
-    var t = $(".bulkdraft", el);
-    if (t && t.value !== t.defaultValue) mine[el.dataset.id] = t.value;
-  });
+  var mine = BULK_EDITS;
   var focused = box.contains(document.activeElement) &&
                 document.activeElement.classList.contains("bulkdraft")
                 ? document.activeElement.closest(".bulkitem").dataset.id : "";
@@ -5110,8 +5175,12 @@ function bulkRender(st) {
 function bulkTick() {
   bulkPost({ action: "status" }).then(function (st) {
     if (!st.ok) return;
-    bulkRender(st);
     var busy = bulkBusy(st);
+    /* A run mid-flight when the tab opens goes straight to the review:
+       the progress is the thing to look at, and the send controls appear
+       there the moment it settles. */
+    if (busy && !BULK_POLL && BULK_MODE !== "review") bulkMode("review");
+    bulkRender(st);
     /* A run started before this tab existed has to be picked up here.
        Without this the one read at load drew a frozen snapshot: the tab
        showed "drafted 1 of 2" for as long as it stayed open, because only
@@ -5137,39 +5206,44 @@ function bulkEdits() {
     var t = $(".bulkdraft", el);
     if (t) out[el.dataset.id] = t.value;
   });
+  /* A row you edited and then filtered out of view, or that is off screen
+     because you are back on the queue, still carries its edit here. */
+  Object.keys(BULK_EDITS).forEach(function (id) {
+    if (out[id] === undefined) out[id] = BULK_EDITS[id];
+  });
   return out;
 }
 
-/* Changing the picker redraws. Without this the card kept showing the
-   previous run until something else happened to poll. */
-document.addEventListener("change", function (ev) {
-  if (ev.target && ev.target.id === "bulksys") {
-    /* Picking a system used to re-read the run that was already there, so
-       the card answered with the last system's numbers and a line about
-       pressing the button that spends money. Reading the queue is free, so
-       it is read. */
-    var picked = ev.target.value;
-    if (!picked) { bulkTick(); return; }
-    bulkPost({ action: "preview", system: picked }).then(function (r) {
-      var msg = $("#bulkmsg");
-      if (msg) msg.textContent = r && r.ok ? "" : (r && r.error) || "";
-      bulkTick();
-    });
-    return;
-  }
+/* Every keystroke in a review draft lands in the persistent map at once, so
+   a reload or a mode switch a moment later still has it. */
+document.addEventListener("input", function (ev) {
+  var t = ev.target;
+  if (!t || !t.classList || !t.classList.contains("bulkdraft")) return;
+  var it = t.closest(".bulkitem");
+  if (!it) return;
+  if (t.value !== t.defaultValue) BULK_EDITS[it.dataset.id] = t.value;
+  else delete BULK_EDITS[it.dataset.id];
+  bulkEditsSave();
 });
 
 document.addEventListener("click", function (ev) {
   if (ev.target.closest("#bulkrun")) {
-    var sys = $("#bulksys").value;
-    if (!sys) return;
+    var sys = $("#sysSel").value;
+    if (!sys || sys === "all" || sys === "-") {
+      $("#bulkmsg").textContent =
+        "pick one system in the filter first; drafting runs a system at a time";
+      return;
+    }
     $("#bulkmsg").textContent = "";
     bulkPost({ action: "draft", system: sys }).then(function (r) {
       if (!r.ok) { $("#bulkmsg").textContent = r.error; return; }
+      bulkMode("review");
       bulkWatch();
     });
     return;
   }
+  if (ev.target.closest("#bulkreview")) { bulkMode("review"); return; }
+  if (ev.target.closest("#bulkback")) { bulkMode("queue"); return; }
   if (ev.target.closest("#bulkstop")) {
     bulkPost({ action: "stop" }).then(bulkTick);
     return;
@@ -6368,7 +6442,7 @@ def _age_days(iso: str, today: date) -> int:
         return 10 ** 6
 
 
-def _filters(questions: list) -> str:
+def _filters(questions: list, systems: list) -> str:
     ch_counts: dict[str, int] = {}
     st_counts: dict[str, int] = {}
     for q in questions:
@@ -6385,6 +6459,16 @@ def _filters(questions: list) -> str:
             continue
         sys_counts[q["system"]] = sys_counts.get(q["system"], 0) + 1
         sys_names[q["system"]] = q["system_name"]
+    # Every system in the catalog, not only the ones asked about. Built
+    # from questions alone, a system nobody has asked about could not be
+    # picked at all, so its empty queue could not even be opened and the
+    # filter looked like it had forgotten a product that is on sale. The
+    # rule moved here from the bulk card when its picker and this one
+    # became the same control.
+    for sy in systems or []:
+        if sy.get("slug"):
+            sys_counts.setdefault(sy["slug"], 0)
+            sys_names.setdefault(sy["slug"], sy.get("name") or sy["slug"])
 
     total = len(questions)
     parts = ['<div class="filters" id="filters" role="group" aria-label="Question filters">',
@@ -6456,7 +6540,8 @@ def _filters(questions: list) -> str:
     parts.append('<select id="sysSel" class="fchip" aria-label="Filter by system">'
                  '<option value="all">All systems</option>'
                  '<option value="-">catalog wide</option>')
-    for slug in sorted(sys_counts, key=lambda s: -sys_counts[s]):
+    for slug in sorted(sys_counts,
+                       key=lambda s: (-sys_counts[s], sys_names[s].lower())):
         parts.append(f'<option value="{escape(slug, quote=True)}">'
                      f'{escape(sys_names[slug])} ({sys_counts[slug]})</option>')
     parts.append('</select>')
@@ -6578,7 +6663,18 @@ def _questions_card(d: dict) -> str:
         f'<span class="cnt">showing <span id="qcount"></span>'
         f'<span id="qnarrow" hidden></span> &middot; '
         f'j/k navigate &middot; n next open &middot; Enter to answer</span></h2>'
-        f'{_filters(d["questions"])}'
+        f'{_filters(d["questions"], d.get("systems") or [])}'
+        # The bulk run lives here, with the questions, because the two
+        # cards were the same list twice: pick the system in the filter,
+        # press the button, and the review replaces the table until you
+        # come back.
+        f'<div class="figbar" id="bulkbar">'
+        f'<button class="btn tiny primary" id="bulkrun" title="Draft an '
+        f'answer for every question still waiting under the system picked '
+        f'in the filter. Nothing is sent until you have read them.">'
+        f'Draft answers</button>'
+        f'<span class="note" id="bulkmsg"></span></div>'
+        f'<div id="bulkbody"></div>'
         f'<div class="scroll"><table aria-label="Incoming questions"><thead><tr>'
         f'<th scope="col" class="qcol">Question</th>'
         f'<th scope="col" data-sort="status" aria-sort="none">Status{arrow}</th>'
@@ -7211,53 +7307,6 @@ _NAV = [
 
 
 
-def _bulk_card(d: dict) -> str:
-    """Answer every open question of one system, drafted then reviewed.
-
-    It lives on Inbox, with the questions and the system filter, because
-    that is where you go when you want to answer things. On Answers sent,
-    which is where it was first put, it went unfound: that screen is the
-    record of what already went out.
-
-    data-view is written by hand rather than derived: _stamp_views reads the
-    screen off a card's own id, and "questions" is already taken by the
-    inbox table.
-    """
-    # Names come off the questions themselves rather than the catalog: this
-    # module has no business importing panel.py's tables, and a question
-    # already carries the display name it was filed under.
-    counts: dict[str, int] = {}
-    names: dict[str, str] = {}
-    for q in d["questions"]:
-        slug = q.get("system")
-        if q["status"] != "answered" and slug not in ("-", "", None):
-            counts[slug] = counts.get(slug, 0) + 1
-            names.setdefault(slug, q.get("system_name") or slug)
-    # Every system in the catalog, not only the ones with a queue. Built
-    # from questions alone, a system nobody has asked about had no option
-    # at all, so it could not be picked, and the panel looked like it had
-    # forgotten a product that is on sale. Character Leaning has eight
-    # questions in the vault and none of them tagged, which is exactly the
-    # case worth being able to open and look at.
-    catalog = [(sy["slug"], sy.get("name") or sy["slug"])
-               for sy in d.get("systems") or [] if sy.get("slug")]
-    for slug, name in catalog:
-        counts.setdefault(slug, 0)
-        names.setdefault(slug, name)
-    if not counts:
-        return ""
-    opts = "".join(
-        f'<option value="{escape(slug, quote=True)}">'
-        f'{escape(names.get(slug, slug))} ({n} waiting)</option>'
-        for slug, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
-    return (
-        '<section class="card" data-view="questions" id="bulkanswer">'
-        '<h2><span class="he">📣</span>Answer a whole system</h2>'
-        '<div class="figbar"><span class="figlab">system</span>'
-        f'<select id="bulksys" class="fchip">{opts}</select>'
-        '<button class="btn tiny primary" id="bulkrun">Draft answers</button>'
-        '<span class="note" id="bulkmsg"></span></div>'
-        '<div id="bulkbody"></div></section>')
 
 
 
@@ -7652,7 +7701,6 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 {_header(d, live)}
 {_mobile_nav()}
 {_stamp_views(_tiles(d, len(d["systems"]), _overview_cards(d)))}
-{_bulk_card(d)}
 {_stamp_views(_questions_card(d))}
 <div class="cols2">
 {_stamp_views(_answers_card(d) + _system_pressure_card(d, facets))}
