@@ -610,26 +610,14 @@ def resend_answer(code: str, when: str) -> dict:
         block = raw[m.end():end]
         if m.group(1) != when or f"question: {code}" not in block:
             continue
-        if re.search(r"^posted_to_platform:\s*yes", block, re.M):
-            return {"ok": False, "error": "already posted"}
-        am = re.search(r"\*\*A:\*\*\s*(.*)", block, re.S)
-        answer = (am.group(1).strip() if am else "")
-        if not answer:
-            return {"ok": False, "error": "no answer text stored"}
-
-        question = find_question_by_code(code)
-        if not question:
-            return {"ok": False, "error": "question no longer in the inbox"}
-        posted, msg = post_to_platform(question, answer)
-        if not posted:
-            return {"ok": False, "error": msg}
-
-        # Re-read and re-locate before writing. raw was taken before a
-        # network call that can last twenty seconds, and the log is
-        # appended to by every other sender; writing that snapshot back
-        # erased any reply filed in the meantime, and there is no way to
-        # recover one, because the collector skips blocks already marked
-        # answered.
+        # The stale raw only tells us which entry to act on. Everything that
+        # decides whether to post, and the post itself, runs under the lock
+        # on a fresh read. raw was taken before the lock, so two Retry clicks
+        # both saw posted_to_platform: no on the stale copy and both posted
+        # publicly. Holding the lock across the post, like deliver_reply
+        # does, makes the second click wait and then see "yes"; reading the
+        # log fresh also stops a stale snapshot being written back over a
+        # reply another sender filed in the meantime.
         with _reply_lock:
             fresh = path.read_text(encoding="utf-8", errors="replace")
             hit = None
@@ -641,10 +629,20 @@ def resend_answer(code: str, when: str) -> dict:
                     hit = (fm.end(), fend, fblock)
                     break
             if hit is None:
-                return {"ok": False, "message": msg,
-                        "error": "posted, but the log entry moved before it "
-                                 "could be marked; mark it by hand"}
+                return {"ok": False, "error": "answer not found in the log"}
             start, fend, fblock = hit
+            if re.search(r"^posted_to_platform:\s*yes", fblock, re.M):
+                return {"ok": False, "error": "already posted"}
+            am = re.search(r"\*\*A:\*\*\s*(.*)", fblock, re.S)
+            answer = (am.group(1).strip() if am else "")
+            if not answer:
+                return {"ok": False, "error": "no answer text stored"}
+            question = find_question_by_code(code)
+            if not question:
+                return {"ok": False, "error": "question no longer in the inbox"}
+            posted, msg = post_to_platform(question, answer)
+            if not posted:
+                return {"ok": False, "error": msg}
             new_block = re.sub(r"^posted_to_platform:\s*no\s*$",
                                "posted_to_platform: yes", fblock, count=1,
                                flags=re.M)
