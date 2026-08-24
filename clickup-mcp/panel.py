@@ -2056,6 +2056,12 @@ Your job: search this vault (the current directory) and draft the reply.
   by name, every time; these are eight different people's work and a
   transcript filed under the wrong one would put their video out under
   another's name.
+  Reference/LocoDev/ is the exception and it is ours. It holds no
+  transcripts, only an index pointing back at YouTube/Videos/, where our
+  own videos and their transcripts already are. Cite those the way you
+  cite any of ours, in the first person, "I go over that at 6:12": never
+  as a third party, and never crediting LocoDev by name in a reply LocoDev
+  is signing.
 - Systems/<slug>/06 - Open questions.md lists what the community is still
   asking about that system: use it to see how often and in which words
   this same problem repeats. It is demand, never a source: nothing in it

@@ -81,6 +81,12 @@ def api_get(endpoint: str, params: dict, cost: int = 1) -> dict:
         body = exc.read().decode("utf-8", errors="replace")
         if exc.code == 403 and "commentsDisabled" in body:
             return {"items": [], "_disabled": True}
+        # An unlisted video's comments need the owner's OAuth, and a plain
+        # key gets this instead. Same outcome as comments being off: there
+        # is nothing here to read. Raising killed the whole run over one
+        # video whose description and transcript were fine to collect.
+        if exc.code == 403 and "insufficient permissions" in body.lower():
+            return {"items": [], "_disabled": True}
         if exc.code == 403 and "quotaExceeded" in body:
             raise SystemExit(
                 "YouTube quota exhausted for today. The run stops here; what was "
