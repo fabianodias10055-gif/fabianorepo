@@ -671,10 +671,20 @@ def update_question_status(qid: str, new_status: str) -> bool:
         if block_id != qid:
             continue
         block = raw[start:end]
-        new_block = re.sub(r"^status:\s*.*$", f"status: {new_status}", block,
-                           count=1, flags=re.M)
-        if new_block == block:
-            return False  # no status: line found to replace
+        new_block, hits = re.subn(r"^status:\s*.*$", f"status: {new_status}",
+                                  block, count=1, flags=re.M)
+        if not hits:
+            # No status line to flip. A hand-written block can lack one, and
+            # returning False here left the question open after its reply had
+            # already gone out, so the next bulk run drafted and posted it a
+            # second time. Insert the line into the field region (the block
+            # begins at the heading's line-end, so its own leading newline
+            # separates status from the next field) rather than refuse: the
+            # mark is the thing that stops a second public reply.
+            if block.startswith("\n"):
+                new_block = "\nstatus: " + new_status + block
+            else:
+                new_block = "\nstatus: " + new_status + "\n" + block
         note.write_text(raw[:start] + new_block + raw[end:], encoding="utf-8")
         return True
     return False
@@ -3083,13 +3093,18 @@ def deliver_reply(qid: str, answer: str, force: bool = False,
         # write below is what stops it being sent a second time.
         posted, platform_msg = post_to_platform(question, answer)
 
-        update_question_status(qid, "answered")
+        # The status write is what stops this question being served again.
+        # It can only fail now if the block left the inbox between the
+        # lookup above and here, in which case parse_questions will not
+        # find it to re-serve either; either way the caller is told the
+        # truth rather than an unconditional success.
+        recorded = update_question_status(qid, "answered")
         append_answered_log(question, answer, posted,
                             answer_provenance(question, answer, offer or {}))
     # The reply becomes searchable knowledge immediately: the next Suggest
     # for the same topic finds it.
     build_answers_kb()
-    return {"ok": True, "posted_to_platform": posted,
+    return {"ok": True, "posted_to_platform": posted, "recorded": recorded,
             "platform_message": platform_msg}
 
 
