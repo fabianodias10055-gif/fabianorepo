@@ -3590,6 +3590,13 @@ def bulk_polish(qid: str, text: str, instruction: str) -> dict:
                     "error": "this list is from an older run; refreshing"}
         if item["state"] in ("sent", "sending", "polishing"):
             return {"ok": False, "error": f"already {item['state']}"}
+        # A whole-system send is walking the queue. Rewriting a row that is
+        # still queued would leave the send worker to post the pre-polish
+        # text, then the polish would land and revert the just-sent row to
+        # "drafted": a delivered reply shown as an unsent draft. Hold off.
+        if _bulk["phase"] == "sending" and item["state"] == "queued":
+            return {"ok": False,
+                    "error": "the run is sending; this one is about to go out"}
         item["state"] = "polishing"
         item["msg"] = instruction[:80]
         item["draft"] = text          # keep whatever you had typed
@@ -3642,25 +3649,39 @@ def _bulk_send_worker(mode: str, gap: str = "wide") -> None:
 
 
 def _bulk_send_body(mode: str, gap: str = "wide") -> None:
-    queued = [i for i, it in enumerate(_bulk["items"]) if it["state"] == "queued"]
-    for n, idx in enumerate(queued):
+    # Captured by id, not by position, and re-read before each send. A row
+    # can be polished, stopped or already sent between capturing the queue
+    # and reaching it: posting its old text then would publish a reply the
+    # review no longer matches, and marking by a stale index could land the
+    # result on another row. The id is stable across a rebuild; the index is
+    # not.
+    queued_ids = [it["id"] for it in _bulk["items"] if it["state"] == "queued"]
+    system = _bulk["system"]
+    for n, qid in enumerate(queued_ids):
         if _bulk["stop"]:
             _finish("stopped", f"stopped after {_bulk['sent']} sent")
             return
-        item = _bulk["items"][idx]
-        res = deliver_reply(item["id"], item["draft"],
-                            offer={"source": "bulk", "system": _bulk["system"]})
+        # Claim the row as "sending" in the same lock that confirms it is
+        # still queued, so a polish or a single-send cannot slip in over it.
+        with _bulk_lock:
+            item = next((it for it in _bulk["items"] if it["id"] == qid), None)
+            if item is None or item["state"] != "queued":
+                continue           # it moved on since the queue was captured
+            item["state"] = "sending"
+            draft = item["draft"]
+        res = deliver_reply(qid, draft,
+                            offer={"source": "bulk", "system": system})
         if res.get("ok"):
             state, msg = _sent_state(res)
-            _mark(idx, state, msg)
+            _mark_id(qid, state, msg)
             with _bulk_lock:
                 _bulk["sent"] += 1
         else:
-            _mark(idx, "failed", res.get("error", "failed"))
+            _mark_id(qid, "failed", res.get("error", "failed"))
             with _bulk_lock:
                 _bulk["failed"] += 1
 
-        if mode == "spaced" and n < len(queued) - 1:
+        if mode == "spaced" and n < len(queued_ids) - 1:
             lo, hi = BULK_GAPS.get(gap, BULK_GAPS["wide"])
             wait = random.randint(lo, hi)
             with _bulk_lock:
