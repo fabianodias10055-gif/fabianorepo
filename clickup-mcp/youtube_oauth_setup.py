@@ -1,11 +1,26 @@
 #!/usr/bin/env python3
-"""One-time setup so the panel's Reply button can actually post to YouTube.
+"""One-time setup for the two things on YouTube that need to be you.
 
 Reading comments only needs the plain YOUTUBE_API_KEY that collect_youtube.py
-already uses. POSTING a reply is a write action against YOUR channel, and
-YouTube requires OAuth for that: you sign in as the channel owner, in your own
-browser, and grant this script permission to manage comments. Nothing here can
-do that sign-in for you.
+already uses. Two things need more than a key, and both are asked for in one
+sign-in here:
+
+  posting a reply       a write against YOUR channel (youtube.force-ssl)
+  reading analytics     retention, traffic and conversions, which are
+                        private to the owner (yt-analytics.readonly)
+
+You sign in as the channel owner, in your own browser, and grant this script
+those two. Nothing here can do that sign-in for you.
+
+Adding the second scope means re-running this even if posting already works:
+a refresh token carries the scopes it was granted, and the Analytics API
+answers a token without its scope with a flat "insufficient authentication
+scopes" rather than saying which one it wanted.
+
+The YouTube Analytics API also has to be switched on for the Cloud project,
+alongside the Data API: console.cloud.google.com > APIs & Services > Library
+> "YouTube Analytics API" > Enable. That is separate from this sign-in and
+has to happen first.
 
 Steps:
   1. console.cloud.google.com, same project as the API key.
@@ -44,7 +59,15 @@ ENV_PATH = BASE_DIR / ".env"
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
-SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl"
+# Two scopes, asked for together so one sign-in covers both. force-ssl
+# is what posting a reply needs; yt-analytics.readonly is what reading
+# retention and traffic needs, and the Analytics API refuses the first
+# one with "insufficient authentication scopes" rather than saying
+# which it wanted.
+SCOPE = " ".join((
+    "https://www.googleapis.com/auth/youtube.force-ssl",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+))
 REDIRECT_PORT = 8766
 
 
