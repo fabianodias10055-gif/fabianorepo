@@ -3338,15 +3338,13 @@ def _release_claim() -> None:
         _bulk["reserving"] = False
 
 
-def bulk_draft(system: str, start: bool = True) -> dict:
-    """Draft an answer for every unanswered question of one system.
+def bulk_draft(system: str) -> dict:
+    """Draft an answer for every waiting question of one system.
 
-    With start=False it builds the same list and stops there. Picking a
-    system used to show nothing until you pressed the button that spends
-    money, so the only way to see what was waiting under Ledge System was
-    to start paying for it. Reading the queue is free; the list is built
-    the same way either way rather than by a second copy that could
-    disagree with this one about what counts as waiting.
+    The preview that used to build this list without drafting (start=False)
+    went away with the picker's change handler when the bulk card merged
+    into the questions card: the table itself, filtered by system, is the
+    preview now, so nothing calls for a second, non-drafting build.
     """
     if not _claim_bulk():
         return {"ok": False, "error": f"already {_bulk['phase']}; stop it first"}
@@ -3394,19 +3392,11 @@ def bulk_draft(system: str, start: bool = True) -> dict:
                           "msg": "written earlier, no new cost" if draft else ""})
 
         with _bulk_lock:
-            _bulk.update(phase="drafting" if start else "ready",
-                         system=system, system_name=name, mode="",
-                         done=had, sent=0, failed=0, next_at=0.0, stop=False,
-                         note="", started_at=time.time(), items=items,
-                         reserving=False)
+            _bulk.update(phase="drafting", system=system, system_name=name,
+                         mode="", done=had, sent=0, failed=0, next_at=0.0,
+                         stop=False, note="", started_at=time.time(),
+                         items=items, reserving=False)
         committed = True
-        if not start:
-            left = len(items) - had
-            _finish("ready", (f"{had} of {len(items)} already written and free "
-                              f"to send; {left} would be drafted") if left
-                    else "every answer here is already written")
-            return {"ok": True, "queued": len(queue), "system_name": name,
-                    "already": had}
         if had == len(items):
             _finish("ready", f"every answer here was already written; "
                              f"nothing new was generated")
@@ -5796,9 +5786,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json({"ok": True, **bulk_state()})
             if act == "stop":
                 return self._send_json(bulk_stop())
-            if act == "preview":
-                return self._send_json(bulk_draft(str(payload.get("system", "")),
-                                                  start=False))
             if act == "draft":
                 return self._send_json(bulk_draft(str(payload.get("system", ""))))
             if act == "send":
