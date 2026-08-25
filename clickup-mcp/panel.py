@@ -4896,18 +4896,27 @@ def _load_suppressions() -> tuple[set, str]:
     return out, ""
 
 
+# A practical address shape, the same one Resend accepts. The collector's
+# emailable flag does not catch a junk signup like "a@a.a" (single-letter
+# TLD): one of those in a batch makes Resend reject the whole send with a 422
+# and mail nobody, so a malformed address is dropped before it reaches a send.
+_VALID_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
 def _apply_suppressions(doc: dict, supp: set) -> dict:
-    """Drop suppressed addresses from every segment's email list and refresh
-    its count, so the page and the send both see the audience minus anyone
-    who opted out. One filter point, so the number shown and the number
-    mailed cannot disagree and trip the stale guard."""
-    if not supp:
-        return doc
+    """Clean every segment's email list at the one point counts are formed:
+    normalize each address, drop anything that is not a valid address (a junk
+    signup like a@a.a would otherwise fail the whole batch at send time), and
+    drop anyone on the suppression list. The count is refreshed to match, so
+    the number shown and the number mailed cannot disagree and trip the stale
+    guard."""
     for seg in (doc.get("segments") or {}).values():
         if isinstance(seg, dict) and isinstance(seg.get("emails"), list):
-            seg["emails"] = [e for e in seg["emails"]
-                             if (e or "").strip().lower() not in supp]
-            seg["count"] = len(seg["emails"])
+            clean = [m for m in
+                     sorted({(e or "").strip().lower() for e in seg["emails"]})
+                     if _VALID_EMAIL.fullmatch(m) and m not in supp]
+            seg["emails"] = clean
+            seg["count"] = len(clean)
     return doc
 
 
@@ -5703,8 +5712,9 @@ def _email_audience(segment: str) -> tuple[list[str], str]:
     # list that was never emailable-filtered, is not a fallback to email
     # blindly: it is a reason to say "refresh", not to mail unconfirmed or
     # banned accounts.
-    emails = sorted({e.strip().lower() for e in (seg.get("emails") or [])
-                     if e and "@" in e})
+    emails = sorted({m for m in
+                     ((e or "").strip().lower() for e in (seg.get("emails") or []))
+                     if _VALID_EMAIL.fullmatch(m)})
     if not emails:
         return [], ("this audience has no addresses in the snapshot; run "
                     "collect_wingman.py and try again")

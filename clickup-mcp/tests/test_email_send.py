@@ -161,6 +161,22 @@ def test_apply_suppressions_filters_and_recounts():
     assert seg["emails"] == ["a@x.dev"] and seg["count"] == 1
 
 
+def test_apply_suppressions_drops_malformed_addresses():
+    doc = {"segments": {"never_generated": {
+        "emails": ["good@x.dev", "a@a.a", "nope", "GOOD@x.dev"], "count": 4}}}
+    out = panel._apply_suppressions(doc, set())
+    seg = out["segments"]["never_generated"]
+    # a@a.a (1-char TLD) and "nope" (no @) dropped; the case dup collapses
+    assert seg["emails"] == ["good@x.dev"] and seg["count"] == 1
+
+
+def test_email_audience_filters_malformed(monkeypatch):
+    monkeypatch.setattr(panel, "_load_wingman", lambda: {"segments": {
+        "never_generated": {"emails": ["ok@x.dev", "a@a.a", "nope"]}}})
+    emails, err = panel._email_audience("never_generated")
+    assert emails == ["ok@x.dev"] and err == ""
+
+
 def test_send_refuses_when_suppression_unreadable(monkeypatch):
     monkeypatch.setattr(panel, "get_secret", lambda n, d="": "hi@locodev.dev")
     monkeypatch.setattr(panel, "_load_suppressions",
