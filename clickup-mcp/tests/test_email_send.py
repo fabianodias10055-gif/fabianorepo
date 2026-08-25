@@ -131,6 +131,51 @@ def test_reply_to_and_list_unsubscribe_attached(monkeypatch):
         "<mailto:hi@locodev.dev?subject=unsubscribe>"
 
 
+def test_load_suppressions_missing_is_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(panel, "_wingman_private_dir", lambda: tmp_path)
+    supp, err = panel._load_suppressions()
+    assert supp == set() and err == ""
+
+
+def test_load_suppressions_reads_and_normalizes(tmp_path, monkeypatch):
+    (tmp_path / "email-suppress.txt").write_text(
+        "# unsubscribes\nA@X.dev\n\n  b@x.dev  \n", encoding="utf-8")
+    monkeypatch.setattr(panel, "_wingman_private_dir", lambda: tmp_path)
+    supp, err = panel._load_suppressions()
+    assert err == "" and supp == {"a@x.dev", "b@x.dev"}
+
+
+def test_load_suppressions_malformed_errors_without_leaking(tmp_path, monkeypatch):
+    (tmp_path / "email-suppress.txt").write_text(
+        "a@x.dev\nnot an address\n", encoding="utf-8")
+    monkeypatch.setattr(panel, "_wingman_private_dir", lambda: tmp_path)
+    supp, err = panel._load_suppressions()
+    assert supp == set() and "line 2" in err and "not an address" not in err
+
+
+def test_apply_suppressions_filters_and_recounts():
+    doc = {"segments": {"never_generated":
+                        {"emails": ["a@x.dev", "b@x.dev"], "count": 2}}}
+    out = panel._apply_suppressions(doc, {"b@x.dev"})
+    seg = out["segments"]["never_generated"]
+    assert seg["emails"] == ["a@x.dev"] and seg["count"] == 1
+
+
+def test_send_refuses_when_suppression_unreadable(monkeypatch):
+    monkeypatch.setattr(panel, "get_secret", lambda n, d="": "hi@locodev.dev")
+    monkeypatch.setattr(panel, "_load_suppressions",
+                        lambda: (set(), "the unsubscribe list has a bad entry on line 3"))
+    monkeypatch.setattr(panel, "_email_audience", lambda seg: (["a@x.dev"], ""))
+    sent = {"n": 0}
+    monkeypatch.setattr(panel, "_resend_request",
+                        lambda *a, **k: (sent.__setitem__("n", sent["n"] + 1),
+                                         ("ok", _ids(1)))[1])
+    out = panel.send_wingman_email("never_generated", "S", "<p>x</p>",
+                                   expect=1, confirm="1")
+    assert out["ok"] is False and "line 3" in out["error"]
+    assert sent["n"] == 0
+
+
 def test_reply_to_refuses_header_injection(monkeypatch):
     monkeypatch.setattr(panel, "get_secret", lambda name, default="": {
         "RESEND_REPLY_TO": "evil@x.dev\r\nBcc: victim@x.dev"}.get(name, ""))

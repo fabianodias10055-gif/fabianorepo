@@ -4867,6 +4867,50 @@ def _wingman_snapshot() -> Path:
         return _wingman_private_dir() / "wingman-users.json"
 
 
+def _load_suppressions() -> tuple[set, str]:
+    """The unsubscribe list from the private folder: one address per line,
+    normalized the way recipients are (lowercased, trimmed), '#' lines and
+    blanks ignored. Returns (set, error).
+
+    A missing file is normal and gives an empty set. A file that exists but
+    cannot be read, or a nonblank line that is not a plausible address, gives
+    an error that names the line number only, never the address. The send
+    refuses on that error rather than risk mailing someone who opted out, so
+    an unreadable list fails closed instead of silently emailing everyone.
+    """
+    path = _wingman_private_dir() / "email-suppress.txt"
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        return set(), ""
+    except OSError as exc:
+        return set(), f"the unsubscribe list could not be read ({type(exc).__name__})"
+    out = set()
+    for n, line in enumerate(text.splitlines(), 1):
+        s = line.strip().lower()
+        if not s or s.startswith("#"):
+            continue
+        if "@" not in s or any(c.isspace() for c in s):
+            return set(), f"the unsubscribe list has a bad entry on line {n}"
+        out.add(s)
+    return out, ""
+
+
+def _apply_suppressions(doc: dict, supp: set) -> dict:
+    """Drop suppressed addresses from every segment's email list and refresh
+    its count, so the page and the send both see the audience minus anyone
+    who opted out. One filter point, so the number shown and the number
+    mailed cannot disagree and trip the stale guard."""
+    if not supp:
+        return doc
+    for seg in (doc.get("segments") or {}).values():
+        if isinstance(seg, dict) and isinstance(seg.get("emails"), list):
+            seg["emails"] = [e for e in seg["emails"]
+                             if (e or "").strip().lower() not in supp]
+            seg["count"] = len(seg["emails"])
+    return doc
+
+
 def _load_wingman() -> dict:
     """The LocoAI/Wingman account rollup, written by collect_wingman.py from
     Supabase into the private folder. The panel only reads it, so a Supabase
@@ -4905,7 +4949,11 @@ def _load_wingman() -> dict:
         print(f"[wingman] could not clear the legacy vault copy "
               f"({type(exc).__name__}); it may still hold customer emails")
 
-    return _read(private)
+    # Best effort for display: a malformed list simply is not applied here,
+    # and the send path re-checks and refuses on that same error rather than
+    # mailing an unfiltered audience.
+    supp, _ = _load_suppressions()
+    return _apply_suppressions(_read(private), supp)
 
 
 def scan() -> dict:
@@ -5778,6 +5826,13 @@ def send_wingman_email(segment: str, subject: str, body_html: str,
                 return {"ok": True, "sent": 1, "failed": 0, "to": to}
             return {"ok": False, "error": str(res), "unknown": outcome == "unknown"}
 
+        # Refuse before resolving if the unsubscribe list will not parse:
+        # better to send nothing than to mail someone who opted out because
+        # the list could not be read. A clean list is already applied to the
+        # audience inside _email_audience.
+        _supp, supp_err = _load_suppressions()
+        if supp_err:
+            return {"ok": False, "error": supp_err}
         emails, err = _email_audience(segment)
         if err:
             return {"ok": False, "error": err}
