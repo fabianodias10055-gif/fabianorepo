@@ -5758,12 +5758,20 @@ def _logo_header() -> str:
             f'max-width:120px"></div>')
 
 
-def _email_html(body_html: str) -> str:
+def _email_html(body_html: str, plain: bool = False) -> str:
     """The message, framed by the brand logo above and the one footer every
     bulk mail must carry below (who it reached and why, and a way out). Both
     are added server-side so no send can forget them. The body is validated
     by _validate_email_body first, so what arrives here cannot swallow the
-    footer."""
+    footer.
+
+    Plain mode returns the body untouched: no logo and no styled footer, so
+    the email reads as a personal note and is far likelier to land in the
+    primary inbox than in promotions. The operator's own unsubscribe line
+    then stands in for the footer, which send_wingman_email requires the body
+    to carry before a plain send is allowed."""
+    if plain:
+        return body_html
     return (
         f"{_logo_header()}{body_html}\n"
         '<hr style="border:none;border-top:1px solid #ddd;margin:24px 0 12px">'
@@ -5788,21 +5796,28 @@ def _reply_address() -> str:
     return raw
 
 
-def _email_extra() -> dict:
+def _email_extra(plain: bool = False) -> dict:
     """Fields added to every send: a reply-to so replies reach a real inbox,
     and a List-Unsubscribe mailto so mail clients show a native unsubscribe
     shortcut. This is a mailto shortcut, not RFC 8058 one-click, which would
-    need a public HTTPS endpoint that syncs suppression; the panel has none."""
+    need a public HTTPS endpoint that syncs suppression; the panel has none.
+
+    Plain mode drops the List-Unsubscribe header: it is one of the strongest
+    "this is bulk mail" signals gmail uses to file a message under promotions,
+    and the whole point of plain mode is the primary inbox. The body's own
+    reply-unsubscribe line still gives every recipient a way out."""
     reply = _reply_address()
     if not reply:
         return {}
+    if plain:
+        return {"reply_to": reply}
     return {"reply_to": reply,
             "headers": {"List-Unsubscribe": f"<mailto:{reply}?subject=unsubscribe>"}}
 
 
 def send_wingman_email(segment: str, subject: str, body_html: str,
                        expect: int = -1, test_to: str = "",
-                       confirm: str = "") -> dict:
+                       confirm: str = "", plain: bool = False) -> dict:
     """Send one message to one audience, or a single test to one address.
 
     expect is the count the page showed when the send was pressed, and
@@ -5812,6 +5827,13 @@ def send_wingman_email(segment: str, subject: str, body_html: str,
     audience, or a direct request, none of which should mail. The client
     also blocks the send behind a typed-count dialog above ten recipients,
     but the client can be bypassed, so this check is the one that holds.
+
+    plain sends the body as written, with no logo, no styled footer, and no
+    List-Unsubscribe header, so it reads as a personal note and leans toward
+    the primary inbox. Every other guard stays: the count confirmation, the
+    suppression list, per-recipient batching, and idempotency. Because plain
+    mode drops the standard footer, the body must carry its own way out; that
+    is enforced below, so a plain send can never go out without one.
     """
     subject = (subject or "").strip()
     body_html = (body_html or "").strip()
@@ -5822,11 +5844,15 @@ def send_wingman_email(segment: str, subject: str, body_html: str,
     bad_body = _validate_email_body(body_html)
     if bad_body:
         return {"ok": False, "error": bad_body}
+    if plain and "unsubscribe" not in body_html.lower():
+        return {"ok": False, "error": "plain mode sends your message as written "
+                "with no footer added, so the body itself must tell people how "
+                "to opt out; include the word 'unsubscribe' and send again"}
     sender = get_secret("RESEND_FROM")
     if not sender:
         return {"ok": False, "error": "RESEND_FROM is not stored yet"}
 
-    extra = _email_extra()
+    extra = _email_extra(plain)
     if not _email_lock.acquire(blocking=False):
         return {"ok": False, "error": "another send is already running"}
     try:
@@ -5836,7 +5862,7 @@ def send_wingman_email(segment: str, subject: str, body_html: str,
                 return {"ok": False, "error": "give the test an address to go to"}
             outcome, res = _resend_request("/emails", {
                 "from": sender, "to": [to], "subject": subject,
-                "html": _email_html(body_html), **extra})
+                "html": _email_html(body_html, plain), **extra})
             if outcome == "ok":
                 _email_log("test", to, subject, 1, 0)
                 return {"ok": True, "sent": 1, "failed": 0, "to": to}
@@ -5870,7 +5896,7 @@ def send_wingman_email(segment: str, subject: str, body_html: str,
                     "error": (f"the audience is {len(emails)} now, not "
                               f"{expect}; refresh and read it again")}
 
-        html = _email_html(body_html)
+        html = _email_html(body_html, plain)
         # One key for this exact send (audience + subject + body). A retry
         # after a lost response reuses it per chunk, so Resend returns the
         # first result instead of mailing everyone twice.
@@ -6301,16 +6327,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                         "from": get_secret("RESEND_FROM")})
             if act == "preview":
                 # Exactly what the send builds, so the operator sees the logo,
-                # their message, and the footer before committing. Runs the
-                # same body check the send does, so a message that would be
-                # refused shows the reason here instead of at send time.
+                # their message, and the footer (or, in plain mode, the bare
+                # message) before committing. Runs the same body checks the
+                # send does, so a message that would be refused shows the
+                # reason here instead of at send time.
                 body = str(payload.get("html", "")).strip()
+                plain = bool(payload.get("plain"))
                 bad = (_validate_email_body(body) if body
                        else "the message is empty")
+                if not bad and plain and "unsubscribe" not in body.lower():
+                    bad = ("plain mode adds no footer, so the message must "
+                           "include an unsubscribe line (the word 'unsubscribe')")
                 if bad:
                     return self._send_json({"ok": False, "error": bad})
                 return self._send_json({
-                    "ok": True, "html": _email_html(body),
+                    "ok": True, "html": _email_html(body, plain),
                     "subject": str(payload.get("subject", "")).strip()})
             if act == "send":
                 try:
@@ -6322,7 +6353,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     str(payload.get("subject", "")),
                     str(payload.get("html", "")),
                     expect, str(payload.get("to", "")),
-                    str(payload.get("confirm_count", ""))))
+                    str(payload.get("confirm_count", "")),
+                    bool(payload.get("plain"))))
             return self._send_json({"ok": False, "error": "unknown action"}, 400)
 
         if self.path == "/refresh":

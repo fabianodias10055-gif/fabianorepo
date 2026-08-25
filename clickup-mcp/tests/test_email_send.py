@@ -176,6 +176,57 @@ def test_send_refuses_when_suppression_unreadable(monkeypatch):
     assert sent["n"] == 0
 
 
+def test_plain_mode_sends_body_untouched(monkeypatch):
+    monkeypatch.setattr(panel, "get_secret", lambda n, d="": "hi@locodev.dev")
+    # plain returns the body verbatim; the wrapped one carries logo + footer
+    body = "<p>hi</p>"
+    assert panel._email_html(body, plain=True) == body
+    wrapped = panel._email_html(body, plain=False)
+    assert "unsubscribe" in wrapped.lower() and wrapped != body
+
+
+def test_plain_mode_drops_list_unsubscribe_keeps_reply_to(monkeypatch):
+    monkeypatch.setattr(panel, "get_secret", lambda n, d="": "hi@locodev.dev")
+    plain = panel._email_extra(plain=True)
+    assert plain == {"reply_to": "hi@locodev.dev"}          # no headers
+    assert "List-Unsubscribe" in panel._email_extra(plain=False)["headers"]
+
+
+def test_plain_send_requires_an_unsubscribe_line(monkeypatch):
+    monkeypatch.setattr(panel, "get_secret", lambda n, d="": "hi@locodev.dev")
+    monkeypatch.setattr(panel, "_email_audience", lambda seg: (["a@x.dev"], ""))
+    sent = {"n": 0}
+    monkeypatch.setattr(panel, "_resend_request",
+                        lambda *a, **k: (sent.__setitem__("n", sent["n"] + 1),
+                                         ("ok", _ids(1)))[1])
+    out = panel.send_wingman_email("never_generated", "S",
+                                   "<p>news with no way out</p>",
+                                   expect=1, confirm="1", plain=True)
+    assert out["ok"] is False and "unsubscribe" in out["error"].lower()
+    assert sent["n"] == 0                                   # nothing was sent
+
+
+def test_plain_send_goes_out_exactly_as_written(monkeypatch):
+    monkeypatch.setattr(panel, "get_secret", lambda n, d="": "hi@locodev.dev")
+    monkeypatch.setattr(panel, "_email_audience", lambda seg: (["a@x.dev"], ""))
+    monkeypatch.setattr(panel, "_email_log", lambda *a, **k: True)
+    monkeypatch.setattr(panel.time, "sleep", lambda *_: None)
+    cap = {}
+
+    def fake(path, payload, idem=""):
+        cap["payload"] = payload
+        return ("ok", _ids(len(payload)))
+    monkeypatch.setattr(panel, "_resend_request", fake)
+    body = "<p>news. reply unsubscribe to stop.</p>"
+    out = panel.send_wingman_email("never_generated", "S", body,
+                                   expect=1, confirm="1", plain=True)
+    assert out["ok"] is True
+    msg = cap["payload"][0]
+    assert msg["html"] == body            # verbatim: no logo, no footer added
+    assert "headers" not in msg           # no List-Unsubscribe
+    assert msg["reply_to"] == "hi@locodev.dev"
+
+
 def test_email_log_masks_addresses_and_flattens(tmp_path, monkeypatch):
     monkeypatch.setattr(panel, "_wingman_private_dir", lambda: tmp_path)
     panel._email_log("test", "operator@locodev.dev",
