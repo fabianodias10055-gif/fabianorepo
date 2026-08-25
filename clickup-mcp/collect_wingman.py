@@ -51,12 +51,14 @@ except ImportError:
 # the vault is not a private store. One definition of the private folder,
 # shared with the panel through secrets_store.
 try:
-    from secrets_store import PRIVATE_DIR
+    from secrets_store import PRIVATE_DIR, WINGMAN_SNAPSHOT
 except ImportError:
     import os as _os
     PRIVATE_DIR = Path(_os.getenv("LOCALAPPDATA")
                        or str(Path.home() / "AppData" / "Local")) / "locodev-panel"
-OUT = PRIVATE_DIR / "wingman-users.json"
+    WINGMAN_SNAPSHOT = PRIVATE_DIR / "wingman-users.json"
+# The panel reads this exact path; both spell it once, in secrets_store.
+OUT = WINGMAN_SNAPSHOT
 
 # What counts as a paying plugin plan, and how long a premium account has to
 # sit unused before it reads as churning. One place, so the panel card and

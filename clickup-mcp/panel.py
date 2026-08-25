@@ -4852,6 +4852,17 @@ def _wingman_private_dir() -> Path:
                     or str(Path.home() / "AppData" / "Local")) / "locodev-panel"
 
 
+def _wingman_snapshot() -> Path:
+    """The account rollup file itself, from the single shared definition so
+    the reader here, the rebuild fingerprint, and the collector's writer can
+    never drift to different locations (which is what once blanked the card)."""
+    try:
+        from secrets_store import WINGMAN_SNAPSHOT
+        return WINGMAN_SNAPSHOT
+    except ImportError:
+        return _wingman_private_dir() / "wingman-users.json"
+
+
 def _load_wingman() -> dict:
     """The LocoAI/Wingman account rollup, written by collect_wingman.py from
     Supabase into the private folder. The panel only reads it, so a Supabase
@@ -4859,7 +4870,7 @@ def _load_wingman() -> dict:
     broken. A copy found at the old vault path is moved out and the vault
     copy deleted: addresses do not belong in the vault, and leaving a stale
     duplicate there would be worse than never having moved."""
-    private = _wingman_private_dir() / "wingman-users.json"
+    private = _wingman_snapshot()
     legacy = VAULT / "Panel" / "wingman-users.json"
 
     def _read(p: Path) -> dict:
@@ -5889,7 +5900,7 @@ def fingerprint() -> tuple:
               # triggers a rebuild. Moving it out of Panel/ quietly broke
               # that, and an open dashboard kept showing the old counts, or
               # zero, until some unrelated note happened to change.
-              _wingman_private_dir() / "wingman-users.json"):
+              _wingman_snapshot()):
         try:
             st = p.stat()
         except OSError:

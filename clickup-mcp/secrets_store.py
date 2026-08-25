@@ -43,6 +43,13 @@ SERVICE = "locodev-panel"
 PRIVATE_DIR = Path(os.getenv("LOCALAPPDATA")
                    or str(Path.home() / "AppData" / "Local")) / "locodev-panel"
 
+# The Supabase account rollup: the collector writes it here, the panel reads
+# it here, and the panel fingerprints it to trigger a rebuild. One definition
+# so those three can never drift to different locations. Moving the file out
+# of the vault once broke the rebuild because the path was spelled in four
+# places and only three were updated; this is the fix for that class.
+WINGMAN_SNAPSHOT = PRIVATE_DIR / "wingman-users.json"
+
 # Values that can act on your behalf. Everything else in .env is settings.
 SECRET_KEYS = (
     "CLICKUP_API_TOKEN",
