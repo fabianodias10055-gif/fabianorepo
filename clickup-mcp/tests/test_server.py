@@ -156,7 +156,12 @@ def test_restaurar_sem_snapshot(tmp_path, monkeypatch):
 
 
 def test_resend_desativado_sem_chave(monkeypatch):
-    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    # A chave agora vem do secrets_store (env primeiro, Credential Manager
+    # depois), entao limpar so o env nao simula mais a ausencia: a chave
+    # real do gerenciador continuaria sendo achada. Zera o lookup inteiro.
+    import secrets_store
+    monkeypatch.setattr(secrets_store, "get_secret",
+                        lambda name, default="": "")
     saida = json.loads(server.enviar_email_resend("a", "<b>x</b>"))
     assert "RESEND_API_KEY" in saida["erro"]
 
