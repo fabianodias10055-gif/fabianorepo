@@ -5853,6 +5853,7 @@ document.addEventListener("click", function (ev) {
           var msg = "problem: " + (d.error || "");
           var extra = [];
           if (d.sent) extra.push(fmt(d.sent) + " did go out");
+          if (d.unknown) extra.push(fmt(d.unknown) + " unknown, may have sent");
           if (d.not_attempted) extra.push(fmt(d.not_attempted) + " not attempted");
           if (extra.length) msg += " (" + extra.join(", ") + ")";
           m2.textContent = msg;

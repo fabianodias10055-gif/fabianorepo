@@ -5566,17 +5566,27 @@ EMAIL_LOG = "email-log.md"
 _email_lock = threading.Lock()
 
 
-def _resend_request(path: str, payload: dict, idem: str = "") -> tuple[bool, object]:
-    """One authenticated call to Resend. The explicit User-Agent matters:
-    Cloudflare in front of the API 403s generic library agents, which reads
-    as an invalid key without being one.
+def _resend_request(path: str, payload: object, idem: str = "") -> tuple[str, object]:
+    """One authenticated call to Resend. Returns (outcome, result) where
+    outcome is "ok", "fail", or "unknown".
+
+    "unknown" is deliberate and separate from "fail": a read timeout or a
+    dropped connection happens after the POST has left, so the message may
+    already be on its way. Counting that as failed and re-mailing blindly is
+    the mistake; the idempotency key makes a later retry safe instead. A 5xx
+    is unknown for the same reason. "fail" is only for outcomes that
+    certainly did not send: a rejected key, a request Resend refused to
+    accept, a quota wall, or a connection that never opened.
+
+    The explicit User-Agent matters: Cloudflare in front of the API 403s
+    generic library agents, which reads as an invalid key without being one.
 
     idem is an Idempotency-Key: Resend remembers it for 24h and returns the
     original result instead of sending again, so a retry after a lost
     response does not re-mail the audience."""
     key = get_secret("RESEND_API_KEY")
     if not key:
-        return False, "RESEND_API_KEY is not stored yet"
+        return "fail", "RESEND_API_KEY is not stored yet"
     headers = {"Authorization": f"Bearer {key}",
                "Content-Type": "application/json",
                "User-Agent": "locodev-panel/1.0"}
@@ -5587,16 +5597,50 @@ def _resend_request(path: str, payload: dict, idem: str = "") -> tuple[bool, obj
         headers=headers, method="POST")
     try:
         with urlrequest.urlopen(req, timeout=60) as resp:
-            return True, json.load(resp)
+            return "ok", json.load(resp)
     except urlerror.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")[:300]
-        if exc.code in (401, 403):
-            return False, f"the Resend key was rejected ({exc.code}): {body}"
-        if exc.code == 429:
-            return False, "Resend rate limit hit; wait a moment and retry"
-        return False, f"Resend HTTP {exc.code}: {body}"
+        try:
+            name = str((json.loads(body) or {}).get("name", ""))
+        except ValueError:
+            name = ""
+        code = exc.code
+        if code == 401:
+            return "fail", f"the Resend key is missing or unusable (401): {body}"
+        if code == 403:
+            return "fail", (f"Resend refused this send (403 {name or 'forbidden'}"
+                            f"): {body}. This can be a bad key or an unverified "
+                            f"sender domain, not only a revoked key")
+        if code in (400, 422):
+            return "fail", (f"Resend rejected the request ({code} {name}): {body}."
+                            f" The subject, sender or content needs fixing; "
+                            f"retrying it unchanged will fail the same way")
+        if code == 409:
+            return "fail", (f"Resend says this exact send is already in flight or "
+                            f"done (409): {body}")
+        if code == 429:
+            if "quota" in (name + body).lower():
+                return "fail", (f"Resend quota reached ({name or '429'}): {body}. "
+                                f"Waiting a moment will not clear it")
+            return "fail", "Resend rate limit hit (429); wait a moment and retry"
+        if code >= 500:
+            return "unknown", (f"Resend is having trouble (HTTP {code}): {body}. "
+                               f"The same send can be retried; the idempotency "
+                               f"key stops a double")
+        return "fail", f"Resend HTTP {code}: {body}"
+    except urlerror.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        if isinstance(reason, TimeoutError):
+            return "unknown", ("Resend timed out after the request left; whether "
+                               "it sent is unknown, and a retry is safe")
+        return "fail", (f"could not reach Resend ({type(reason).__name__}); the "
+                        f"connection never opened, so nothing was sent")
+    except TimeoutError:
+        return "unknown", ("Resend timed out after the request left; whether it "
+                           "sent is unknown, and a retry is safe")
     except Exception as exc:                       # noqa: BLE001
-        return False, f"could not reach Resend: {type(exc).__name__}"
+        return "unknown", (f"could not tell whether Resend received it "
+                           f"({type(exc).__name__}); a retry is safe")
 
 
 def _email_audience(segment: str) -> tuple[list[str], str]:
@@ -5656,13 +5700,13 @@ def send_wingman_email(segment: str, subject: str, body_html: str,
             to = (test_to or "").strip()
             if "@" not in to:
                 return {"ok": False, "error": "give the test an address to go to"}
-            ok, res = _resend_request("/emails", {
+            outcome, res = _resend_request("/emails", {
                 "from": sender, "to": [to], "subject": subject,
                 "html": _email_html(body_html)})
-            if ok:
+            if outcome == "ok":
                 _email_log("test", to, subject, 1, 0)
-            return ({"ok": True, "sent": 1, "failed": 0, "to": to} if ok
-                    else {"ok": False, "error": str(res)})
+                return {"ok": True, "sent": 1, "failed": 0, "to": to}
+            return {"ok": False, "error": str(res), "unknown": outcome == "unknown"}
 
         emails, err = _email_audience(segment)
         if err:
@@ -5679,40 +5723,58 @@ def send_wingman_email(segment: str, subject: str, body_html: str,
         base = hashlib.sha256(
             ("\n".join(emails) + "\x00" + subject + "\x00" + html)
             .encode("utf-8")).hexdigest()[:32]
-        sent = failed = not_attempted = 0
+        sent = failed = not_attempted = unknown = 0
         errors: list[str] = []
         # Resend's batch endpoint takes up to 100 messages per call, each
         # its own email, so recipients never see each other's address.
         for i in range(0, len(emails), 100):
             chunk = emails[i:i + 100]
-            ok, res = _resend_request(
+            outcome, res = _resend_request(
                 "/emails/batch",
                 [{"from": sender, "to": [e], "subject": subject, "html": html}
                  for e in chunk],
                 idem=f"wm-{base}-{i}")
-            if ok:
-                # Trust the response, not the HTTP status: a 2xx with fewer
-                # created entries than submitted means some were dropped.
-                made = len(res.get("data", [])) if isinstance(res, dict) else len(chunk)
-                made = made if made else len(chunk)
-                sent += min(made, len(chunk))
-                failed += max(0, len(chunk) - made)
+            if outcome == "ok":
+                # Count what Resend actually created, never the 2xx alone: a
+                # batch returns one entry per submitted message, each with an
+                # id when it was accepted. Zero ids, a short list, or a body
+                # that is not that shape is a partial or unknown result, not a
+                # success to paper over (the old code turned zero ids into a
+                # full success). Stop on anything short of a full chunk so the
+                # rest is resumed from the log, never mailed twice.
+                data = res.get("data") if isinstance(res, dict) else None
+                made = (sum(1 for e in data
+                            if isinstance(e, dict) and e.get("id"))
+                        if isinstance(data, list) else 0)
+                sent += made
+                if made < len(chunk):
+                    failed += len(chunk) - made
+                    not_attempted = len(emails) - (i + len(chunk))
+                    errors.append(
+                        f"Resend accepted {made} of {len(chunk)} in a batch and "
+                        f"gave no error for the rest; stopped so nobody is mailed "
+                        f"twice")
+                    break
             else:
-                failed += len(chunk)
+                # fail = certainly not sent; unknown = may already be on its
+                # way (a timeout or 5xx after the request left). Either way
+                # stop: identical content hits the same wall, and the rest of
+                # the audience stays untouched and resumable with the same key.
+                if outcome == "unknown":
+                    unknown += len(chunk)
+                else:
+                    failed += len(chunk)
+                not_attempted = len(emails) - (i + len(chunk))
                 if len(errors) < 3:
                     errors.append(str(res))
-                if "rejected" in str(res):
-                    # A dead key fails every later chunk too: the rest were
-                    # never tried, and saying so is the difference between a
-                    # gap you can resume and one you cannot see.
-                    not_attempted = len(emails) - (i + len(chunk))
-                    break
+                break
             if i + 100 < len(emails):
                 time.sleep(0.6)        # under Resend's 2 requests per second
         log_ok = _email_log(segment, f"{sent} recipients", subject, sent, failed)
-        out = {"ok": failed == 0 and not_attempted == 0,
-               "sent": sent, "failed": failed, "not_attempted": not_attempted,
-               "audience": len(emails), "logged": log_ok}
+        out = {"ok": failed == 0 and unknown == 0 and not_attempted == 0,
+               "sent": sent, "failed": failed, "unknown": unknown,
+               "not_attempted": not_attempted, "audience": len(emails),
+               "logged": log_ok}
         if errors:
             out["error"] = " | ".join(errors)
         if not log_ok and sent:
