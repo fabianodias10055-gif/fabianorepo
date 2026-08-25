@@ -76,6 +76,41 @@ def test_unknown_is_separate_from_failed(sender):
     assert out["ok"] is False
 
 
+@pytest.mark.parametrize("body", [
+    "<p>plain paragraph</p>",
+    "<div>hi <b>there</b></div>",
+    "<!-- a balanced comment --><p>ok</p>",
+    "<style>.x{color:red}</style><p>styled</p>",
+])
+def test_validate_accepts_wellformed(body):
+    assert panel._validate_email_body(body) == ""
+
+
+@pytest.mark.parametrize("body", [
+    "<!-- oops never closed <p>hi</p>",
+    "<style>.x{color:red} <p>the rest is eaten",
+    "<title>subject smuggled <p>body",
+    "<html><body><p>a whole page</p></body></html>",
+    "<p>fine</p><body>",
+])
+def test_validate_rejects_footer_hiders(body):
+    assert panel._validate_email_body(body) != ""
+
+
+def test_bad_body_blocks_send_before_resend(monkeypatch):
+    monkeypatch.setattr(panel, "get_secret",
+                        lambda name, default="": "hi@locodev.dev")
+    monkeypatch.setattr(panel, "_email_audience",
+                        lambda seg: (["a@x.dev"], ""))
+    called = {"sent": False}
+    monkeypatch.setattr(panel, "_resend_request",
+                        lambda *a, **k: called.__setitem__("sent", True) or ("ok", _ids(1)))
+    out = panel.send_wingman_email("never_generated", "S",
+                                   "<!-- unclosed", expect=1)
+    assert out["ok"] is False
+    assert called["sent"] is False
+
+
 def test_stale_count_blocks_send(monkeypatch):
     monkeypatch.setattr(panel, "get_secret",
                         lambda name, default="": "hi@locodev.dev"

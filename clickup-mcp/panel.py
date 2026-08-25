@@ -5663,10 +5663,43 @@ def _email_audience(segment: str) -> tuple[list[str], str]:
     return emails, ""
 
 
+_RAWTEXT_TAGS = ("script", "style", "textarea", "title", "template",
+                 "xmp", "plaintext", "noscript", "iframe")
+
+
+def _validate_email_body(html: str) -> str:
+    """Empty when the body is safe to append a footer to, else a plain reason.
+
+    The footer that says who got the mail and how to stop is appended after
+    the operator's HTML, so a body that never closes what it opens can hide
+    it: an unclosed comment eats everything after it, and an unclosed
+    <style>/<script>/<title>/... swallows the rest as raw text. Rather than
+    silently repair the draft (which hides the mistake) the send refuses it
+    and says exactly what to fix. A whole-page tag in a fragment is malformed
+    for the same reason. This is a footer guarantee, not a sanitizer against a
+    hostile author: the operator writes the body, the check catches accidents.
+    """
+    low = html.lower()
+    if low.count("<!--") != low.count("-->"):
+        return "the message has an unclosed comment (<!-- with no matching -->)"
+    for tag in _RAWTEXT_TAGS:
+        opens = len(re.findall(rf"<{tag}[\s/>]", low))
+        closes = low.count(f"</{tag}>")
+        if opens > closes:
+            return (f"the message has an unclosed <{tag}> that would hide the "
+                    f"footer; close it or remove it")
+    for doc in ("<html", "<body", "<head", "<!doctype"):
+        if doc in low:
+            return (f"the message contains a whole-page tag ({doc}); send just "
+                    f"the content, not a full HTML document")
+    return ""
+
+
 def _email_html(body_html: str) -> str:
     """The message, plus the one footer every bulk mail must carry: who it
     reached and why, and a way out. Appended server-side so no send can
-    forget it."""
+    forget it. The body is validated by _validate_email_body first, so what
+    arrives here cannot swallow the footer."""
     return (
         f"{body_html}\n"
         '<hr style="border:none;border-top:1px solid #ddd;margin:24px 0 12px">'
@@ -5689,6 +5722,9 @@ def send_wingman_email(segment: str, subject: str, body_html: str,
         return {"ok": False, "error": "the subject is empty"}
     if not body_html:
         return {"ok": False, "error": "the message is empty"}
+    bad_body = _validate_email_body(body_html)
+    if bad_body:
+        return {"ok": False, "error": bad_body}
     sender = get_secret("RESEND_FROM")
     if not sender:
         return {"ok": False, "error": "RESEND_FROM is not stored yet"}
