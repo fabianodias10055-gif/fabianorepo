@@ -47,7 +47,6 @@ except ImportError:
     def get_secret(name, default=""):        # noqa: E306
         return os.getenv(name, default)
 
-VAULT = Path(r"F:\LocoDev Vault")
 # Not in the vault: this file carries every account's email address, and
 # the vault is not a private store. One definition of the private folder,
 # shared with the panel through secrets_store.
@@ -162,9 +161,6 @@ def build(users, profiles, usage, licenses, subs) -> dict:
         if lu and (uid not in last_used or lu > last_used[uid]):
             last_used[uid] = lu
 
-    def generated(uid):
-        return gen_total.get(uid, 0) > 0
-
     def plan_of(uid):
         return (lic.get(uid) or {}).get("plan") or "free"
 
@@ -192,7 +188,7 @@ def build(users, profiles, usage, licenses, subs) -> dict:
             "emailable": emailable(u), "gen": gen_total.get(uid, 0),
             "plan": plan_of(uid), "premium": is_premium(uid),
             "last_used": last_used.get(uid),
-            "source": p.get("signup_source"), "heard": p.get("heard_from"),
+            "source": p.get("signup_source"),
         })
 
     total = len(enriched)
@@ -214,7 +210,7 @@ def build(users, profiles, usage, licenses, subs) -> dict:
     def counts(field):
         c: dict[str, int] = {}
         for e in enriched:
-            k = e.get(field) or ("unknown" if field == "heard" else "direct/unknown")
+            k = e.get(field) or "direct/unknown"
             c[k] = c.get(k, 0) + 1
         return sorted(({"label": k, "n": n} for k, n in c.items()),
                       key=lambda x: -x["n"])
@@ -245,15 +241,7 @@ def build(users, profiles, usage, licenses, subs) -> dict:
     segments = {
         "never_generated": {"count": len(never), "emails": never},
         "new_7d": {"count": len(new7), "emails": new7},
-        "power_free": {
-            "count": len(powerf), "emails": powerf,
-            # The ranked cut is display only; the card shows top, the send
-            # uses emails. Kept unfiltered by emailability on purpose: it is
-            # a leaderboard, not a recipient list.
-            "top": [{"email": e["email"], "prompts": e["gen"]}
-                    for e in sorted((e for e in enriched
-                                     if e["plan"] == "free" and e["gen"] >= POWER_FREE_MIN),
-                                    key=lambda e: -e["gen"])[:15]]},
+        "power_free": {"count": len(powerf), "emails": powerf},
         "churning_premium": {"count": len(churn), "emails": churn},
     }
 
@@ -261,7 +249,6 @@ def build(users, profiles, usage, licenses, subs) -> dict:
         "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
         "summary": summary,
         "sources": counts("source"),
-        "heard_from": counts("heard"),
         "top_users": [{"name": e["name"], "email": e["email"],
                        "prompts": e["gen"], "plan": e["plan"]} for e in top_users],
         "premium": [{"name": e["name"], "email": e["email"], "plan": e["plan"],
@@ -282,7 +269,7 @@ def main() -> int:
     try:
         users = fetch_auth_users(base, key)
         profiles = fetch_table(base, key, "profiles",
-                               "id,display_name,created_at,last_seen_at,signup_source,heard_from",
+                               "id,display_name,signup_source",
                                order="id")
         usage = fetch_table(base, key, "loco_usage",
                             "user_id,prompt_count,polish_prompt_count,last_used_at",
