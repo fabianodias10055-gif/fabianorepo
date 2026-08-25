@@ -28,7 +28,8 @@ def sender(monkeypatch):
         monkeypatch.setattr(panel, "_resend_request",
                             lambda path, payload, idem="": (outcome, result))
         return panel.send_wingman_email("never_generated", "Subj", "<p>hi</p>",
-                                        expect=len(emails))
+                                        expect=len(emails),
+                                        confirm=str(len(emails)))
     return run
 
 
@@ -123,7 +124,7 @@ def test_reply_to_and_list_unsubscribe_attached(monkeypatch):
         captured["p"] = payload
         return ("ok", _ids(len(payload)))
     monkeypatch.setattr(panel, "_resend_request", fake)
-    panel.send_wingman_email("never_generated", "S", "<p>x</p>", expect=1)
+    panel.send_wingman_email("never_generated", "S", "<p>x</p>", expect=1, confirm="1")
     msg = captured["p"][0]
     assert msg["reply_to"] == "hi@locodev.dev"
     assert msg["headers"]["List-Unsubscribe"] == \
@@ -145,6 +146,34 @@ def test_stale_count_blocks_send(monkeypatch):
     called = {"sent": False}
     monkeypatch.setattr(panel, "_resend_request",
                         lambda *a, **k: called.__setitem__("sent", True) or ("ok", _ids(2)))
-    out = panel.send_wingman_email("never_generated", "S", "<p>x</p>", expect=99)
+    # confirm matches the shown count, but the fresh list is smaller: stale.
+    out = panel.send_wingman_email("never_generated", "S", "<p>x</p>",
+                                   expect=99, confirm="99")
     assert out["ok"] is False and out.get("code") == "stale"
     assert called["sent"] is False
+
+
+def test_send_requires_a_matching_confirmation(monkeypatch):
+    monkeypatch.setattr(panel, "get_secret", lambda n, d="": "hi@locodev.dev")
+    monkeypatch.setattr(panel, "_email_audience",
+                        lambda seg: (["a@x.dev", "b@x.dev"], ""))
+    monkeypatch.setattr(panel, "_email_log", lambda *a, **k: True)
+    monkeypatch.setattr(panel.time, "sleep", lambda *_: None)
+    sent = {"n": 0}
+
+    def fake(*a, **k):
+        sent["n"] += 1
+        return ("ok", _ids(2))
+    monkeypatch.setattr(panel, "_resend_request", fake)
+
+    def send(expect, confirm):
+        return panel.send_wingman_email("never_generated", "S", "<p>x</p>",
+                                        expect=expect, confirm=confirm)
+
+    assert send(2, "").get("code") == "unconfirmed"        # missing
+    assert send(2, "3").get("code") == "unconfirmed"       # wrong number
+    assert send(2, "02").get("code") == "unconfirmed"      # leading zero, no int-parse
+    assert send(-1, "2").get("code") == "stale"            # the expect<0 bypass is closed
+    assert sent["n"] == 0                                  # nothing left the door
+    ok = send(2, "2")                                      # exact match sends
+    assert ok["ok"] is True and ok["sent"] == 2

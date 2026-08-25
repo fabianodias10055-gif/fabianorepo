@@ -5737,12 +5737,17 @@ def _email_extra() -> dict:
 
 
 def send_wingman_email(segment: str, subject: str, body_html: str,
-                       expect: int = -1, test_to: str = "") -> dict:
+                       expect: int = -1, test_to: str = "",
+                       confirm: str = "") -> dict:
     """Send one message to one audience, or a single test to one address.
 
-    expect is the count the page showed when the send was pressed; a
-    mismatch with the fresh list means the snapshot moved underneath the
-    person confirming, and the honest move is to stop and re-show.
+    expect is the count the page showed when the send was pressed, and
+    confirm is that same number echoed back from the confirmation step. A
+    real send must have both, they must agree, and expect must still match
+    the freshly resolved list; anything else is stale page code, a changed
+    audience, or a direct request, none of which should mail. The client
+    also blocks the send behind a typed-count dialog above ten recipients,
+    but the client can be bypassed, so this check is the one that holds.
     """
     subject = (subject or "").strip()
     body_html = (body_html or "").strip()
@@ -5776,7 +5781,20 @@ def send_wingman_email(segment: str, subject: str, body_html: str,
         emails, err = _email_audience(segment)
         if err:
             return {"ok": False, "error": err}
-        if expect >= 0 and expect != len(emails):
+        # Fail closed. expect < 0 means the count was never shown (an old page
+        # or a direct request that omitted it); a real send must carry it.
+        if expect < 0:
+            return {"ok": False, "code": "stale",
+                    "error": "refresh and read the count before sending"}
+        # The confirmation is compared as a canonical string, never parsed as
+        # an int: "0495" must not pass for 495. It must equal the count the
+        # page showed, which the operator either typed (ten or more) or the
+        # page echoed after a single confirm (fewer).
+        if str(confirm).strip() != str(expect):
+            return {"ok": False, "code": "unconfirmed",
+                    "error": "the confirmation did not match the count; "
+                             "nothing was sent"}
+        if expect != len(emails):
             return {"ok": False, "code": "stale",
                     "error": (f"the audience is {len(emails)} now, not "
                               f"{expect}; refresh and read it again")}
@@ -6200,7 +6218,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     str(payload.get("segment", "")),
                     str(payload.get("subject", "")),
                     str(payload.get("html", "")),
-                    expect, str(payload.get("to", ""))))
+                    expect, str(payload.get("to", "")),
+                    str(payload.get("confirm_count", ""))))
             return self._send_json({"ok": False, "error": "unknown action"}, 400)
 
         if self.path == "/refresh":

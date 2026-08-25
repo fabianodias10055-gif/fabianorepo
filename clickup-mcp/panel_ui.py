@@ -5780,7 +5780,20 @@ function wmDetail() {
 }
 
 /* ---- Email screen: one audience, one message, sent server-side ---- */
-var EM_SEG = "", EM_COUNT = 0;
+var EM_SEG = "", EM_COUNT = 0, EM_LABEL = "", EM_BUSY = false;
+function emClean(s) {
+  /* Flatten newlines and control characters to single spaces so a subject or
+     audience name cannot distort the confirm dialogs. Built without backslash
+     escapes on purpose: this lives in a Python string, where a backslash-n
+     would become a real newline and break the script. */
+  s = String(s == null ? "" : s);
+  var out = "";
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i);
+    out += (c < 32 || c === 127) ? " " : s.charAt(i);
+  }
+  return out.replace(/ +/g, " ").trim();
+}
 function emBodyHtml() {
   var raw = $("#embody").value.trim();
   if (!raw) return "";
@@ -5809,6 +5822,7 @@ document.addEventListener("click", function (ev) {
   if (aud) {
     EM_SEG = aud.dataset.seg;
     EM_COUNT = +aud.dataset.count || 0;
+    EM_LABEL = ((aud.querySelector(".wm-segl") || {}).textContent) || EM_SEG;
     $$(".em-aud").forEach(function (b) {
       b.setAttribute("aria-pressed", String(b === aud)); });
     sparkReplay(aud);
@@ -5833,21 +5847,44 @@ document.addEventListener("click", function (ev) {
     return;
   }
   if (ev.target.closest("#emsend")) {
-    var subj2 = $("#emsubj").value.trim(), html2 = emBodyHtml();
     var m2 = $("#emmsg");
-    if (!EM_SEG) return;
+    if (EM_BUSY || !EM_SEG) return;
+    /* Freeze everything the dialogs and the request use, so clicking another
+       audience mid-confirm cannot change what actually gets sent. */
+    var seg = EM_SEG, count = EM_COUNT, label = emClean(EM_LABEL);
+    var subj2 = $("#emsubj").value.trim(), html2 = emBodyHtml();
     if (!subj2 || !html2) { m2.textContent = "write the subject and the message first"; return; }
-    if (!confirm('Send "' + subj2 + '" to ' + fmt(EM_COUNT)
-                 + " people? Each gets an individual email from Resend. "
-                 + "This cannot be taken back.")) return;
-    m2.textContent = "sending to " + fmt(EM_COUNT) + " people\u2026";
-    var btn = $("#emsend"); btn.disabled = true;
+    var subjShown = emClean(subj2), NL = String.fromCharCode(10);
+    var btn = $("#emsend");
+    EM_BUSY = true; btn.disabled = true;
+    function emDone() { EM_BUSY = false; emSyncButton(); }
+    /* Raw count in the dialogs, never the comma-grouped fmt: the second step
+       asks the operator to type it back, and "1,234" would not match. */
+    var head = "Audience: " + label + NL + "Recipients: " + count + NL
+             + "Subject: " + subjShown;
+    if (!confirm("Send this email?" + NL + NL + head + NL + NL
+                 + "Check these details carefully. Sending cannot be undone.")) {
+      emDone(); return;
+    }
+    /* Under ten: the single confirm was the gate, echo the count for the
+       server. Ten or more: the operator must type the exact count, so a
+       reflexive click cannot fire a large send. */
+    var confirmCount = String(count);
+    if (count >= 10) {
+      var typed = prompt("Final confirmation" + NL + NL + head + NL + NL
+                 + "Type " + count + " to send this email now.");
+      if (typed === null || typed.trim() !== String(count)) {
+        m2.textContent = "nothing was sent: the count did not match";
+        emDone(); return;
+      }
+      confirmCount = typed.trim();
+    }
+    m2.textContent = "sending to " + fmt(count) + " people\u2026";
     fetch("/email", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "send", segment: EM_SEG, expect: EM_COUNT,
-                             subject: subj2, html: html2 }) })
+      body: JSON.stringify({ action: "send", segment: seg, expect: count,
+                             confirm_count: confirmCount, subject: subj2, html: html2 }) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        btn.disabled = false;
         if (d.ok) { m2.textContent = "sent to " + fmt(d.sent) + " people"; }
         else {
           var msg = "problem: " + (d.error || "");
@@ -5859,7 +5896,8 @@ document.addEventListener("click", function (ev) {
           m2.textContent = msg;
         }
       })
-      .catch(function (e) { btn.disabled = false; m2.textContent = "failed: " + e.message; });
+      .catch(function (e) { m2.textContent = "failed: " + e.message; })
+      .then(emDone);
     return;
   }
 });
