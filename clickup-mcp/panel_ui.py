@@ -670,10 +670,7 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
 .em-aud .spark { width:100%; height:30px; margin-top:6px; }
 .ltk .mk .spark { width:100%; height:24px; margin-top:6px; }
 .c-blue { background:var(--accent-bg); color:var(--accent); }
-.c-green { background:var(--ok-bg); color:var(--ok); }
 .c-violet { background:var(--info-bg); color:var(--info); }
-.c-red { background:var(--crit-bg); color:var(--crit); }
-.c-amber { background:var(--warn-bg); color:var(--warn); }
 
 /* ================= layout + cards ================= */
 /* One screen at a time. The author rules below set display on these
@@ -765,7 +762,6 @@ tr.cdet > td, tr.pdet > td { padding:0; background:var(--surface2); }
   margin-right:5px; vertical-align:-1px; }
 .chx { font-family:var(--mono); font-size:11px; fill:var(--ink3); }
 .chend { font-family:var(--mono); font-size:12px; font-weight:600; fill:var(--ink); }
-.chnum { font-family:var(--mono); font-size:11px; font-weight:600; fill:var(--ink2); }
 .chgrid { stroke:var(--line2); stroke-width:1; }
 .chaxis { stroke:var(--line); stroke-width:1; }
 .chbar rect { transition:opacity var(--dur) var(--ease); }
@@ -1153,9 +1149,7 @@ tr.qrow[aria-expanded="true"] > td { background:var(--surface2); }
    column alignment. */
 tr.qrow[aria-expanded="true"] .snip,
 tr.qrow[aria-expanded="true"] .qid,
-tr.qrow[aria-expanded="true"] .cval,
-tr.qrow[aria-expanded="true"] .chn,
-tr.qrow[aria-expanded="true"] .rowacts { visibility:hidden; }
+tr.qrow[aria-expanded="true"] .chn { visibility:hidden; }
 /* Title bar and panel are one surface: no rule between them, and a rounded
    accent edge marks where the card starts. */
 tr.qrow[aria-expanded="true"] > td { border-bottom-color:transparent; }
@@ -1205,7 +1199,6 @@ tr.qdet.open > td { box-shadow:inset 3px 0 0 var(--accent); }
 .u-critical { background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line); }
 .u-urgent { background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line); }
 .qcell { display:flex; gap:var(--s3); align-items:center; }
-.idcell { width:1%; white-space:nowrap; }
 .qid { font-family:var(--mono); font-size:var(--t-xs); color:var(--ink3);
   background:var(--surface2); border:1px solid var(--line2);
   border-radius:var(--r-xs); padding:2px 7px; cursor:pointer;
@@ -1257,23 +1250,8 @@ a.vidcard:hover { border-color:var(--accent); background:var(--accent-bg); }
   font-size:var(--t-sm); }
 .cd { width:8px; height:8px; border-radius:var(--r-full); flex:none; }
 .acts { text-align:right; white-space:nowrap; width:1%; }
-/* Dimmed rather than hidden: replying is the point of this table, so the
-   action must stay discoverable without a hover to find it. */
-.rowacts { display:inline-flex; flex-direction:column; gap:3px; align-items:flex-end;
-  opacity:.6; transition:opacity var(--dur) var(--ease); }
-tr.qrow:hover .rowacts, tr.qrow:focus-within .rowacts,
-tr.qrow.kfocus .rowacts, tr.qrow[aria-expanded="true"] .rowacts { opacity:1; }
-@media (hover:none) { .rowacts { opacity:1; } }
-.alink { display:inline-flex; gap:5px; align-items:center; color:var(--ink2);
-  font-size:var(--t-xs); font-weight:600; cursor:pointer; padding:3px 8px;
-  border-radius:var(--r-sm); border:1px solid transparent; background:none;
-  white-space:nowrap;
-  transition:color var(--dur) var(--ease), border-color var(--dur) var(--ease),
-    background var(--dur) var(--ease); }
-.alink:hover { color:var(--accent); border-color:var(--accent-line); background:var(--accent-bg); }
 .pe { font-style:normal; font-size:11px; line-height:1; }
 .he { font-size:16px; line-height:1; }
-.alink svg { flex:none; }
 .sysdrill { cursor:pointer; border-bottom:1px dashed var(--line);
   transition:color var(--dur) var(--ease), border-color var(--dur) var(--ease); }
 .sysdrill:hover { color:var(--accent); border-color:var(--accent); }
@@ -1307,12 +1285,6 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
 .yourreply b { color:var(--ok); display:flex; align-items:center; gap:6px;
   font-size:var(--t-xs); text-transform:uppercase; letter-spacing:.06em;
   margin-bottom:var(--s1); }
-.sugout { border:1px solid var(--line); border-radius:var(--r-md); padding:var(--s3) var(--s4);
-  font-size:var(--t-base); background:var(--surface); display:none; }
-.sugout .src { color:var(--ink3); font-size:var(--t-xs); margin-bottom:var(--s2);
-  font-family:var(--mono); display:flex; align-items:center; gap:var(--s2); flex-wrap:wrap; }
-.sugout pre { margin:0 0 var(--s3); white-space:pre-wrap; font-family:inherit;
-  line-height:1.55; max-height:280px; overflow:auto; }
 .ctxout { border:1px solid var(--line); border-radius:var(--r-md);
   padding:var(--s3) var(--s4); background:var(--surface); display:none;
   max-height:340px; overflow:auto; }
@@ -1399,16 +1371,9 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
 .grow .gcnt { background:var(--crit-bg); color:var(--crit); border:1px solid var(--crit-line);
   border-radius:var(--r-full); padding:2px 9px; font-size:var(--t-xs); font-weight:700;
   font-family:var(--mono); flex:none; font-variant-numeric:tabular-nums; }
-.prow { display:grid; grid-template-columns:18px minmax(0,1.1fr) 1fr 40px;
-  gap:var(--s2); align-items:center; padding:var(--s2) 0; font-size:var(--t-sm); }
-.prow .i { color:var(--ink3); font-family:var(--mono); font-size:var(--t-xs);
-  font-variant-numeric:tabular-nums; }
-.prow .n { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:570; }
 .pbar { height:6px; border-radius:var(--r-full); background:var(--surface3); overflow:hidden; }
 .pbar i { display:block; height:100%; border-radius:var(--r-full); background:var(--accent);
   transition:width .5s var(--ease); }
-.prow .pct { text-align:right; font-family:var(--mono); font-size:var(--t-xs);
-  color:var(--ink2); font-variant-numeric:tabular-nums; }
 .cbar { display:inline-flex; align-items:center; gap:var(--s2); }
 .cbar .pbar { width:62px; }
 .cbar .pbar i.g { background:var(--ok); }
@@ -1549,9 +1514,6 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
 .ltgrid { display:grid; grid-template-columns:minmax(0,1fr) 296px; gap:var(--s6);
   align-items:start; }
 @media (max-width:940px) { .ltgrid { grid-template-columns:1fr; } }
-.lchart { width:100%; height:84px; margin-bottom:var(--s4); overflow:visible; }
-.lchart rect { fill:var(--accent); opacity:.8; transition:opacity var(--dur) var(--ease); }
-.lchart rect:hover { opacity:1; }
 .lsub { color:var(--ink3); font-family:var(--mono); font-size:var(--t-2xs);
   letter-spacing:.08em; text-transform:uppercase; margin:0 0 var(--s2); font-weight:600; }
 /* Named lrow, not crow: the customer table's rows are <tr class="crow">,
