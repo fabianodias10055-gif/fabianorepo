@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create the question inbox note in the vault, seeded with real questions.
+"""Create the question inbox note in the vault, with example questions.
 
 The panel reads this file. Today you paste questions here by hand as they come
 in; later a collector writes the same format automatically. Either way the
@@ -49,7 +49,7 @@ point: the questions you cannot answer become the list of what to write next.
 
 ---
 
-### 2026-08-13 Nunzio
+### 2026-08-13 example_user_1
 channel: discord
 system: ledge-system
 status: escalated
@@ -59,26 +59,25 @@ The 180 degree leap does not reset the jump, and the arms stay stuck in the
 high position until the character moves along the ledge. Also the sphere trace
 misses on gamepad.
 
-### 2026-08-13 K3mmal
+### 2026-08-13 example_user_2
 channel: discord
 system: rope
 status: no-source
 subscriber: unknown
 
-Interested in the Rope Locomotion System released on YouTube on May 20 2024.
-It is no longer available on Patreon after the account migration.
+Interested in the Rope Locomotion System. Is it still available after the
+account migration?
 
-### 2026-08-13 sanantoniospurs2269
+### 2026-08-13 example_user_3
 channel: youtube
 system: -
 status: no-source
 subscriber: no
 
 By subscribing to the premium tier, can I get access to all the content and its
-files, and use them in my games? Also, are all your animation systems and packs
-compatible with GASP Mover 5.7 or 5.8?
+files, and use them in my games? Are the packs compatible with GASP Mover 5.8?
 
-### 2026-08-13 luizacria
+### 2026-08-13 example_user_4
 channel: youtube
 system: -
 status: no-source
@@ -86,7 +85,7 @@ subscriber: no
 
 Can these systems be used commercially?
 
-### 2026-08-13 ArthurUE
+### 2026-08-13 example_user_5
 channel: discord
 system: obstacle-avoidance
 status: no-source
@@ -94,7 +93,7 @@ subscriber: yes
 
 How do I install Obstacle Avoidance in a project that already has ALS?
 
-### 2026-08-13 dev_marcos
+### 2026-08-13 example_user_6
 channel: youtube
 system: -
 status: answered

@@ -25,3 +25,7 @@ clickup-mcp/icons_out/
 *service-account*.json
 *credentials*.json
 clickup-mcp/client_secret.json
+
+# Premium product routes with MEGA/Drive decryption keys - never track
+discord-feedback-bot/dub_links.csv
+**/dub_links.csv

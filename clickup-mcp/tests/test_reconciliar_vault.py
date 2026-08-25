@@ -7,7 +7,7 @@ B = api.API_BASE
 
 CAIXA_EXEMPLO = """# Caixa de Entrada
 
-## Freelancing / Projeto Jonathan (Arq Viz UE5)
+## Freelancing / Projeto Exemplo (Arq Viz)
 
 - [ ] [FABIANO] Testar build final | prioridade: high | due: 2026-08-15
 - [x] [Ja enviada antes](https://x) - enviada 2026-08-01
@@ -21,7 +21,7 @@ CAIXA_EXEMPLO = """# Caixa de Entrada
 def test_analisar_caixa_extrai_pendentes_com_sufixos():
     itens = rv.analisar_caixa(CAIXA_EXEMPLO)
     assert len(itens) == 2
-    assert itens[0]["rotulo"] == "Freelancing / Projeto Jonathan (Arq Viz UE5)"
+    assert itens[0]["rotulo"] == "Freelancing / Projeto Exemplo (Arq Viz)"
     assert itens[0]["nome"] == "[FABIANO] Testar build final"
     assert itens[0]["prioridade"] == "high"
     assert itens[0]["due"] == "2026-08-15"
@@ -31,11 +31,11 @@ def test_analisar_caixa_extrai_pendentes_com_sufixos():
 
 def test_resolver_lista_exato_substring_e_ambiguo():
     mapa = {
-        "freelancing / projeto jonathan (arq viz ue5)": "L1",
+        "freelancing / projeto exemplo (arq viz)": "L1",
         "wingman marketing / 2. rotina (recorrentes)": "L2",
         "wingman marketing / 3. tutoriais (backlog de conteúdo)": "L3",
     }
-    assert rv.resolver_lista("Freelancing / Projeto Jonathan (Arq Viz UE5)", mapa) == "L1"
+    assert rv.resolver_lista("Freelancing / Projeto Exemplo (Arq Viz)", mapa) == "L1"
     assert rv.resolver_lista("2. Rotina (Recorrentes)", mapa) == "L2"
     # "wingman" casa com duas listas: ambiguidade nao pode chutar
     assert rv.resolver_lista("wingman", mapa) is None
@@ -48,7 +48,7 @@ def test_empurrar_cria_e_reescreve_linha(tmp_path, monkeypatch):
     monkeypatch.setattr(
         rv, "mapa_de_listas",
         lambda ws: {
-            "freelancing / projeto jonathan (arq viz ue5)": "L1",
+            "freelancing / projeto exemplo (arq viz)": "L1",
             "wingman marketing / 2. rotina (recorrentes)": "L2",
         },
     )
@@ -86,7 +86,7 @@ def test_puxar_espelha_estrutura_de_pastas(tmp_path, monkeypatch):
     monkeypatch.setattr(
         rv.ai, "listas_do_workspace",
         lambda ws: [
-            ("L1", "Freelancing / Projeto Jonathan (Arq Viz UE5)"),
+            ("L1", "Freelancing / Projeto Exemplo (Arq Viz)"),
             ("L9", "Patreon Projects / List"),
             ("L5", "Get Started"),
         ],
@@ -94,9 +94,9 @@ def test_puxar_espelha_estrutura_de_pastas(tmp_path, monkeypatch):
     monkeypatch.setattr(
         rv.ai, "tarefas_do_workspace",
         lambda ws, desde_ms=None: [
-            {"id": "1", "name": "[FABIANO] [JONATHAN] T1", "url": "https://app/1",
+            {"id": "1", "name": "[FABIANO] [CLIENTE] T1", "url": "https://app/1",
              "folder": {"name": "Freelancing"},
-             "list": {"id": "L1", "name": "Projeto Jonathan (Arq Viz UE5)"},
+             "list": {"id": "L1", "name": "Projeto Exemplo (Arq Viz)"},
              "status": {"status": "concluído"}},
             {"id": "2", "name": "Solta", "url": "https://app/2",
              "folder": {"name": "hidden"},
@@ -108,7 +108,7 @@ def test_puxar_espelha_estrutura_de_pastas(tmp_path, monkeypatch):
 
     import os
     assert sorted(notas) == [
-        os.path.join("Freelancing", "Projeto Jonathan (Arq Viz UE5).md"),
+        os.path.join("Freelancing", "Projeto Exemplo (Arq Viz).md"),
         os.path.join("Listas Soltas", "Get Started.md"),
         os.path.join("Patreon Projects", "List.md"),  # lista vazia tambem
     ]
@@ -116,7 +116,7 @@ def test_puxar_espelha_estrutura_de_pastas(tmp_path, monkeypatch):
     assert not (tmp_path / "Freelancing" / "Lista Removida.md").exists()
     assert fixa.exists()
 
-    texto = (tmp_path / "Freelancing" / "Projeto Jonathan (Arq Viz UE5).md").read_text(encoding="utf-8")
-    assert "| [T1](https://app/1) | FABIANO | JONATHAN | concluído |" in texto
+    texto = (tmp_path / "Freelancing" / "Projeto Exemplo (Arq Viz).md").read_text(encoding="utf-8")
+    assert "| [T1](https://app/1) | FABIANO | CLIENTE | concluído |" in texto
     vazia = (tmp_path / "Patreon Projects" / "List.md").read_text(encoding="utf-8")
     assert "Lista vazia no ClickUp" in vazia
