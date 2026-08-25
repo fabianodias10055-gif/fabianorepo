@@ -1933,6 +1933,7 @@ function setView(name) {
      then. Arriving on the screen is the moment to check it is still the
      list the server has. */
   if (name === "questions" && typeof bulkTick === "function") bulkTick();
+  if (name === "business" && typeof wmDetail === "function") wmDetail();
   /* The graphs on the arriving screen fill up as it opens. Hidden ones
      would have finished animating invisibly, so it runs per arrival. */
   if (typeof sparkReplay === "function") sparkReplay(document.getElementById(name));
@@ -5819,6 +5820,35 @@ document.addEventListener("click", function (ev) {
   if (tile) sparkReplay(tile);
 });
 
+/* ---- Wingman named tables: filled live so no name is baked into
+   panel.html (which the vault carries). ---- */
+function wmPill(plan) {
+  plan = (plan || "free").toLowerCase();
+  var cls = (plan === "premium" || plan === "standard") ? "ok" : "mut";
+  return '<span class="pill st-' + cls + '">' + esc(plan) + "</span>";
+}
+function wmDetail() {
+  var top = $("#wm-top"), prem = $("#wm-prem");
+  if (!top || !prem || !LIVE) return;
+  fetch("/wingman-detail.json", { cache: "no-store" })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d || !d.ok) return;
+      var NL = "";
+      top.innerHTML = (d.top_users || []).map(function (u) {
+        return '<tr><td><span class="nm">' + esc(u.name || "—")
+          + "</span></td><td>" + wmPill(u.plan) + '</td><td class="num">'
+          + fmt(u.prompts || 0) + "</td></tr>";
+      }).join(NL) || '<tr><td colspan="3" class="note">none</td></tr>';
+      prem.innerHTML = (d.premium || []).map(function (p) {
+        return '<tr><td><span class="nm">' + esc(p.name || "—")
+          + "</span></td><td>" + wmPill(p.plan) + '</td><td class="num">'
+          + fmt(p.days || 0) + "d</td></tr>";
+      }).join(NL) || '<tr><td colspan="3" class="note">none</td></tr>';
+    })
+    .catch(function () {});
+}
+
 /* ---- Email screen: one audience, one message, sent server-side ---- */
 var EM_SEG = "", EM_COUNT = 0;
 function emBodyHtml() {
@@ -7700,27 +7730,10 @@ def _wingman_users_card(d: dict) -> str:
         f'<span class="wm-sn">{_fmt(x.get("n", 0))}</span></div>'
         for x in src)
 
-    def mask(email: str) -> str:
-        name, _, dom = (email or "").partition("@")
-        if not dom:
-            return escape(email or "")
-        head = name[:2] + "…" if len(name) > 2 else name
-        return escape(f"{head}@{dom}")
-
-    top = w.get("top_users") or []
-    toprows = "".join(
-        f'<tr><td><span class="nm">{escape(u.get("name") or mask(u.get("email","")))}</span></td>'
-        f'<td>{_pill_plan(u.get("plan"))}</td>'
-        f'<td class="num">{_fmt(u.get("prompts", 0))}</td></tr>'
-        for u in top[:10])
-
-    prem_list = w.get("premium") or []
-    premrows = "".join(
-        f'<tr><td><span class="nm">{escape(p.get("name") or mask(p.get("email","")))}</span></td>'
-        f'<td>{_pill_plan(p.get("plan"))}</td>'
-        f'<td class="num">{_fmt(p.get("days", 0))}d</td></tr>'
-        for p in prem_list[:12])
-
+    # The named tables are not rendered here: customer names would land in
+    # panel.html, which the vault carries. They fill at runtime from the
+    # token-gated /wingman-detail.json instead, so this card stays aggregate.
+    loading = '<tr><td colspan="3" class="note">loading…</td></tr>'
     built = w.get("generated_at", "")
     return (
         f'<section class="card" data-view="business" id="wingman-users">'
@@ -7738,11 +7751,11 @@ def _wingman_users_card(d: dict) -> str:
         f'<div class="wm-col"><h3 class="wm-h">Most active</h3>'
         f'<div class="scroll"><table><thead><tr><th>User</th><th>Plan</th>'
         f'<th class="num">Generations</th></tr></thead>'
-        f'<tbody>{toprows}</tbody></table></div></div>'
+        f'<tbody id="wm-top">{loading}</tbody></table></div></div>'
         f'<div class="wm-col"><h3 class="wm-h">Premium, by tenure</h3>'
         f'<div class="scroll"><table><thead><tr><th>User</th><th>Plan</th>'
         f'<th class="num">For</th></tr></thead>'
-        f'<tbody>{premrows}</tbody></table></div></div>'
+        f'<tbody id="wm-prem">{loading}</tbody></table></div></div>'
         f'</div>'
         + (f'<h3 class="wm-h">Where they come from</h3><div class="wm-src">{srchtml}</div>'
            if src else "")

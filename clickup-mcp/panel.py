@@ -5919,6 +5919,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path == "/wingman-detail.json":
+            # The named tables the account card shows, served live rather
+            # than baked into panel.html: the page lives in the vault and
+            # must carry only aggregates. Token-gated, and it drops the
+            # email entirely (the card shows a name, never an address).
+            if self.headers.get("X-Panel-Token") != SESSION_TOKEN:
+                return self.send_error(403, "not authorised")
+            w = _load_wingman()
+            return self._send_json({
+                "ok": True,
+                "top_users": [{"name": u.get("name"), "plan": u.get("plan"),
+                               "prompts": u.get("prompts", 0)}
+                              for u in (w.get("top_users") or [])[:10]],
+                "premium": [{"name": p.get("name"), "plan": p.get("plan"),
+                             "days": p.get("days", 0)}
+                            for p in (w.get("premium") or [])[:12]],
+            })
+
         if self.path.startswith("/links.json"):
             if self.headers.get("X-Panel-Token") != SESSION_TOKEN:
                 return self.send_error(403, "not authorised")
