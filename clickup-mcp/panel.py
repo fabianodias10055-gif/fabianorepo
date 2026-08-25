@@ -5817,7 +5817,13 @@ def fingerprint() -> tuple:
     for p in (VAULT / "Panel" / "patreon-members.json",
               VAULT / "Panel" / "discord-members.json",
               VAULT / "Panel" / "knowledge_base.json",
-              KB_SHIPPED_PATH):
+              KB_SHIPPED_PATH,
+              # Outside the vault (it holds customer emails), so the rglob
+              # above never sees it: named here so a Wingman collect still
+              # triggers a rebuild. Moving it out of Panel/ quietly broke
+              # that, and an open dashboard kept showing the old counts, or
+              # zero, until some unrelated note happened to change.
+              _wingman_private_dir() / "wingman-users.json"):
         try:
             st = p.stat()
         except OSError:
