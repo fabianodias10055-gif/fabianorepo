@@ -637,6 +637,15 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
 .em-body { background:var(--surface2); border:1px solid var(--line);
   border-radius:var(--r-md); color:var(--ink); padding:10px 12px; font:inherit;
   line-height:1.5; resize:vertical; }
+.em-preview { margin-top:var(--s3); border:1px solid var(--line);
+  border-radius:var(--r-md); overflow:hidden; }
+.em-pv-head { padding:8px 12px; font-size:var(--t-xs); color:var(--ink2);
+  background:var(--surface2); border-bottom:1px solid var(--line); }
+.em-pv-head b { color:var(--ink); }
+/* The email itself renders on white, the way an inbox shows it, regardless
+   of the panel theme; a dark preview would lie about how it looks. */
+.em-pv-frame { display:block; width:100%; height:460px; border:0;
+  background:#fff; }
 @media (max-width:720px){ .wm-cols { grid-template-columns:1fr; } }
 
 /* mobile nav, hidden on desktop */
@@ -5846,6 +5855,28 @@ document.addEventListener("click", function (ev) {
       .catch(function (e) { m.textContent = "not sent: " + e.message; });
     return;
   }
+  if (ev.target.closest("#empreview")) {
+    /* Renders the exact HTML the send builds (logo, body, footer) in a
+       sandboxed frame, so what you see is what goes out. It also runs the
+       same body check the send does, so a message that would be refused
+       shows the reason here instead of at send time. */
+    var pvhtml = emBodyHtml(), pvsubj = $("#emsubj").value.trim();
+    var mp = $("#emmsg"), pane = $("#empvpane");
+    if (!pvhtml) { mp.textContent = "write the message first"; return; }
+    fetch("/email", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "preview", subject: pvsubj, html: pvhtml }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { mp.textContent = "cannot preview: " + (d.error || ""); return; }
+        $("#empvsubj").textContent = d.subject || "(no subject)";
+        $("#empvframe").srcdoc = d.html;
+        pane.hidden = false;
+        mp.textContent = "";
+        pane.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      })
+      .catch(function (e) { mp.textContent = "preview failed: " + e.message; });
+    return;
+  }
   if (ev.target.closest("#emsend")) {
     var m2 = $("#emmsg");
     if (EM_BUSY || !EM_SEG) return;
@@ -7813,12 +7844,18 @@ def _email_card(d: dict) -> str:
         f'<div class="figbar">'
         f'<button class="btn tiny primary" id="emsend" disabled>Pick an '
         f'audience first</button>'
+        f'<button class="btn tiny" id="empreview">Preview</button>'
         f'<span class="fsep"></span>'
         f'<input id="emtestto" class="em-testto" type="email" '
         f'placeholder="you@example.com" aria-label="Test address">'
         f'<button class="btn tiny" id="emtest">Send a test to this address'
         f'</button>'
         f'<span class="note bigmsg" id="emmsg"></span></div>'
+        f'<div id="empvpane" class="em-preview" hidden>'
+        f'<div class="em-pv-head">This is exactly what sends, logo and footer '
+        f'included &middot; Subject: <b id="empvsubj"></b></div>'
+        f'<iframe id="empvframe" class="em-pv-frame" title="Email preview" '
+        f'sandbox=""></iframe></div>'
         f'</div></section>')
 
 

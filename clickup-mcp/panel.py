@@ -6299,6 +6299,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                 "count": len(emails)})
                 return self._send_json({"ok": True, "audiences": out,
                                         "from": get_secret("RESEND_FROM")})
+            if act == "preview":
+                # Exactly what the send builds, so the operator sees the logo,
+                # their message, and the footer before committing. Runs the
+                # same body check the send does, so a message that would be
+                # refused shows the reason here instead of at send time.
+                body = str(payload.get("html", "")).strip()
+                bad = (_validate_email_body(body) if body
+                       else "the message is empty")
+                if bad:
+                    return self._send_json({"ok": False, "error": bad})
+                return self._send_json({
+                    "ok": True, "html": _email_html(body),
+                    "subject": str(payload.get("subject", "")).strip()})
             if act == "send":
                 try:
                     expect = int(payload.get("expect", -1))
