@@ -5334,10 +5334,10 @@ def _update_history(out: Path, d: dict) -> list:
         return len(em) if em is not None else int(v.get("count") or 0)
 
     if seg:
-        point.update(wm_never=_wmn("never_generated"),
-                     wm_power=_wmn("power_free"),
-                     wm_churn=_wmn("churning_premium"),
-                     wm_new=_wmn("new_7d"))
+        # The audience series keys come from the one registry, so the writer
+        # and the sparkline that reads them cannot name them differently.
+        for s in panel_ui.WINGMAN_SEGMENTS:
+            point[s.hist_key] = _wmn(s.key)
     if summ:
         # Account growth, so "active users increase" has a real line: total
         # accounts, everyone who ever generated, active in 30d / 7d, paying.
@@ -5360,10 +5360,10 @@ def _update_history(out: Path, d: dict) -> list:
     except Exception:  # noqa: BLE001 - history must never block a build
         pass
 
-    keys = ("open", "rate", "cov", "crit", "complete",
-            "wm_never", "wm_power", "wm_churn", "wm_new",
-            "wm_acc", "wm_gen", "wm_a30", "wm_a7", "wm_prem",
-            "lt1", "lt24", "lt7", "ltn")
+    keys = (("open", "rate", "cov", "crit", "complete")
+            + tuple(s.hist_key for s in panel_ui.WINGMAN_SEGMENTS)
+            + ("wm_acc", "wm_gen", "wm_a30", "wm_a7", "wm_prem",
+               "lt1", "lt24", "lt7", "ltn"))
     if hist and all(hist[-1].get(k) == point.get(k) for k in keys):
         hist[-1]["t"] = point["t"]
     else:
