@@ -249,45 +249,11 @@ def _thumb_url(video_id: str, size: str = "mqdefault") -> str:
     return f"https://i.ytimg.com/vi/{vid}/{size}.jpg" if vid else ""
 
 
-def _mini_thumb(q: dict) -> str:
-    """A 48x27 still in the collapsed row: which tutorial this is about is
-    recognisable at a glance, which a slug in another column never is."""
-    url = _thumb_url(q.get("video_id", ""), "default")
-    if not url:
-        return ""
-    title = escape(q.get("video", ""), quote=True)
-    return (f'<span class="qthumb" title="{title}">'
-            f'<img loading="lazy" alt="" width="48" height="27" '
-            f'referrerpolicy="no-referrer" src="{url}" '
-            f'onerror="this.parentNode.classList.add(\'hide\')"></span>')
-
-
 _ROLE_CLASS = {
     "LocoPremium": "r-premium", "LocoStandard": "r-standard",
     "LocoBasic": "r-basic", "LocoHelper": "r-helper",
     "LocoDev Team": "r-team", "LocoTester": "r-team", "Patreon": "r-patreon",
 }
-
-
-def _roles(q: dict, limit: int = 3) -> str:
-    """What the asker is in the server today, tiers first."""
-    roles = q.get("roles") or []
-    if not roles:
-        return ""
-    out = []
-    for r in roles[:limit]:
-        out.append(f'<span class="role {_ROLE_CLASS.get(r, "r-other")}">'
-                   f'{escape(r)}</span>')
-    if len(roles) > limit:
-        rest = escape(", ".join(roles[limit:]), quote=True)
-        out.append(f'<span class="role r-other" title="{rest}">'
-                   f'+{len(roles) - limit}</span>')
-    return "".join(out)
-
-
-def _st_class(status: str) -> str:
-    import re
-    return "st-" + re.sub(r"[^a-z0-9]+", "-", status.lower()).strip("-")
 
 
 # The vault stores the precise value; "no-source" states WHY it is open
@@ -313,15 +279,6 @@ _STATUS_TITLE = {
 }
 
 
-def _pill(status: str) -> str:
-    label = _STATUS_LABEL.get(status, status)
-    title = _STATUS_TITLE.get(status, status)
-    emoji = _STATUS_EMOJI.get(status, "")
-    return (f'<span class="pill {_st_class(status)}" '
-            f'title="{escape(title, quote=True)}">'
-            f'<i class="pe">{emoji}</i>{escape(label)}</span>')
-
-
 _DIFF_TIP = {
     "easy": "easy: the vault already has a close match, Search my notes should find it",
     "medium": "medium: related material exists but nothing that answers it directly",
@@ -341,17 +298,6 @@ def _row_lookups() -> dict:
             "st_emoji": _STATUS_EMOJI, "diff_emoji": _DIFF_EMOJI,
             "diff_tip": _DIFF_TIP, "hues": list(_AV_HUES),
             "role_class": _ROLE_CLASS}
-
-
-def _diff_pill(q: dict) -> str:
-    """How much material the vault already has for this question."""
-    d = q.get("difficulty")
-    if not d or q.get("status") == "answered":
-        return ""
-    tips = _DIFF_TIP
-    return (f'<span class="dpill d-{d}" title="{escape(tips[d], quote=True)}">'
-            f'<i class="pe">{_DIFF_EMOJI[d]}</i>{d} '
-            f'<b>{q.get("coverage", 0)}%</b></span>')
 
 
 def _chn(channel: str) -> str:
@@ -1259,9 +1205,6 @@ tr.qdet.open > td { box-shadow:inset 3px 0 0 var(--accent); }
 .u-critical { background:var(--crit-bg); color:var(--crit); border-color:var(--crit-line); }
 .u-urgent { background:var(--warn-bg); color:var(--warn); border-color:var(--warn-line); }
 .qcell { display:flex; gap:var(--s3); align-items:center; }
-.qthumb { flex:none; width:48px; height:27px; border-radius:var(--r-xs);
-  overflow:hidden; background:var(--surface3); }
-.qthumb img { width:100%; height:100%; object-fit:cover; display:block; }
 .idcell { width:1%; white-space:nowrap; }
 .qid { font-family:var(--mono); font-size:var(--t-xs); color:var(--ink3);
   background:var(--surface2); border:1px solid var(--line2);
@@ -7902,12 +7845,6 @@ def _wm_stamp(w: dict) -> str:
         shown = raw or "never"
     return (f"audiences read from Supabase at {escape(shown)} "
             f"(your time) &middot; the collector refreshes them every 12 h")
-
-
-def _pill_plan(plan: str) -> str:
-    plan = (plan or "free").lower()
-    cls = "ok" if plan in ("premium", "standard") else "mut"
-    return f'<span class="pill st-{cls}">{escape(plan)}</span>'
 
 
 # Named for what a person comes here to do. The ids stay as they were:
