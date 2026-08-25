@@ -724,8 +724,15 @@ def enviar_email_resend(assunto: str, html: str, para: list[str] | None = None) 
     Requer RESEND_API_KEY e RESEND_FROM no .env. Sem `para`, usa
     RESEND_TO_DEFAULT (emails separados por virgula).
     """
-    chave = os.getenv("RESEND_API_KEY", "").strip()
-    remetente = os.getenv("RESEND_FROM", "").strip()
+    # Env first, Windows Credential Manager second, like every other secret
+    # in this repo: the key belongs in the store, not in a plaintext file.
+    try:
+        from secrets_store import get_secret as _gs
+    except ImportError:
+        def _gs(name, default=""):
+            return os.getenv(name, default)
+    chave = (_gs("RESEND_API_KEY") or "").strip()
+    remetente = (_gs("RESEND_FROM") or "").strip()
     destinos = para or [
         e.strip() for e in os.getenv("RESEND_TO_DEFAULT", "").split(",") if e.strip()
     ]

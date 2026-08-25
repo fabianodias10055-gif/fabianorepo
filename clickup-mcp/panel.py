@@ -4860,6 +4860,20 @@ def build_people(questions: list[dict]) -> list[dict]:
     return ordered
 
 
+def _load_wingman() -> dict:
+    """The LocoAI/Wingman account rollup, written by collect_wingman.py from
+    Supabase into Panel/wingman-users.json. The panel only reads it, the same
+    way it reads the Patreon and Discord member snapshots, so a Supabase
+    outage or a missing file leaves the card empty rather than the page
+    broken."""
+    try:
+        doc = json.loads((VAULT / "Panel" / "wingman-users.json")
+                         .read_text(encoding="utf-8"))
+        return doc if isinstance(doc, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def scan() -> dict:
     # Real demand first: with logged questions, a system's demand is how many
     # people actually asked and got nothing, not the hand-typed DEMAND table.
@@ -4990,6 +5004,7 @@ def scan() -> dict:
         "questions": questions,
         "gaps": gaps,
         "people": people,
+        "wingman": _load_wingman(),
         "answers": parse_answers(),
         # Embedded in the page so the reload that follows every vault change
         # restores what the model already produced instead of losing it.

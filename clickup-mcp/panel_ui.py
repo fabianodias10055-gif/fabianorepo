@@ -619,6 +619,37 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
 .acfoot { padding:8px 14px; border-top:1px solid var(--line); }
 .acfoot button { width:100%; }
 
+/* Wingman accounts card. wm- prefix because the stylesheet has no
+   namespace and a bare .tile / .seg would collide. */
+.wm-tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:var(--s3); margin:var(--s3) 0; }
+.wm-tile { background:var(--surface2); border:1px solid var(--line); border-radius:var(--r-md);
+  padding:12px 14px; display:flex; flex-direction:column; gap:2px; }
+.wm-n { font-size:var(--t-xl); font-weight:700; font-family:var(--mono); line-height:1.1; }
+.wm-l { font-size:var(--t-xs); color:var(--ink2); }
+.wm-gap { background:var(--warn-bg); border:1px solid var(--warn); color:var(--ink);
+  border-radius:var(--r-md); padding:10px 14px; font-size:var(--t-sm); margin:var(--s3) 0; }
+.wm-gap b { color:var(--warn); font-family:var(--mono); }
+.wm-h { font-size:var(--t-sm); margin:var(--s4) 0 var(--s2); color:var(--ink2);
+  text-transform:uppercase; letter-spacing:.04em; }
+.wm-segs { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:var(--s3); }
+.wm-seg { text-align:left; background:var(--surface2); border:1px solid var(--line);
+  border-radius:var(--r-md); padding:12px 14px; cursor:pointer; display:flex;
+  flex-direction:column; gap:2px; transition:border-color .15s, background .15s; }
+.wm-seg:hover { border-color:var(--accent-line); background:var(--surface3); }
+.wm-segn { font-size:var(--t-lg); font-weight:700; font-family:var(--mono); }
+.wm-segl { font-size:var(--t-sm); color:var(--ink); }
+.wm-segt { font-size:var(--t-2xs); color:var(--ink3); text-transform:uppercase; letter-spacing:.04em; }
+.wm-cols { display:grid; grid-template-columns:1fr 1fr; gap:var(--s4); margin-top:var(--s3); }
+.wm-col { min-width:0; }
+.wm-src { display:flex; flex-direction:column; gap:6px; }
+.wm-srow { display:flex; align-items:center; gap:10px; font-size:var(--t-xs); }
+.wm-sl { min-width:130px; color:var(--ink2); }
+.wm-sn { font-family:var(--mono); color:var(--ink2); min-width:36px; text-align:right; }
+.wm-built { margin-top:var(--s3); color:var(--ink3); font-family:var(--mono); font-size:var(--t-2xs); }
+.pill.st-mut { background:var(--surface3); color:var(--ink3); }
+@media (max-width:720px){ .wm-cols { grid-template-columns:1fr; } }
+
 /* mobile nav, hidden on desktop */
 .mnav { display:none; gap:var(--s2); overflow-x:auto; padding:0 0 var(--s4);
   scrollbar-width:none; }
@@ -1760,6 +1791,10 @@ var SRCDET = __SRCDET__;
    are questions that appeared since the previous build, sources the
    per-collector last-sync line above them. */
 var ACTIVITY = __ACTIVITY__;
+/* LocoAI/Wingman account rollup from Supabase: summary, segments (email
+   audiences), sources, top_users, premium. The card reads it; it is empty
+   until collect_wingman.py has run. */
+var WINGMAN = __WINGMAN__;
 /* Full monthly history for every chart. The browser slices the window,
    fits the trend and extends the projection, so the whole series has to
    be here rather than the twelve months a server-drawn chart would send. */
@@ -7469,6 +7504,137 @@ def _wingman_card(d: dict) -> str:
     )
 
 
+def _wingman_users_card(d: dict) -> str:
+    """LocoAI/Wingman accounts: who signed up, who activated, who pays, and
+    the email audiences that fall out of that. Reads the Supabase rollup in
+    Panel/wingman-users.json; empty and self-explaining until it exists."""
+    w = d.get("wingman") or {}
+    s = w.get("summary") or {}
+    if not s:
+        return (
+            '<section class="card" data-view="business" id="wingman-users">'
+            '<h2><span class="he">🪄</span>Wingman accounts</h2>'
+            '<p class="note">No account data yet. This reads a Supabase '
+            'rollup written by <code>collect_wingman.py</code>. Add '
+            'SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY, run it once, and the '
+            'accounts, activation, premium and email audiences show here.</p>'
+            '</section>')
+
+    acc = s.get("accounts", 0) or 0
+    gen = s.get("generated", 0) or 0
+    never = max(0, acc - gen)
+    act = round(gen * 100 / acc) if acc else 0
+    prem = s.get("premium", 0) or 0
+    conv = round(prem * 100 / acc, 1) if acc else 0
+
+    tiles = [
+        ("Accounts", _fmt(acc), f'{_fmt(s.get("new_30d", 0))} new in 30 days'),
+        ("Activated", _fmt(gen), f'{act}% ever generated'),
+        ("Active in 30d", _fmt(s.get("active_30d", 0)),
+         f'{_fmt(s.get("active_7d", 0))} in the last 7'),
+        ("Premium", _fmt(prem), f'{conv}% of accounts pay'),
+        ("Cakto subs", _fmt(s.get("cakto_active", 0)), "courses and packs"),
+        ("Can email", _fmt(s.get("emailable", 0)), "confirmed address"),
+    ]
+    tilehtml = "".join(
+        f'<div class="wm-tile"><span class="wm-n">{v}</span>'
+        f'<span class="wm-l">{escape(lab)}</span>'
+        f'<span class="note">{escape(sub)}</span></div>'
+        for lab, v, sub in tiles)
+
+    # The activation gap is the headline number worth acting on.
+    gap = (f'<p class="wm-gap"><b>{_fmt(never)}</b> people created an account '
+           f'and never generated anything &mdash; that is {100 - act}% of '
+           f'everyone. The onboarding audience below is exactly them.</p>')
+
+    seg = w.get("segments") or {}
+
+    def seg_n(k):
+        v = seg.get(k) or {}
+        return v.get("count", 0) if isinstance(v, dict) else len(v or [])
+
+    audiences = [
+        ("never_generated", "Never generated", "onboarding nudge"),
+        ("power_free", "Power users, still free", "upsell to premium"),
+        ("churning_premium", "Premium gone quiet", "win them back"),
+        ("new_7d", "New this week", "welcome"),
+    ]
+    seghtml = "".join(
+        f'<button type="button" class="wm-seg" data-seg="{k}" '
+        f'data-count="{seg_n(k)}" title="{escape(tag)}">'
+        f'<span class="wm-segn">{_fmt(seg_n(k))}</span>'
+        f'<span class="wm-segl">{escape(lab)}</span>'
+        f'<span class="wm-segt">{escape(tag)}</span></button>'
+        for k, lab, tag in audiences)
+
+    # Where signups come from, the named channels only (the untagged
+    # majority says nothing worth a bar).
+    src = [x for x in (w.get("sources") or [])
+           if x.get("label") not in ("direct/unknown", "unknown", None)][:5]
+    smax = max((x.get("n", 0) for x in src), default=1) or 1
+    srchtml = "".join(
+        f'<div class="wm-srow"><span class="wm-sl">{escape(str(x.get("label", "")))}</span>'
+        f'{_bar(round(x.get("n", 0) * 100 / smax))}'
+        f'<span class="wm-sn">{_fmt(x.get("n", 0))}</span></div>'
+        for x in src)
+
+    def mask(email: str) -> str:
+        name, _, dom = (email or "").partition("@")
+        if not dom:
+            return escape(email or "")
+        head = name[:2] + "…" if len(name) > 2 else name
+        return escape(f"{head}@{dom}")
+
+    top = w.get("top_users") or []
+    toprows = "".join(
+        f'<tr><td><span class="nm">{escape(u.get("name") or mask(u.get("email","")))}</span></td>'
+        f'<td>{_pill_plan(u.get("plan"))}</td>'
+        f'<td class="num">{_fmt(u.get("prompts", 0))}</td></tr>'
+        for u in top[:10])
+
+    prem_list = w.get("premium") or []
+    premrows = "".join(
+        f'<tr><td><span class="nm">{escape(p.get("name") or mask(p.get("email","")))}</span></td>'
+        f'<td>{_pill_plan(p.get("plan"))}</td>'
+        f'<td class="num">{_fmt(p.get("days", 0))}d</td></tr>'
+        for p in prem_list[:12])
+
+    built = w.get("generated_at", "")
+    return (
+        f'<section class="card" data-view="business" id="wingman-users">'
+        f'<h2><span class="he">🪄</span>Wingman accounts'
+        f'<span class="cnt">{_fmt(acc)} accounts &middot; {act}% activated '
+        f'&middot; {prem} paying</span></h2>'
+        f'<div class="wm-tiles">{tilehtml}</div>'
+        f'{gap}'
+        f'<h3 class="wm-h">Email audiences</h3>'
+        f'<p class="note">Who to reach, cut from the same data. Sending runs '
+        f'through Resend once RESEND_API_KEY is set; for now these are the '
+        f'counts and who is in each.</p>'
+        f'<div class="wm-segs">{seghtml}</div>'
+        f'<div class="wm-cols">'
+        f'<div class="wm-col"><h3 class="wm-h">Most active</h3>'
+        f'<div class="scroll"><table><thead><tr><th>User</th><th>Plan</th>'
+        f'<th class="num">Generations</th></tr></thead>'
+        f'<tbody>{toprows}</tbody></table></div></div>'
+        f'<div class="wm-col"><h3 class="wm-h">Premium, by tenure</h3>'
+        f'<div class="scroll"><table><thead><tr><th>User</th><th>Plan</th>'
+        f'<th class="num">For</th></tr></thead>'
+        f'<tbody>{premrows}</tbody></table></div></div>'
+        f'</div>'
+        + (f'<h3 class="wm-h">Where they come from</h3><div class="wm-src">{srchtml}</div>'
+           if src else "")
+        + (f'<p class="note wm-built">from Supabase &middot; {escape(built)}</p>'
+           if built else "")
+        + '</section>')
+
+
+def _pill_plan(plan: str) -> str:
+    plan = (plan or "free").lower()
+    cls = "ok" if plan in ("premium", "standard") else "mut"
+    return f'<span class="pill st-{cls}">{escape(plan)}</span>'
+
+
 # Named for what a person comes here to do. The ids stay as they were:
 # they are what the screen switch and every #questions link already use, and
 # renaming them would break bookmarks to rename nothing a reader can see.
@@ -7852,6 +8018,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
         "__QDATA__": embed(_question_payload(d["questions"])),
         "__LOOKUPS__": embed(_row_lookups()),
         "__ACTIVITY__": embed(d.get("activity_payload") or {}),
+        "__WINGMAN__": embed(d.get("wingman") or {}),
         "__SRCDET__": embed(d.get("source_details") or {}),
         "__CHARTS__": embed(_chart_payload(d)),
         "__BRANDS__": embed(list(_BRAND)),
@@ -7911,6 +8078,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 {_stamp_views(_answers_card(d) + _system_pressure_card(d, facets))}
 </div>
 {_stamp_views(_business_screen(d, _period_card(d) + _sales_card(d)
+                                 + _wingman_users_card(d)
                                  + _retention_card(d) + _effect_card(d)
                                  + _people_card(d))
               + _links_card() + _sync_card(d) + _wingman_card(d))}

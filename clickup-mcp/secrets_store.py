@@ -53,6 +53,15 @@ SECRET_KEYS = (
     "PATREON_CLIENT_SECRET",
     "LOCODEV_ADMIN_SECRET",
     "RESEND_API_KEY",
+    # The account for the Resend send to come from, e.g. LocoDev
+    # <hello@locodev.dev>. Not a secret, but it lives with the key it is
+    # paired with so one lookup covers both.
+    "RESEND_FROM",
+    # Reading the LocoAI/Wingman accounts for the panel's Wingman card. The
+    # service-role key bypasses RLS, so it is a real secret and belongs here
+    # rather than in a plaintext file.
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY",
     "DISCORD_WEBHOOK_URL",
     "ANTHROPIC_API_KEY",
 )
