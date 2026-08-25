@@ -7569,8 +7569,10 @@ def _wingman_card(d: dict) -> str:
 
 def _wingman_users_card(d: dict) -> str:
     """LocoAI/Wingman accounts: who signed up, who activated, who pays, and
-    the email audiences that fall out of that. Reads the Supabase rollup in
-    Panel/wingman-users.json; empty and self-explaining until it exists."""
+    the email audiences that fall out of that. Reads the Supabase rollup
+    collect_wingman.py writes to the private folder (%LOCALAPPDATA%/
+    locodev-panel), never the vault; empty and self-explaining until it
+    exists."""
     w = d.get("wingman") or {}
     s = w.get("summary") or {}
     if not s:
@@ -7670,9 +7672,9 @@ def _wingman_users_card(d: dict) -> str:
         f'<div class="wm-tiles">{tilehtml}</div>'
         f'{gap}'
         f'<h3 class="wm-h">Email audiences</h3>'
-        f'<p class="note">Who to reach, cut from the same data. Sending runs '
-        f'through Resend once RESEND_API_KEY is set; for now these are the '
-        f'counts and who is in each.</p>'
+        f'<p class="note">Who to reach, cut from the same data. These are the '
+        f'audience counts; pick one and send it through Resend from the Email '
+        f'screen below.</p>'
         f'<div class="wm-segs">{seghtml}</div>'
         f'<div class="wm-cols">'
         f'<div class="wm-col"><h3 class="wm-h">Most active</h3>'
@@ -7742,8 +7744,9 @@ def _email_card(d: dict) -> str:
         f'<p class="note">Pick who, write once, send. The recipient list is '
         f'resolved on the server at send time from the latest Supabase '
         f'snapshot, every message goes out individually (nobody sees anyone '
-        f'else), a footer explains why they got it, and every send lands in '
-        f'<code>Panel/email-log.md</code>.</p>'
+        f'else), a footer explains why they got it, and every send is logged '
+        f'to <code>email-log.md</code> in the private folder, outside the '
+        f'vault.</p>'
         f'<h3 class="wm-h">Who</h3>'
         f'<div class="wm-segs em-auds">{audhtml}</div>'
         f'<h3 class="wm-h">Message</h3>'
