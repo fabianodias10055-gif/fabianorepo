@@ -5708,6 +5708,34 @@ def _email_html(body_html: str) -> str:
         '"unsubscribe" and you will not hear from us again.</p>')
 
 
+def _reply_address() -> str:
+    """The address a reply, including "unsubscribe", should reach: a dedicated
+    RESEND_REPLY_TO if set, else the address inside RESEND_FROM. Empty if
+    neither yields a clean address. A carriage return or line feed is refused
+    rather than trusted: a header value carrying one could forge extra email
+    headers, so a dirty value is dropped, not sent."""
+    raw = (get_secret("RESEND_REPLY_TO") or "").strip()
+    if not raw:
+        frm = get_secret("RESEND_FROM") or ""
+        m = re.search(r"<([^>]+)>", frm)
+        raw = (m.group(1) if m else frm).strip()
+    if not raw or "@" not in raw or "\n" in raw or "\r" in raw:
+        return ""
+    return raw
+
+
+def _email_extra() -> dict:
+    """Fields added to every send: a reply-to so replies reach a real inbox,
+    and a List-Unsubscribe mailto so mail clients show a native unsubscribe
+    shortcut. This is a mailto shortcut, not RFC 8058 one-click, which would
+    need a public HTTPS endpoint that syncs suppression; the panel has none."""
+    reply = _reply_address()
+    if not reply:
+        return {}
+    return {"reply_to": reply,
+            "headers": {"List-Unsubscribe": f"<mailto:{reply}?subject=unsubscribe>"}}
+
+
 def send_wingman_email(segment: str, subject: str, body_html: str,
                        expect: int = -1, test_to: str = "") -> dict:
     """Send one message to one audience, or a single test to one address.
@@ -5729,6 +5757,7 @@ def send_wingman_email(segment: str, subject: str, body_html: str,
     if not sender:
         return {"ok": False, "error": "RESEND_FROM is not stored yet"}
 
+    extra = _email_extra()
     if not _email_lock.acquire(blocking=False):
         return {"ok": False, "error": "another send is already running"}
     try:
@@ -5738,7 +5767,7 @@ def send_wingman_email(segment: str, subject: str, body_html: str,
                 return {"ok": False, "error": "give the test an address to go to"}
             outcome, res = _resend_request("/emails", {
                 "from": sender, "to": [to], "subject": subject,
-                "html": _email_html(body_html)})
+                "html": _email_html(body_html), **extra})
             if outcome == "ok":
                 _email_log("test", to, subject, 1, 0)
                 return {"ok": True, "sent": 1, "failed": 0, "to": to}
@@ -5767,8 +5796,8 @@ def send_wingman_email(segment: str, subject: str, body_html: str,
             chunk = emails[i:i + 100]
             outcome, res = _resend_request(
                 "/emails/batch",
-                [{"from": sender, "to": [e], "subject": subject, "html": html}
-                 for e in chunk],
+                [{"from": sender, "to": [e], "subject": subject, "html": html,
+                  **extra} for e in chunk],
                 idem=f"wm-{base}-{i}")
             if outcome == "ok":
                 # Count what Resend actually created, never the 2xx alone: a

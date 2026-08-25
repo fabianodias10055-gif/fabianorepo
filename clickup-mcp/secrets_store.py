@@ -70,6 +70,10 @@ SECRET_KEYS = (
     # <hello@locodev.dev>. Not a secret, but it lives with the key it is
     # paired with so one lookup covers both.
     "RESEND_FROM",
+    # Optional. Where replies (including "unsubscribe") should land if that
+    # is not the from address. An address, not a credential, but it lives
+    # with the Resend pair so one lookup covers all three.
+    "RESEND_REPLY_TO",
     # Reading the LocoAI/Wingman accounts for the panel's Wingman card. The
     # service-role key bypasses RLS, so it is a real secret and belongs here
     # rather than in a plaintext file.

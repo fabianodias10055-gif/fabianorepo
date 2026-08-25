@@ -111,6 +111,31 @@ def test_bad_body_blocks_send_before_resend(monkeypatch):
     assert called["sent"] is False
 
 
+def test_reply_to_and_list_unsubscribe_attached(monkeypatch):
+    monkeypatch.setattr(panel, "get_secret", lambda name, default="": {
+        "RESEND_FROM": "LocoDev <hi@locodev.dev>"}.get(name, ""))
+    monkeypatch.setattr(panel, "_email_audience", lambda seg: (["a@x.dev"], ""))
+    monkeypatch.setattr(panel, "_email_log", lambda *a, **k: True)
+    monkeypatch.setattr(panel.time, "sleep", lambda *_: None)
+    captured = {}
+
+    def fake(path, payload, idem=""):
+        captured["p"] = payload
+        return ("ok", _ids(len(payload)))
+    monkeypatch.setattr(panel, "_resend_request", fake)
+    panel.send_wingman_email("never_generated", "S", "<p>x</p>", expect=1)
+    msg = captured["p"][0]
+    assert msg["reply_to"] == "hi@locodev.dev"
+    assert msg["headers"]["List-Unsubscribe"] == \
+        "<mailto:hi@locodev.dev?subject=unsubscribe>"
+
+
+def test_reply_to_refuses_header_injection(monkeypatch):
+    monkeypatch.setattr(panel, "get_secret", lambda name, default="": {
+        "RESEND_REPLY_TO": "evil@x.dev\r\nBcc: victim@x.dev"}.get(name, ""))
+    assert panel._reply_address() == ""
+
+
 def test_stale_count_blocks_send(monkeypatch):
     monkeypatch.setattr(panel, "get_secret",
                         lambda name, default="": "hi@locodev.dev"
