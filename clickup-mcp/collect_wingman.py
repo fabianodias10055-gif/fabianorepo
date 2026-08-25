@@ -214,34 +214,36 @@ def build(users, profiles, usage, licenses, subs) -> dict:
     def days_since_created(e):
         return int((now - e["created"]).total_seconds() // 86400) if e["created"] else 0
 
+    def recipients(pred) -> list[str]:
+        """One canonical audience: normalized, deduplicated, emailable. The
+        panel's send resolves the list the same way, so count == len(emails)
+        here means the page's number and the server's can never disagree and
+        trip the stale-audience guard, and no un-emailable address slips in
+        through a segment that once counted the wider population."""
+        seen = set()
+        for e in enriched:
+            em = (e.get("email") or "").strip().lower()
+            if e["emailable"] and "@" in em and pred(e):
+                seen.add(em)
+        return sorted(seen)
+
+    never = recipients(lambda e: e["gen"] == 0)
+    new7 = recipients(lambda e: within(e["created"], 7))
+    powerf = recipients(lambda e: e["plan"] == "free" and e["gen"] >= POWER_FREE_MIN)
+    churn = recipients(lambda e: e["premium"] and not within(e["last_used"], CHURN_DAYS))
     segments = {
-        "never_generated": {
-            "count": sum(1 for e in enriched if e["gen"] == 0 and e["emailable"]),
-            "emails": [e["email"] for e in enriched
-                       if e["gen"] == 0 and e["emailable"]]},
-        "new_7d": {
-            "count": summary["new_7d"],
-            "emails": [e["email"] for e in enriched
-                       if within(e["created"], 7) and e["emailable"]]},
+        "never_generated": {"count": len(never), "emails": never},
+        "new_7d": {"count": len(new7), "emails": new7},
         "power_free": {
-            "count": sum(1 for e in enriched
-                         if e["plan"] == "free" and e["gen"] >= POWER_FREE_MIN),
-            # The full audience for sending, and the short ranked cut for
-            # display. The card shows top; the Email screen sends emails.
-            "emails": [e["email"] for e in enriched
-                       if e["plan"] == "free" and e["gen"] >= POWER_FREE_MIN
-                       and e["emailable"]],
+            "count": len(powerf), "emails": powerf,
+            # The ranked cut is display only; the card shows top, the send
+            # uses emails. Kept unfiltered by emailability on purpose: it is
+            # a leaderboard, not a recipient list.
             "top": [{"email": e["email"], "prompts": e["gen"]}
                     for e in sorted((e for e in enriched
                                      if e["plan"] == "free" and e["gen"] >= POWER_FREE_MIN),
                                     key=lambda e: -e["gen"])[:15]]},
-        "churning_premium": {
-            "count": sum(1 for e in prem_users if not within(e["last_used"], CHURN_DAYS)),
-            "emails": [e["email"] for e in prem_users
-                       if not within(e["last_used"], CHURN_DAYS) and e["emailable"]],
-            "users": [{"email": e["email"],
-                       "last_used": e["last_used"].date().isoformat() if e["last_used"] else None}
-                      for e in prem_users if not within(e["last_used"], CHURN_DAYS)]},
+        "churning_premium": {"count": len(churn), "emails": churn},
     }
 
     return {

@@ -5868,6 +5868,9 @@ function emSyncButton() {
   var b = $("#emsend");
   if (!b) return;
   if (!EM_SEG) { b.disabled = true; b.textContent = "Pick an audience first"; return; }
+  if (EM_COUNT <= 0) {
+    b.disabled = true; b.textContent = "No one in this audience"; return;
+  }
   b.disabled = false;
   b.textContent = "Send to " + fmt(EM_COUNT) + " people";
 }
@@ -5915,9 +5918,15 @@ document.addEventListener("click", function (ev) {
       .then(function (r) { return r.json(); })
       .then(function (d) {
         btn.disabled = false;
-        if (d.ok) m2.textContent = "sent to " + fmt(d.sent) + " people";
-        else m2.textContent = "problem: " + (d.error || "")
-          + (d.sent ? " (" + fmt(d.sent) + " did go out)" : "");
+        if (d.ok) { m2.textContent = "sent to " + fmt(d.sent) + " people"; }
+        else {
+          var msg = "problem: " + (d.error || "");
+          var extra = [];
+          if (d.sent) extra.push(fmt(d.sent) + " did go out");
+          if (d.not_attempted) extra.push(fmt(d.not_attempted) + " not attempted");
+          if (extra.length) msg += " (" + extra.join(", ") + ")";
+          m2.textContent = msg;
+        }
       })
       .catch(function (e) { btn.disabled = false; m2.textContent = "failed: " + e.message; });
     return;

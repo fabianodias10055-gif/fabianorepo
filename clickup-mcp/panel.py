@@ -5520,18 +5520,25 @@ EMAIL_LOG = "email-log.md"
 _email_lock = threading.Lock()
 
 
-def _resend_request(path: str, payload: dict) -> tuple[bool, object]:
+def _resend_request(path: str, payload: dict, idem: str = "") -> tuple[bool, object]:
     """One authenticated call to Resend. The explicit User-Agent matters:
     Cloudflare in front of the API 403s generic library agents, which reads
-    as an invalid key without being one."""
+    as an invalid key without being one.
+
+    idem is an Idempotency-Key: Resend remembers it for 24h and returns the
+    original result instead of sending again, so a retry after a lost
+    response does not re-mail the audience."""
     key = get_secret("RESEND_API_KEY")
     if not key:
         return False, "RESEND_API_KEY is not stored yet"
+    headers = {"Authorization": f"Bearer {key}",
+               "Content-Type": "application/json",
+               "User-Agent": "locodev-panel/1.0"}
+    if idem:
+        headers["Idempotency-Key"] = idem
     req = urlrequest.Request(
         RESEND_API + path, data=json.dumps(payload).encode("utf-8"),
-        headers={"Authorization": f"Bearer {key}",
-                 "Content-Type": "application/json",
-                 "User-Agent": "locodev-panel/1.0"}, method="POST")
+        headers=headers, method="POST")
     try:
         with urlrequest.urlopen(req, timeout=60) as resp:
             return True, json.load(resp)
@@ -5553,10 +5560,13 @@ def _email_audience(segment: str) -> tuple[list[str], str]:
     if segment not in labels:
         return [], f"unknown audience {segment!r}"
     seg = (_load_wingman().get("segments") or {}).get(segment) or {}
-    emails = seg.get("emails")
-    if emails is None and segment == "churning_premium":
-        emails = [u.get("email") for u in seg.get("users") or []]
-    emails = sorted({e.strip().lower() for e in (emails or []) if e and "@" in e})
+    # Only the collector's own recipient list, normalized the way it built
+    # it. An older snapshot without the key, or a legacy churning "users"
+    # list that was never emailable-filtered, is not a fallback to email
+    # blindly: it is a reason to say "refresh", not to mail unconfirmed or
+    # banned accounts.
+    emails = sorted({e.strip().lower() for e in (seg.get("emails") or [])
+                     if e and "@" in e})
     if not emails:
         return [], ("this audience has no addresses in the snapshot; run "
                     "collect_wingman.py and try again")
@@ -5617,39 +5627,61 @@ def send_wingman_email(segment: str, subject: str, body_html: str,
                               f"{expect}; refresh and read it again")}
 
         html = _email_html(body_html)
-        sent = failed = 0
+        # One key for this exact send (audience + subject + body). A retry
+        # after a lost response reuses it per chunk, so Resend returns the
+        # first result instead of mailing everyone twice.
+        base = hashlib.sha256(
+            ("\n".join(emails) + "\x00" + subject + "\x00" + html)
+            .encode("utf-8")).hexdigest()[:32]
+        sent = failed = not_attempted = 0
         errors: list[str] = []
         # Resend's batch endpoint takes up to 100 messages per call, each
         # its own email, so recipients never see each other's address.
         for i in range(0, len(emails), 100):
             chunk = emails[i:i + 100]
-            ok, res = _resend_request("/emails/batch", [
-                {"from": sender, "to": [e], "subject": subject, "html": html}
-                for e in chunk])
+            ok, res = _resend_request(
+                "/emails/batch",
+                [{"from": sender, "to": [e], "subject": subject, "html": html}
+                 for e in chunk],
+                idem=f"wm-{base}-{i}")
             if ok:
-                sent += len(chunk)
+                # Trust the response, not the HTTP status: a 2xx with fewer
+                # created entries than submitted means some were dropped.
+                made = len(res.get("data", [])) if isinstance(res, dict) else len(chunk)
+                made = made if made else len(chunk)
+                sent += min(made, len(chunk))
+                failed += max(0, len(chunk) - made)
             else:
                 failed += len(chunk)
                 if len(errors) < 3:
                     errors.append(str(res))
                 if "rejected" in str(res):
-                    break              # a dead key fails every later chunk too
+                    # A dead key fails every later chunk too: the rest were
+                    # never tried, and saying so is the difference between a
+                    # gap you can resume and one you cannot see.
+                    not_attempted = len(emails) - (i + len(chunk))
+                    break
             if i + 100 < len(emails):
                 time.sleep(0.6)        # under Resend's 2 requests per second
-        _email_log(segment, f"{sent} recipients", subject, sent, failed)
-        out = {"ok": failed == 0, "sent": sent, "failed": failed,
-               "audience": len(emails)}
+        log_ok = _email_log(segment, f"{sent} recipients", subject, sent, failed)
+        out = {"ok": failed == 0 and not_attempted == 0,
+               "sent": sent, "failed": failed, "not_attempted": not_attempted,
+               "audience": len(emails), "logged": log_ok}
         if errors:
             out["error"] = " | ".join(errors)
+        if not log_ok and sent:
+            out["error"] = ((out.get("error", "") + " | ") if out.get("error") else "") \
+                + "sent, but the audit line could not be written"
         return out
     finally:
         _email_lock.release()
 
 
-def _email_log(segment: str, to: str, subject: str, sent: int, failed: int) -> None:
-    """Every send leaves a line in the vault. Money and reputation go out
-    through this path; a send nobody can reconstruct afterwards is how a
-    mistake becomes a mystery."""
+def _email_log(segment: str, to: str, subject: str, sent: int, failed: int) -> bool:
+    """Every send leaves a line in the private folder. Money and reputation
+    go out through this path; a send nobody can reconstruct afterwards is how
+    a mistake becomes a mystery, so the caller is told whether the line
+    actually landed rather than assuming it did."""
     try:
         # Beside the audience data, outside the vault: a test line carries
         # the recipient's address.
@@ -5669,8 +5701,9 @@ def _email_log(segment: str, to: str, subject: str, sent: int, failed: int) -> N
                             encoding="utf-8")
         with path.open("a", encoding="utf-8") as fh:
             fh.write(line)
+        return True
     except OSError:
-        pass
+        return False
 
 
 def build(live: bool) -> dict:
