@@ -206,6 +206,27 @@ def test_plain_send_requires_an_unsubscribe_line(monkeypatch):
     assert sent["n"] == 0                                   # nothing was sent
 
 
+def test_visible_text_strips_comments_and_tags():
+    assert "unsubscribe" not in panel._visible_text("<!-- unsubscribe -->").lower()
+    assert "unsubscribe" not in panel._visible_text('<a title="unsubscribe">x</a>').lower()
+    assert "unsubscribe" in panel._visible_text("<p>reply unsubscribe</p>").lower()
+
+
+def test_plain_unsubscribe_must_be_visible_not_hidden(monkeypatch):
+    monkeypatch.setattr(panel, "get_secret", lambda n, d="": "hi@locodev.dev")
+    monkeypatch.setattr(panel, "_email_audience", lambda seg: (["a@x.dev"], ""))
+    sent = {"n": 0}
+    monkeypatch.setattr(panel, "_resend_request",
+                        lambda *a, **k: (sent.__setitem__("n", sent["n"] + 1),
+                                         ("ok", _ids(1)))[1])
+    # "unsubscribe" only in a comment and an attribute: not visible -> refused
+    hidden = '<p>News</p><!-- add unsubscribe later --><a title="unsubscribe">x</a>'
+    out = panel.send_wingman_email("never_generated", "S", hidden,
+                                   expect=1, confirm="1", plain=True)
+    assert out["ok"] is False and "unsubscribe" in out["error"].lower()
+    assert sent["n"] == 0
+
+
 def test_plain_send_goes_out_exactly_as_written(monkeypatch):
     monkeypatch.setattr(panel, "get_secret", lambda n, d="": "hi@locodev.dev")
     monkeypatch.setattr(panel, "_email_audience", lambda seg: (["a@x.dev"], ""))

@@ -5843,13 +5843,14 @@ document.addEventListener("click", function (ev) {
   if (ev.target.closest("#emtest")) {
     var to = $("#emtestto").value.trim();
     var html = emBodyHtml(), subj = $("#emsubj").value.trim();
+    var tplain = !!($("#emplain") && $("#emplain").checked);
     var m = $("#emmsg");
     if (!to) { m.textContent = "give the test an address"; return; }
     if (!subj || !html) { m.textContent = "write the subject and the message first"; return; }
     m.textContent = "sending the test\u2026";
     fetch("/email", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "send", segment: "test", to: to,
-                             subject: subj, html: html }) })
+                             subject: subj, html: html, plain: tplain }) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         m.textContent = d.ok ? "test sent to " + to : "not sent: " + (d.error || "");

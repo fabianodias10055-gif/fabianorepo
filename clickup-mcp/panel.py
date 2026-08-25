@@ -5815,6 +5815,18 @@ def _email_extra(plain: bool = False) -> dict:
             "headers": {"List-Unsubscribe": f"<mailto:{reply}?subject=unsubscribe>"}}
 
 
+def _visible_text(html: str) -> str:
+    """What a recipient actually sees: HTML comments removed, then tags
+    stripped. The plain-mode opt-out check runs against this, not the raw
+    source, so a required "unsubscribe" cannot be satisfied by a word hidden
+    in a comment (<!-- unsubscribe -->) or an attribute (title="unsubscribe").
+    A word left inside a display:none element still slips through, since that
+    needs CSS evaluation to catch; the operator is trusted, and this closes
+    the realistic accidental case (a leftover placeholder comment)."""
+    no_comments = re.sub(r"<!--.*?-->", " ", html or "", flags=re.S)
+    return re.sub(r"<[^>]+>", " ", no_comments)
+
+
 def send_wingman_email(segment: str, subject: str, body_html: str,
                        expect: int = -1, test_to: str = "",
                        confirm: str = "", plain: bool = False) -> dict:
@@ -5844,10 +5856,10 @@ def send_wingman_email(segment: str, subject: str, body_html: str,
     bad_body = _validate_email_body(body_html)
     if bad_body:
         return {"ok": False, "error": bad_body}
-    if plain and "unsubscribe" not in body_html.lower():
+    if plain and "unsubscribe" not in _visible_text(body_html).lower():
         return {"ok": False, "error": "plain mode sends your message as written "
-                "with no footer added, so the body itself must tell people how "
-                "to opt out; include the word 'unsubscribe' and send again"}
+                "with no footer added, so the body itself must show people how "
+                "to opt out; include a visible 'unsubscribe' line and send again"}
     sender = get_secret("RESEND_FROM")
     if not sender:
         return {"ok": False, "error": "RESEND_FROM is not stored yet"}
@@ -6335,9 +6347,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 plain = bool(payload.get("plain"))
                 bad = (_validate_email_body(body) if body
                        else "the message is empty")
-                if not bad and plain and "unsubscribe" not in body.lower():
-                    bad = ("plain mode adds no footer, so the message must "
-                           "include an unsubscribe line (the word 'unsubscribe')")
+                if not bad and plain and "unsubscribe" not in _visible_text(body).lower():
+                    bad = ("plain mode adds no footer, so the message must show "
+                           "a visible unsubscribe line (the word 'unsubscribe')")
                 if bad:
                     return self._send_json({"ok": False, "error": bad})
                 return self._send_json({
