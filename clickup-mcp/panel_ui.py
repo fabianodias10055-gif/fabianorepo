@@ -39,6 +39,7 @@ _ICONS = {
     "database": '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>',
     "search": '<circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>',
     "bell": '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
+    "mail": '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>',
     "refresh": '<path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
     "filter": '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
     "flame": '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
@@ -648,6 +649,19 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
 .wm-sn { font-family:var(--mono); color:var(--ink2); min-width:36px; text-align:right; }
 .wm-built { margin-top:var(--s3); color:var(--ink3); font-family:var(--mono); font-size:var(--t-2xs); }
 .pill.st-mut { background:var(--surface3); color:var(--ink3); }
+.em-aud { text-align:left; background:var(--surface2); border:1px solid var(--line);
+  border-radius:var(--r-md); padding:12px 14px; cursor:pointer; display:flex;
+  flex-direction:column; gap:2px; transition:border-color .15s, background .15s; }
+.em-aud:hover { background:var(--surface3); }
+.em-aud[aria-pressed="true"] { border-color:var(--accent); background:var(--accent-bg); }
+.em-form { display:flex; flex-direction:column; gap:var(--s3); }
+.em-subj, .em-testto { background:var(--surface2); border:1px solid var(--line);
+  border-radius:var(--r-md); color:var(--ink); padding:9px 12px; font:inherit; }
+.em-subj { font-weight:600; }
+.em-testto { width:220px; }
+.em-body { background:var(--surface2); border:1px solid var(--line);
+  border-radius:var(--r-md); color:var(--ink); padding:10px 12px; font:inherit;
+  line-height:1.5; resize:vertical; }
 @media (max-width:720px){ .wm-cols { grid-template-columns:1fr; } }
 
 /* mobile nav, hidden on desktop */
@@ -5774,6 +5788,80 @@ $("#activitybox").addEventListener("click", function (ev) {
     setTimeout(function () { row.classList.remove("flashcard"); }, 1400);
   }
 });
+/* ---- Email screen: one audience, one message, sent server-side ---- */
+var EM_SEG = "", EM_COUNT = 0;
+function emBodyHtml() {
+  var raw = $("#embody").value.trim();
+  if (!raw) return "";
+  if (raw.indexOf("<") !== -1) return raw;   /* already HTML */
+  /* Built from the char code: a backslash-n written here lives inside a
+     Python string and becomes a real newline in the page, snapping the
+     regex in half. That exact break is what the build gate just refused
+     to ship. */
+  var NL = String.fromCharCode(10);
+  return raw.split(new RegExp(NL + "{2,}")).map(function (p) {
+    return "<p>" + esc(p).split(NL).join("<br>") + "</p>";
+  }).join("");
+}
+function emSyncButton() {
+  var b = $("#emsend");
+  if (!b) return;
+  if (!EM_SEG) { b.disabled = true; b.textContent = "Pick an audience first"; return; }
+  b.disabled = false;
+  b.textContent = "Send to " + fmt(EM_COUNT) + " people";
+}
+document.addEventListener("click", function (ev) {
+  var aud = ev.target.closest(".em-aud");
+  if (aud) {
+    EM_SEG = aud.dataset.seg;
+    EM_COUNT = +aud.dataset.count || 0;
+    $$(".em-aud").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b === aud)); });
+    emSyncButton();
+    return;
+  }
+  if (ev.target.closest("#emtest")) {
+    var to = $("#emtestto").value.trim();
+    var html = emBodyHtml(), subj = $("#emsubj").value.trim();
+    var m = $("#emmsg");
+    if (!to) { m.textContent = "give the test an address"; return; }
+    if (!subj || !html) { m.textContent = "write the subject and the message first"; return; }
+    m.textContent = "sending the test\u2026";
+    fetch("/email", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "send", segment: "test", to: to,
+                             subject: subj, html: html }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        m.textContent = d.ok ? "test sent to " + to : "not sent: " + (d.error || "");
+      })
+      .catch(function (e) { m.textContent = "not sent: " + e.message; });
+    return;
+  }
+  if (ev.target.closest("#emsend")) {
+    var subj2 = $("#emsubj").value.trim(), html2 = emBodyHtml();
+    var m2 = $("#emmsg");
+    if (!EM_SEG) return;
+    if (!subj2 || !html2) { m2.textContent = "write the subject and the message first"; return; }
+    if (!confirm('Send "' + subj2 + '" to ' + fmt(EM_COUNT)
+                 + " people? Each gets an individual email from Resend. "
+                 + "This cannot be taken back.")) return;
+    m2.textContent = "sending to " + fmt(EM_COUNT) + " people\u2026";
+    var btn = $("#emsend"); btn.disabled = true;
+    fetch("/email", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "send", segment: EM_SEG, expect: EM_COUNT,
+                             subject: subj2, html: html2 }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        btn.disabled = false;
+        if (d.ok) m2.textContent = "sent to " + fmt(d.sent) + " people";
+        else m2.textContent = "problem: " + (d.error || "")
+          + (d.sent ? " (" + fmt(d.sent) + " did go out)" : "");
+      })
+      .catch(function (e) { btn.disabled = false; m2.textContent = "failed: " + e.message; });
+    return;
+  }
+});
+
 document.addEventListener("click", function () { acClose(); });
 document.addEventListener("keydown", function (ev) {
   if (ev.key === "Escape") acClose();
@@ -7629,6 +7717,68 @@ def _wingman_users_card(d: dict) -> str:
         + '</section>')
 
 
+def _email_card(d: dict) -> str:
+    """Write one message, pick one Wingman audience, send it through Resend.
+
+    The page only ever names a segment; the recipient list is resolved
+    server-side at send time from the collector's snapshot, so nothing here
+    can email a list the page invented. Counts shown come from the same
+    snapshot the send will read.
+    """
+    w = d.get("wingman") or {}
+    seg = w.get("segments") or {}
+
+    def n(key):
+        v = seg.get(key) or {}
+        em = v.get("emails")
+        if em is None and key == "churning_premium":
+            em = [u.get("email") for u in v.get("users") or []]
+        return len([e for e in (em or []) if e])
+
+    auds = (
+        ("never_generated", "Never generated",
+         "created an account, never used it"),
+        ("power_free", "Power users, still free", "heavy use on the free plan"),
+        ("churning_premium", "Premium gone quiet", "paying, but inactive"),
+        ("new_7d", "New this week", "signed up in the last 7 days"),
+    )
+    audhtml = "".join(
+        f'<button type="button" class="em-aud" data-seg="{k}" data-count="{n(k)}" '
+        f'aria-pressed="false"><span class="wm-segn">{_fmt(n(k))}</span>'
+        f'<span class="wm-segl">{escape(lab)}</span>'
+        f'<span class="wm-segt">{escape(desc)}</span></button>'
+        for k, lab, desc in auds)
+
+    return (
+        f'<section class="card" id="email">'
+        f'<h2><span class="he">✉️</span>Email'
+        f'<span class="cnt">Wingman audiences, sent through Resend</span></h2>'
+        f'<p class="note">Pick who, write once, send. The recipient list is '
+        f'resolved on the server at send time from the latest Supabase '
+        f'snapshot, every message goes out individually (nobody sees anyone '
+        f'else), a footer explains why they got it, and every send lands in '
+        f'<code>Panel/email-log.md</code>.</p>'
+        f'<h3 class="wm-h">Who</h3>'
+        f'<div class="wm-segs em-auds">{audhtml}</div>'
+        f'<h3 class="wm-h">Message</h3>'
+        f'<div class="em-form">'
+        f'<input id="emsubj" class="em-subj" type="text" maxlength="150" '
+        f'placeholder="Subject" aria-label="Email subject">'
+        f'<textarea id="embody" class="em-body" rows="10" '
+        f'placeholder="Write here. Plain text becomes paragraphs; HTML is '
+        f'kept as is."></textarea>'
+        f'<div class="figbar">'
+        f'<button class="btn tiny primary" id="emsend" disabled>Pick an '
+        f'audience first</button>'
+        f'<span class="fsep"></span>'
+        f'<input id="emtestto" class="em-testto" type="email" '
+        f'placeholder="you@example.com" aria-label="Test address">'
+        f'<button class="btn tiny" id="emtest">Send a test to this address'
+        f'</button>'
+        f'<span class="note bigmsg" id="emmsg"></span></div>'
+        f'</div></section>')
+
+
 def _pill_plan(plan: str) -> str:
     plan = (plan or "free").lower()
     cls = "ok" if plan in ("premium", "standard") else "mut"
@@ -7655,6 +7805,7 @@ _NAV = [
     ("links", "link", "Links", ""),
     ("sync", "refresh", "Knowledge", "silent"),
     ("wingman", "sparkle", "Writing", ""),
+    ("email", "mail", "Email", ""),
     ("sources", "database", "Admin", ""),
 ]
 
@@ -8081,7 +8232,8 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
                                  + _wingman_users_card(d)
                                  + _retention_card(d) + _effect_card(d)
                                  + _people_card(d))
-              + _links_card() + _sync_card(d) + _wingman_card(d))}
+              + _links_card() + _sync_card(d) + _wingman_card(d)
+              + _email_card(d))}
 <div class="grid3">
 {_stamp_views(_videos_card(d) + _sources_card(instrumentation, d) + _health_card(d))}
 </div>

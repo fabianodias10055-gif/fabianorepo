@@ -5450,6 +5450,169 @@ def _activity_payload(d: dict) -> dict:
             "built": d.get("generated_at", "")}
 
 
+# --------------------------------------------------------------------------
+# Wingman email, through Resend.
+# --------------------------------------------------------------------------
+
+RESEND_API = "https://api.resend.com"
+# Audience keys the send endpoint accepts, with the labels the page shows.
+# One place: the UI reads these through the payload, so a segment added to
+# the collector shows up here or not at all.
+EMAIL_AUDIENCES = (
+    ("never_generated", "Never generated", "created an account, never used it"),
+    ("power_free", "Power users, still free", "heavy use on the free plan"),
+    ("churning_premium", "Premium gone quiet", "paying, but inactive"),
+    ("new_7d", "New this week", "signed up in the last 7 days"),
+)
+EMAIL_LOG = "email-log.md"
+_email_lock = threading.Lock()
+
+
+def _resend_request(path: str, payload: dict) -> tuple[bool, object]:
+    """One authenticated call to Resend. The explicit User-Agent matters:
+    Cloudflare in front of the API 403s generic library agents, which reads
+    as an invalid key without being one."""
+    key = get_secret("RESEND_API_KEY")
+    if not key:
+        return False, "RESEND_API_KEY is not stored yet"
+    req = urlrequest.Request(
+        RESEND_API + path, data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {key}",
+                 "Content-Type": "application/json",
+                 "User-Agent": "locodev-panel/1.0"}, method="POST")
+    try:
+        with urlrequest.urlopen(req, timeout=60) as resp:
+            return True, json.load(resp)
+    except urlerror.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")[:300]
+        if exc.code in (401, 403):
+            return False, f"the Resend key was rejected ({exc.code}): {body}"
+        if exc.code == 429:
+            return False, "Resend rate limit hit; wait a moment and retry"
+        return False, f"Resend HTTP {exc.code}: {body}"
+    except Exception as exc:                       # noqa: BLE001
+        return False, f"could not reach Resend: {type(exc).__name__}"
+
+
+def _email_audience(segment: str) -> tuple[list[str], str]:
+    """The current recipient list for one audience, resolved fresh from the
+    collector's snapshot, never from the page."""
+    labels = {k: lab for k, lab, _d in EMAIL_AUDIENCES}
+    if segment not in labels:
+        return [], f"unknown audience {segment!r}"
+    seg = (_load_wingman().get("segments") or {}).get(segment) or {}
+    emails = seg.get("emails")
+    if emails is None and segment == "churning_premium":
+        emails = [u.get("email") for u in seg.get("users") or []]
+    emails = sorted({e.strip().lower() for e in (emails or []) if e and "@" in e})
+    if not emails:
+        return [], ("this audience has no addresses in the snapshot; run "
+                    "collect_wingman.py and try again")
+    return emails, ""
+
+
+def _email_html(body_html: str) -> str:
+    """The message, plus the one footer every bulk mail must carry: who it
+    reached and why, and a way out. Appended server-side so no send can
+    forget it."""
+    return (
+        f"{body_html}\n"
+        '<hr style="border:none;border-top:1px solid #ddd;margin:24px 0 12px">'
+        '<p style="font-size:12px;color:#888">You are receiving this because '
+        'you created a LocoAI account at locodev.dev. Reply with '
+        '"unsubscribe" and you will not hear from us again.</p>')
+
+
+def send_wingman_email(segment: str, subject: str, body_html: str,
+                       expect: int = -1, test_to: str = "") -> dict:
+    """Send one message to one audience, or a single test to one address.
+
+    expect is the count the page showed when the send was pressed; a
+    mismatch with the fresh list means the snapshot moved underneath the
+    person confirming, and the honest move is to stop and re-show.
+    """
+    subject = (subject or "").strip()
+    body_html = (body_html or "").strip()
+    if not subject:
+        return {"ok": False, "error": "the subject is empty"}
+    if not body_html:
+        return {"ok": False, "error": "the message is empty"}
+    sender = get_secret("RESEND_FROM")
+    if not sender:
+        return {"ok": False, "error": "RESEND_FROM is not stored yet"}
+
+    if not _email_lock.acquire(blocking=False):
+        return {"ok": False, "error": "another send is already running"}
+    try:
+        if segment == "test":
+            to = (test_to or "").strip()
+            if "@" not in to:
+                return {"ok": False, "error": "give the test an address to go to"}
+            ok, res = _resend_request("/emails", {
+                "from": sender, "to": [to], "subject": subject,
+                "html": _email_html(body_html)})
+            if ok:
+                _email_log("test", to, subject, 1, 0)
+            return ({"ok": True, "sent": 1, "failed": 0, "to": to} if ok
+                    else {"ok": False, "error": str(res)})
+
+        emails, err = _email_audience(segment)
+        if err:
+            return {"ok": False, "error": err}
+        if expect >= 0 and expect != len(emails):
+            return {"ok": False, "code": "stale",
+                    "error": (f"the audience is {len(emails)} now, not "
+                              f"{expect}; refresh and read it again")}
+
+        html = _email_html(body_html)
+        sent = failed = 0
+        errors: list[str] = []
+        # Resend's batch endpoint takes up to 100 messages per call, each
+        # its own email, so recipients never see each other's address.
+        for i in range(0, len(emails), 100):
+            chunk = emails[i:i + 100]
+            ok, res = _resend_request("/emails/batch", [
+                {"from": sender, "to": [e], "subject": subject, "html": html}
+                for e in chunk])
+            if ok:
+                sent += len(chunk)
+            else:
+                failed += len(chunk)
+                if len(errors) < 3:
+                    errors.append(str(res))
+                if "rejected" in str(res):
+                    break              # a dead key fails every later chunk too
+            if i + 100 < len(emails):
+                time.sleep(0.6)        # under Resend's 2 requests per second
+        _email_log(segment, f"{sent} recipients", subject, sent, failed)
+        out = {"ok": failed == 0, "sent": sent, "failed": failed,
+               "audience": len(emails)}
+        if errors:
+            out["error"] = " | ".join(errors)
+        return out
+    finally:
+        _email_lock.release()
+
+
+def _email_log(segment: str, to: str, subject: str, sent: int, failed: int) -> None:
+    """Every send leaves a line in the vault. Money and reputation go out
+    through this path; a send nobody can reconstruct afterwards is how a
+    mistake becomes a mystery."""
+    try:
+        path = VAULT / "Panel" / EMAIL_LOG
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        line = (f"- {stamp} \u00b7 **{segment}** \u00b7 {to} \u00b7 "
+                f"\"{subject}\" \u00b7 sent {sent}, failed {failed}\n")
+        if not path.is_file():
+            path.write_text("# Email log\n\nEvery send from the panel's "
+                            "Email screen, newest last.\n\n",
+                            encoding="utf-8")
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+    except OSError:
+        pass
+
+
 def build(live: bool) -> dict:
     """Serialized: the /reply handler and the watcher thread can both ask for
     a rebuild inside the same 2s window; unserialized, their interleaved
@@ -5726,6 +5889,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/rebuild":
             build(live=True)
             return self._send_json({"ok": True})
+
+        if self.path == "/email":
+            payload = self._json_body()
+            act = str(payload.get("action", ""))
+            if act == "audiences":
+                out = []
+                for key, label, desc in EMAIL_AUDIENCES:
+                    emails, err = _email_audience(key)
+                    out.append({"key": key, "label": label, "desc": desc,
+                                "count": len(emails)})
+                return self._send_json({"ok": True, "audiences": out,
+                                        "from": get_secret("RESEND_FROM")})
+            if act == "send":
+                try:
+                    expect = int(payload.get("expect", -1))
+                except (TypeError, ValueError):
+                    expect = -1
+                return self._send_json(send_wingman_email(
+                    str(payload.get("segment", "")),
+                    str(payload.get("subject", "")),
+                    str(payload.get("html", "")),
+                    expect, str(payload.get("to", ""))))
+            return self._send_json({"ok": False, "error": "unknown action"}, 400)
 
         if self.path == "/refresh":
             # The Update button: pull the latest Discord questions first,

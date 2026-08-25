@@ -216,12 +216,19 @@ def build(users, profiles, usage, licenses, subs) -> dict:
         "power_free": {
             "count": sum(1 for e in enriched
                          if e["plan"] == "free" and e["gen"] >= POWER_FREE_MIN),
+            # The full audience for sending, and the short ranked cut for
+            # display. The card shows top; the Email screen sends emails.
+            "emails": [e["email"] for e in enriched
+                       if e["plan"] == "free" and e["gen"] >= POWER_FREE_MIN
+                       and e["emailable"]],
             "top": [{"email": e["email"], "prompts": e["gen"]}
                     for e in sorted((e for e in enriched
                                      if e["plan"] == "free" and e["gen"] >= POWER_FREE_MIN),
                                     key=lambda e: -e["gen"])[:15]]},
         "churning_premium": {
             "count": sum(1 for e in prem_users if not within(e["last_used"], CHURN_DAYS)),
+            "emails": [e["email"] for e in prem_users
+                       if not within(e["last_used"], CHURN_DAYS) and e["emailable"]],
             "users": [{"email": e["email"],
                        "last_used": e["last_used"].date().isoformat() if e["last_used"] else None}
                       for e in prem_users if not within(e["last_used"], CHURN_DAYS)]},
