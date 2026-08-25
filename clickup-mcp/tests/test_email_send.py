@@ -188,6 +188,28 @@ def test_email_log_masks_addresses_and_flattens(tmp_path, monkeypatch):
     assert "line one line two" in entry          # the newline was flattened
 
 
+def test_logo_header_only_with_clean_https(monkeypatch):
+    def use(val):
+        monkeypatch.setattr(panel, "get_secret", lambda n, d="": val)
+    use("")                                   # unset
+    assert panel._logo_header() == ""
+    use("http://x/logo.png")                  # not https
+    assert panel._logo_header() == ""
+    use('https://x/l.png" onerror=alert(1)')  # quote + space -> refused
+    assert panel._logo_header() == ""
+    use("https://cdn.example/logo.png")       # clean
+    h = panel._logo_header()
+    assert 'src="https://cdn.example/logo.png"' in h and "<img" in h
+
+
+def test_email_html_places_logo_above_footer(monkeypatch):
+    monkeypatch.setattr(panel, "get_secret",
+                        lambda n, d="": "https://cdn.example/logo.png")
+    html = panel._email_html("<p>body</p>")
+    assert html.index("cdn.example/logo.png") < html.index("<p>body</p>") \
+        < html.index("unsubscribe")
+
+
 def test_reply_to_refuses_header_injection(monkeypatch):
     monkeypatch.setattr(panel, "get_secret", lambda name, default="": {
         "RESEND_REPLY_TO": "evil@x.dev\r\nBcc: victim@x.dev"}.get(name, ""))

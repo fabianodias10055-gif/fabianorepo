@@ -74,6 +74,9 @@ SECRET_KEYS = (
     # is not the from address. An address, not a credential, but it lives
     # with the Resend pair so one lookup covers all three.
     "RESEND_REPLY_TO",
+    # Optional. A public https URL for the logo shown at the top of every
+    # email. Not a secret; kept here so one place lists the Resend config.
+    "RESEND_LOGO_URL",
     # Reading the LocoAI/Wingman accounts for the panel's Wingman card. The
     # service-role key bypasses RLS, so it is a real secret and belongs here
     # rather than in a plaintext file.

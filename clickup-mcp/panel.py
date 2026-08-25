@@ -5743,13 +5743,29 @@ def _validate_email_body(html: str) -> str:
     return ""
 
 
+def _logo_header() -> str:
+    """A brand logo above every message, from the configured RESEND_LOGO_URL.
+    Empty when unset or not a clean https URL. It is a hosted image, not an
+    inline attachment, because Resend's batch endpoint (the bulk send) does
+    not carry attachments, so a cid: image would show only on the single test
+    send. A plain https URL renders for both."""
+    url = (get_secret("RESEND_LOGO_URL") or "").strip()
+    if not url.lower().startswith("https://") or any(
+            c in url for c in " \"'<>\n\r\t"):
+        return ""
+    return (f'<div style="margin:0 0 20px"><img src="{url}" alt="Wingman" '
+            f'width="120" style="display:block;border:0;height:auto;'
+            f'max-width:120px"></div>')
+
+
 def _email_html(body_html: str) -> str:
-    """The message, plus the one footer every bulk mail must carry: who it
-    reached and why, and a way out. Appended server-side so no send can
-    forget it. The body is validated by _validate_email_body first, so what
-    arrives here cannot swallow the footer."""
+    """The message, framed by the brand logo above and the one footer every
+    bulk mail must carry below (who it reached and why, and a way out). Both
+    are added server-side so no send can forget them. The body is validated
+    by _validate_email_body first, so what arrives here cannot swallow the
+    footer."""
     return (
-        f"{body_html}\n"
+        f"{_logo_header()}{body_html}\n"
         '<hr style="border:none;border-top:1px solid #ddd;margin:24px 0 12px">'
         '<p style="font-size:12px;color:#888">You are receiving this because '
         'you created a LocoAI account at locodev.dev. Reply with '
