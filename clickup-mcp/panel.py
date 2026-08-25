@@ -4860,15 +4860,38 @@ def build_people(questions: list[dict]) -> list[dict]:
     return ordered
 
 
+def _wingman_private_dir() -> Path:
+    """Where account-level data lives: outside the vault, which syncs and
+    is read by tooling, so customer addresses never ride along with notes."""
+    try:
+        from secrets_store import PRIVATE_DIR
+        return PRIVATE_DIR
+    except ImportError:
+        return Path(os.getenv("LOCALAPPDATA")
+                    or str(Path.home() / "AppData" / "Local")) / "locodev-panel"
+
+
 def _load_wingman() -> dict:
     """The LocoAI/Wingman account rollup, written by collect_wingman.py from
-    Supabase into Panel/wingman-users.json. The panel only reads it, the same
-    way it reads the Patreon and Discord member snapshots, so a Supabase
+    Supabase into the private folder. The panel only reads it, so a Supabase
     outage or a missing file leaves the card empty rather than the page
-    broken."""
+    broken. A copy found at the old vault path is moved out and the vault
+    copy deleted: addresses do not belong in the vault, and leaving a stale
+    duplicate there would be worse than never having moved."""
+    private = _wingman_private_dir() / "wingman-users.json"
+    legacy = VAULT / "Panel" / "wingman-users.json"
     try:
-        doc = json.loads((VAULT / "Panel" / "wingman-users.json")
-                         .read_text(encoding="utf-8"))
+        if legacy.is_file():
+            private.parent.mkdir(parents=True, exist_ok=True)
+            if not private.is_file() or (legacy.stat().st_mtime
+                                         > private.stat().st_mtime):
+                private.write_text(legacy.read_text(encoding="utf-8"),
+                                   encoding="utf-8")
+            legacy.unlink()
+    except OSError:
+        pass
+    try:
+        doc = json.loads(private.read_text(encoding="utf-8"))
         return doc if isinstance(doc, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -5628,7 +5651,15 @@ def _email_log(segment: str, to: str, subject: str, sent: int, failed: int) -> N
     through this path; a send nobody can reconstruct afterwards is how a
     mistake becomes a mystery."""
     try:
-        path = VAULT / "Panel" / EMAIL_LOG
+        # Beside the audience data, outside the vault: a test line carries
+        # the recipient's address.
+        path = _wingman_private_dir() / EMAIL_LOG
+        path.parent.mkdir(parents=True, exist_ok=True)
+        old = VAULT / "Panel" / EMAIL_LOG
+        if old.is_file():
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(old.read_text(encoding="utf-8"))
+            old.unlink()
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         line = (f"- {stamp} \u00b7 **{segment}** \u00b7 {to} \u00b7 "
                 f"\"{subject}\" \u00b7 sent {sent}, failed {failed}\n")

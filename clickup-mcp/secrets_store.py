@@ -37,6 +37,12 @@ BASE_DIR = Path(__file__).resolve().parent
 ENV_PATH = BASE_DIR / ".env"
 SERVICE = "locodev-panel"
 
+# Data that must never sit in the vault: the vault syncs and gets read by
+# tooling, so anything holding customer addresses lives here instead, in
+# the user's local app data, next to nothing that leaves this machine.
+PRIVATE_DIR = Path(os.getenv("LOCALAPPDATA")
+                   or str(Path.home() / "AppData" / "Local")) / "locodev-panel"
+
 # Values that can act on your behalf. Everything else in .env is settings.
 SECRET_KEYS = (
     "CLICKUP_API_TOKEN",

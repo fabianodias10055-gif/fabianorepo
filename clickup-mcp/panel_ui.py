@@ -7825,6 +7825,29 @@ def _email_card(d: dict) -> str:
         f'</div></section>')
 
 
+def _wingman_public(w: dict) -> dict:
+    """What the page may carry: counts and the stamp, never an address.
+
+    The full rollup holds every account's email, and the built page lives
+    in the vault, so embedding it verbatim published five hundred addresses
+    into a file the vault syncs. Nothing client-side ever needed them: the
+    send path resolves recipients on the server by design, and the cards
+    render server-side from the full data before this cut is taken."""
+    seg = w.get("segments") or {}
+
+    def n(v):
+        if not isinstance(v, dict):
+            return 0
+        em = v.get("emails")
+        if em is None:
+            em = [u for u in v.get("users") or []]
+        return len(em) if em is not None else int(v.get("count") or 0)
+
+    return {"generated_at": w.get("generated_at", ""),
+            "summary": w.get("summary") or {},
+            "segments": {k: {"count": n(v)} for k, v in seg.items()}}
+
+
 def _wm_stamp(w: dict) -> str:
     """When the audience data was actually read from Supabase, in the
     reader's own clock, with the cadence beside it so "old" has a meaning.
@@ -8232,7 +8255,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
         "__QDATA__": embed(_question_payload(d["questions"])),
         "__LOOKUPS__": embed(_row_lookups()),
         "__ACTIVITY__": embed(d.get("activity_payload") or {}),
-        "__WINGMAN__": embed(d.get("wingman") or {}),
+        "__WINGMAN__": embed(_wingman_public(d.get("wingman") or {})),
         "__LTSPARKS__": embed({
             label: _spark([p[k] for p in (d.get("history") or []) if k in p][-60:],
                           f"l{i}", "var(--accent)", w=340, h=24)

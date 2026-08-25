@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Roll up the LocoAI / Wingman accounts from Supabase for the panel.
 
-The panel's Wingman card reads Panel/wingman-users.json; this writes it. It
-is the same shape as the other collectors: reads a source, writes a JSON
-snapshot into the vault, and the panel only ever reads that file, so a
-Supabase outage leaves the card stale rather than the page broken.
+The panel's Wingman card reads wingman-users.json from the private local
+folder (%LOCALAPPDATA%/locodev-panel); this writes it. Same shape as the
+other collectors: read a source, write a snapshot, and the panel only ever
+reads the file, so a Supabase outage leaves the card stale rather than the
+page broken. The snapshot holds every account's email address, which is why
+it lives outside the vault: the vault syncs and is read by tooling, and
+customer addresses must not ride along.
 
 Two Supabase APIs, both dependency-free over urllib, so nothing here needs
 psycopg or a change to the production schema:
@@ -19,9 +22,7 @@ Credentials, read from clickup-mcp/.env or Windows Credential Manager:
   SUPABASE_SERVICE_ROLE_KEY    Settings > API > service_role secret
 
 The service-role key bypasses RLS and can read every account, so it stays
-in the credential store, never in the page, and the emails it pulls are
-written only into the vault's Panel/ folder, which does not leave this
-machine.
+in the credential store, never in the page.
 """
 import json
 import sys
@@ -46,7 +47,16 @@ except ImportError:
         return os.getenv(name, default)
 
 VAULT = Path(r"F:\LocoDev Vault")
-OUT = VAULT / "Panel" / "wingman-users.json"
+# Not in the vault: this file carries every account's email address, and
+# the vault is not a private store. One definition of the private folder,
+# shared with the panel through secrets_store.
+try:
+    from secrets_store import PRIVATE_DIR
+except ImportError:
+    import os as _os
+    PRIVATE_DIR = Path(_os.getenv("LOCALAPPDATA")
+                       or str(Path.home() / "AppData" / "Local")) / "locodev-panel"
+OUT = PRIVATE_DIR / "wingman-users.json"
 
 # What counts as a paying plugin plan, and how long a premium account has to
 # sit unused before it reads as churning. One place, so the panel card and
