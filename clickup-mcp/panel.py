@@ -29,7 +29,7 @@ import sys
 import threading
 import time
 import webbrowser
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from urllib import error as urlerror
 from urllib import parse as urlparse
@@ -53,7 +53,6 @@ except ImportError:                      # standalone copy without the module
         return os.getenv(name, default)
 
 VAULT = Path(r"F:\LocoDev Vault")
-LEGACY_VAULT = Path(r"C:\Users\LocoDevPC\Documents\Vaults")
 PORT = 8765
 POLL_SECONDS = 2.0
 YT_API = "https://www.googleapis.com/youtube/v3"
@@ -339,23 +338,6 @@ def urgency(m: dict, demand_max: int) -> tuple[int, str]:
 
 
 QUESTION_HEAD = re.compile(r"^###\s+(\d{4}-\d{2}-\d{2})\s+(.+?)\s*$", re.M)
-
-CHANNELS = {
-    "discord": "#5865F2",
-    "youtube": "#E5332A",
-    "patreon": "#E6EDEA",
-    "email": "#3FD39C",
-}
-
-STATUS_CLASS = {
-    "answered": "ok",
-    "escalated": "info",
-    "no-source": "crit",
-    "out-of-scope": "mute",
-    # Not work, and deliberately not counted as open: the bell is for
-    # people waiting. It is here so what landed well is readable somewhere.
-    "praise": "ok",
-}
 
 NAME_BY_SLUG = {slug: name for slug, name, _c in CATALOG}
 
@@ -4022,7 +4004,6 @@ CUSTOMERS_DIR = "Customers"
 # someone who has paid has purchased. Those are read, never typed, because
 # a status kept by hand goes stale the day after it is set. The rest is
 # judgement and only you can set it.
-DERIVED_STATUS = ("Subscriber", "Waiting for reply", "Purchased", "New", "Quiet")
 MANUAL_STATUS = ("Talking", "Interested", "Ready to buy", "Needs support",
                  "Resolved", "Lost")
 
