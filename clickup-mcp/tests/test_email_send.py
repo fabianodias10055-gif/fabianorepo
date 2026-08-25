@@ -176,6 +176,18 @@ def test_send_refuses_when_suppression_unreadable(monkeypatch):
     assert sent["n"] == 0
 
 
+def test_email_log_masks_addresses_and_flattens(tmp_path, monkeypatch):
+    monkeypatch.setattr(panel, "_wingman_private_dir", lambda: tmp_path)
+    panel._email_log("test", "operator@locodev.dev",
+                     "line one\nline two contact me@evil.dev", 1, 0)
+    log = (tmp_path / "email-log.md").read_text(encoding="utf-8")
+    entry = [x for x in log.splitlines() if x.startswith("- ")][-1]
+    assert "operator@locodev.dev" not in entry   # full test address gone
+    assert "me@evil.dev" not in entry            # address pasted in subject gone
+    assert "@locodev.dev" in entry               # masked, domain kept for triage
+    assert "line one line two" in entry          # the newline was flattened
+
+
 def test_reply_to_refuses_header_injection(monkeypatch):
     monkeypatch.setattr(panel, "get_secret", lambda name, default="": {
         "RESEND_REPLY_TO": "evil@x.dev\r\nBcc: victim@x.dev"}.get(name, ""))

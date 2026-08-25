@@ -5923,14 +5923,33 @@ def send_wingman_email(segment: str, subject: str, body_html: str,
         _email_lock.release()
 
 
+_LOG_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def _mask_email(m: "re.Match") -> str:
+    name, _, dom = m.group(0).partition("@")
+    head = (name[:2] + "\u2026") if len(name) > 2 else (name[:1] + "\u2026")
+    return f"{head}@{dom}"
+
+
+def _log_safe(s: str) -> str:
+    """A value fit for the audit line: line breaks flattened to spaces so a
+    crafted subject cannot forge a second log entry, and every address masked
+    so the log never stores who a test went to, or an address pasted into a
+    subject. The domain is kept; the local part is not."""
+    s = re.sub(r"[\r\n]+", " ", str(s or "")).strip()
+    return _LOG_EMAIL_RE.sub(_mask_email, s)
+
+
 def _email_log(segment: str, to: str, subject: str, sent: int, failed: int) -> bool:
     """Every send leaves a line in the private folder. Money and reputation
     go out through this path; a send nobody can reconstruct afterwards is how
     a mistake becomes a mystery, so the caller is told whether the line
-    actually landed rather than assuming it did."""
+    actually landed rather than assuming it did. The address and subject are
+    masked and flattened first, so the audit line keeps no full address."""
     try:
-        # Beside the audience data, outside the vault: a test line carries
-        # the recipient's address.
+        # Beside the audience data, outside the vault. The test recipient's
+        # address is masked to its domain before it reaches the line.
         path = _wingman_private_dir() / EMAIL_LOG
         path.parent.mkdir(parents=True, exist_ok=True)
         old = VAULT / "Panel" / EMAIL_LOG
@@ -5939,8 +5958,8 @@ def _email_log(segment: str, to: str, subject: str, sent: int, failed: int) -> b
                 fh.write(old.read_text(encoding="utf-8"))
             old.unlink()
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        line = (f"- {stamp} \u00b7 **{segment}** \u00b7 {to} \u00b7 "
-                f"\"{subject}\" \u00b7 sent {sent}, failed {failed}\n")
+        line = (f"- {stamp} \u00b7 **{segment}** \u00b7 {_log_safe(to)} \u00b7 "
+                f"\"{_log_safe(subject)}\" \u00b7 sent {sent}, failed {failed}\n")
         if not path.is_file():
             path.write_text("# Email log\n\nEvery send from the panel's "
                             "Email screen, newest last.\n\n",
