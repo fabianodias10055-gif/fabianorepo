@@ -199,7 +199,7 @@ def _spark(vals: list, ident: str, color: str, w: int = 104, h: int = 34) -> str
         f'<stop offset="100%" stop-color="{color}" stop-opacity="0"/>'
         f'</linearGradient></defs>'
         f'<polygon points="{area}" fill="url(#{gid})"></polygon>'
-        f'<polyline points="{poly}" pathLength="100" vector-effect="non-scaling-stroke" fill="none" stroke="{color}" stroke-width="1.8" '
+        f'<polyline points="{poly}" pathLength="100" fill="none" stroke="{color}" stroke-width="1.8" '
         f'stroke-linecap="round" stroke-linejoin="round"></polyline></svg>'
     )
 
@@ -7782,7 +7782,8 @@ def _email_card(d: dict) -> str:
         # zero drew a flat floor with a cliff at the end, which reads as
         # growth that never happened; skipped, a young series is simply a
         # flat line at today's value until real movement accumulates.
-        + _spark([p[hk] for p in hist if hk in p][-60:], f"e{i}", color)
+        + _spark([p[hk] for p in hist if hk in p][-60:], f"e{i}", color,
+                 w=340, h=30)
         + '</button>'
         for i, (k, lab, desc, hk, color) in enumerate(auds))
 
