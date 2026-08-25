@@ -5261,9 +5261,23 @@ def _update_history(out: Path, d: dict) -> list:
         hist = []
 
     cov = d["written"] * 100 // d["total_facets"] if d["total_facets"] else 0
+    # The email audiences ride along so their sparklines are measured, not
+    # invented: flat on day one, a curve as the counts actually move.
+    wm = (d.get("wingman") or {}).get("segments") or {}
+
+    def _wmn(key):
+        v = wm.get(key) or {}
+        em = v.get("emails")
+        if em is None and key == "churning_premium":
+            em = [u.get("email") for u in v.get("users") or []]
+        return len(em) if em is not None else int(v.get("count") or 0)
+
     point = {"t": d["epoch"], "open": d["open_q"], "rate": d["answer_rate"],
-             "cov": cov, "crit": d["critical"], "complete": d["complete"]}
-    keys = ("open", "rate", "cov", "crit", "complete")
+             "cov": cov, "crit": d["critical"], "complete": d["complete"],
+             "wm_never": _wmn("never_generated"), "wm_power": _wmn("power_free"),
+             "wm_churn": _wmn("churning_premium"), "wm_new": _wmn("new_7d")}
+    keys = ("open", "rate", "cov", "crit", "complete",
+            "wm_never", "wm_power", "wm_churn", "wm_new")
     if hist and all(hist[-1].get(k) == point[k] for k in keys):
         hist[-1]["t"] = point["t"]
     else:

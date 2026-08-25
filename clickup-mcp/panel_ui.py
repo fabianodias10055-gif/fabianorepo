@@ -199,7 +199,7 @@ def _spark(vals: list, ident: str, color: str, w: int = 104, h: int = 34) -> str
         f'<stop offset="100%" stop-color="{color}" stop-opacity="0"/>'
         f'</linearGradient></defs>'
         f'<polygon points="{area}" fill="url(#{gid})"></polygon>'
-        f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="1.8" '
+        f'<polyline points="{poly}" pathLength="100" fill="none" stroke="{color}" stroke-width="1.8" '
         f'stroke-linecap="round" stroke-linejoin="round"></polyline></svg>'
     )
 
@@ -711,6 +711,16 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
 .dlt.bad { color:var(--crit); background:var(--crit-bg); }
 .dlt svg { width:10px; height:10px; }
 .spark { width:104px; height:34px; flex:none; }
+@media (prefers-reduced-motion: no-preference) {
+  .spark.go polyline { stroke-dasharray:100; stroke-dashoffset:100;
+    animation:sparkdraw .9s ease-out forwards; }
+  .spark.go polygon { transform-box:fill-box; transform-origin:bottom;
+    animation:sparkfill .9s ease-out forwards; }
+}
+@keyframes sparkdraw { to { stroke-dashoffset:0; } }
+@keyframes sparkfill { from { transform:scaleY(0); opacity:0; }
+  to { transform:scaleY(1); opacity:1; } }
+.em-aud .spark { width:100%; height:30px; margin-top:6px; }
 .c-blue { background:var(--accent-bg); color:var(--accent); }
 .c-green { background:var(--ok-bg); color:var(--ok); }
 .c-violet { background:var(--info-bg); color:var(--info); }
@@ -1918,6 +1928,9 @@ function setView(name) {
      then. Arriving on the screen is the moment to check it is still the
      list the server has. */
   if (name === "questions" && typeof bulkTick === "function") bulkTick();
+  /* The graphs on the arriving screen fill up as it opens. Hidden ones
+     would have finished animating invisibly, so it runs per arrival. */
+  if (typeof sparkReplay === "function") sparkReplay(document.getElementById(name));
 }
 /* Anything that acts on another screen has to open it first. Edit lives on
    Answers and drives the Questions table; before this it filtered, opened
@@ -5788,6 +5801,19 @@ $("#activitybox").addEventListener("click", function (ev) {
     setTimeout(function () { row.classList.remove("flashcard"); }, 1400);
   }
 });
+/* ---- sparkline fill-up: replayable on demand ---- */
+function sparkReplay(scope) {
+  $$(".spark", scope || document).forEach(function (sv) {
+    sv.classList.remove("go");
+    void sv.getBoundingClientRect().width;   /* reflow restarts the animation */
+    sv.classList.add("go");
+  });
+}
+document.addEventListener("click", function (ev) {
+  var tile = ev.target.closest(".tile");
+  if (tile) sparkReplay(tile);
+});
+
 /* ---- Email screen: one audience, one message, sent server-side ---- */
 var EM_SEG = "", EM_COUNT = 0;
 function emBodyHtml() {
@@ -5817,6 +5843,7 @@ document.addEventListener("click", function (ev) {
     EM_COUNT = +aud.dataset.count || 0;
     $$(".em-aud").forEach(function (b) {
       b.setAttribute("aria-pressed", String(b === aud)); });
+    sparkReplay(aud);
     emSyncButton();
     return;
   }
@@ -7712,7 +7739,7 @@ def _wingman_users_card(d: dict) -> str:
         f'</div>'
         + (f'<h3 class="wm-h">Where they come from</h3><div class="wm-src">{srchtml}</div>'
            if src else "")
-        + (f'<p class="note wm-built">from Supabase &middot; {escape(built)}</p>'
+        + (f'<p class="note wm-built">{_wm_stamp(w)}</p>'
            if built else "")
         + '</section>')
 
@@ -7737,22 +7764,29 @@ def _email_card(d: dict) -> str:
 
     auds = (
         ("never_generated", "Never generated",
-         "created an account, never used it"),
-        ("power_free", "Power users, still free", "heavy use on the free plan"),
-        ("churning_premium", "Premium gone quiet", "paying, but inactive"),
-        ("new_7d", "New this week", "signed up in the last 7 days"),
+         "created an account, never used it", "wm_never", "var(--warn)"),
+        ("power_free", "Power users, still free", "heavy use on the free plan",
+         "wm_power", "var(--ok)"),
+        ("churning_premium", "Premium gone quiet", "paying, but inactive",
+         "wm_churn", "var(--crit)"),
+        ("new_7d", "New this week", "signed up in the last 7 days",
+         "wm_new", "var(--info)"),
     )
+    hist = d.get("history") or []
     audhtml = "".join(
         f'<button type="button" class="em-aud" data-seg="{k}" data-count="{n(k)}" '
         f'aria-pressed="false"><span class="wm-segn">{_fmt(n(k))}</span>'
         f'<span class="wm-segl">{escape(lab)}</span>'
-        f'<span class="wm-segt">{escape(desc)}</span></button>'
-        for k, lab, desc in auds)
+        f'<span class="wm-segt">{escape(desc)}</span>'
+        + _spark([p.get(hk, 0) for p in hist][-60:], f"e{i}", color)
+        + '</button>'
+        for i, (k, lab, desc, hk, color) in enumerate(auds))
 
     return (
         f'<section class="card" id="email">'
         f'<h2><span class="he">✉️</span>Email'
         f'<span class="cnt">Wingman audiences, sent through Resend</span></h2>'
+        f'<p class="note wm-built">{_wm_stamp(w)}</p>'
         f'<p class="note">Pick who, write once, send. The recipient list is '
         f'resolved on the server at send time from the latest Supabase '
         f'snapshot, every message goes out individually (nobody sees anyone '
@@ -7777,6 +7811,23 @@ def _email_card(d: dict) -> str:
         f'</button>'
         f'<span class="note bigmsg" id="emmsg"></span></div>'
         f'</div></section>')
+
+
+def _wm_stamp(w: dict) -> str:
+    """When the audience data was actually read from Supabase, in the
+    reader's own clock, with the cadence beside it so "old" has a meaning.
+    The collector stamps UTC; showing that raw read four hours off from the
+    wall clock, which is exactly the doubt this line exists to remove."""
+    raw = (w or {}).get("generated_at", "")
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        local = (_dt.strptime(raw, "%Y-%m-%d %H:%M:%S")
+                 .replace(tzinfo=_tz.utc).astimezone())
+        shown = local.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        shown = raw or "never"
+    return (f"audiences read from Supabase at {escape(shown)} "
+            f"(your time) &middot; the collector refreshes them every 12 h")
 
 
 def _pill_plan(plan: str) -> str:
