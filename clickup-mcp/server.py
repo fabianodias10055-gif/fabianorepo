@@ -752,7 +752,11 @@ def enviar_email_resend(assunto: str, html: str, para: list[str] | None = None) 
 
     r = requests.post(
         "https://api.resend.com/emails",
-        headers={"Authorization": f"Bearer {chave}"},
+        # O User-Agent explicito importa: o Cloudflare na frente da API do
+        # Resend devolve 403 (codigo 1010) para user-agents genericos de
+        # biblioteca, o que parece chave invalida sem ser.
+        headers={"Authorization": f"Bearer {chave}",
+                 "User-Agent": "locodev-panel/1.0"},
         json={"from": remetente, "to": destinos, "subject": assunto, "html": html},
         timeout=30,
     )
