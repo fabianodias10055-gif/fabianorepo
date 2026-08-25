@@ -626,6 +626,7 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
   gap:var(--s3); margin:var(--s3) 0; }
 .wm-tile { background:var(--surface2); border:1px solid var(--line); border-radius:var(--r-md);
   padding:12px 14px; display:flex; flex-direction:column; gap:2px; }
+.wm-tile .spark { width:100%; height:26px; margin-top:auto; padding-top:8px; }
 .wm-n { font-size:var(--t-xl); font-weight:700; font-family:var(--mono); line-height:1.1; }
 .wm-l { font-size:var(--t-xs); color:var(--ink2); }
 .wm-gap { background:var(--warn-bg); border:1px solid var(--warn); color:var(--ink);
@@ -7688,20 +7689,36 @@ def _wingman_users_card(d: dict) -> str:
     prem = s.get("premium", 0) or 0
     conv = round(prem * 100 / acc, 1) if acc else 0
 
+    # The last two carry no trend key: a spark of Cakto subs or emailable
+    # count says nothing worth the ink. The first four are the growth story.
     tiles = [
-        ("Accounts", _fmt(acc), f'{_fmt(s.get("new_30d", 0))} new in 30 days'),
-        ("Activated", _fmt(gen), f'{act}% ever generated'),
+        ("Accounts", _fmt(acc), f'{_fmt(s.get("new_30d", 0))} new in 30 days',
+         "wm_acc", "var(--accent)"),
+        ("Activated", _fmt(gen), f'{act}% ever generated',
+         "wm_gen", "var(--ok)"),
         ("Active in 30d", _fmt(s.get("active_30d", 0)),
-         f'{_fmt(s.get("active_7d", 0))} in the last 7'),
-        ("Premium", _fmt(prem), f'{conv}% of accounts pay'),
-        ("Cakto subs", _fmt(s.get("cakto_active", 0)), "courses and packs"),
-        ("Can email", _fmt(s.get("emailable", 0)), "confirmed address"),
+         f'{_fmt(s.get("active_7d", 0))} in the last 7', "wm_a30", "var(--info)"),
+        ("Premium", _fmt(prem), f'{conv}% of accounts pay',
+         "wm_prem", "var(--warn)"),
+        ("Cakto subs", _fmt(s.get("cakto_active", 0)), "courses and packs",
+         "", ""),
+        ("Can email", _fmt(s.get("emailable", 0)), "confirmed address", "", ""),
     ]
+    hist = d.get("history") or []
+
+    def _tspark(hk, color):
+        # Only points that measured this series; a young or snapshot-skipped
+        # history draws fewer points, never a zero. Empty until real data.
+        if not hk:
+            return ""
+        series = [p[hk] for p in hist if hk in p][-60:]
+        return _spark(series, f"t{hk}", color, w=340, h=30) if series else ""
+
     tilehtml = "".join(
         f'<div class="wm-tile"><span class="wm-n">{v}</span>'
         f'<span class="wm-l">{escape(lab)}</span>'
-        f'<span class="note">{escape(sub)}</span></div>'
-        for lab, v, sub in tiles)
+        f'<span class="note">{escape(sub)}</span>{_tspark(hk, color)}</div>'
+        for lab, v, sub, hk, color in tiles)
 
     # The activation gap is the headline number worth acting on.
     gap = (f'<p class="wm-gap"><b>{_fmt(never)}</b> people created an account '
