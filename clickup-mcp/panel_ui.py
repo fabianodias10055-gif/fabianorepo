@@ -721,6 +721,7 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
 @keyframes sparkfill { from { transform:scaleY(0); opacity:0; }
   to { transform:scaleY(1); opacity:1; } }
 .em-aud .spark { width:100%; height:30px; margin-top:6px; }
+.ltk .mk .spark { width:100%; height:24px; margin-top:6px; }
 .c-blue { background:var(--accent-bg); color:var(--accent); }
 .c-green { background:var(--ok-bg); color:var(--ok); }
 .c-violet { background:var(--info-bg); color:var(--info); }
@@ -1819,6 +1820,10 @@ var ACTIVITY = __ACTIVITY__;
    audiences), sources, top_users, premium. The card reads it; it is empty
    until collect_wingman.py has run. */
 var WINGMAN = __WINGMAN__;
+/* Pre-rendered trend sparks for the Links tiles, keyed by tile label.
+   Built server-side by the same _spark the other graphs use, so the page
+   carries no second graph builder to drift from the first. */
+var LTSPARKS = __LTSPARKS__;
 /* Full monthly history for every chart. The browser slices the window,
    fits the trend and extends the projection, so the whole series has to
    be here rather than the twelve months a server-drawn chart would send. */
@@ -6041,7 +6046,8 @@ function renderLinks(d) {
   var h = '<div class="ltk">';
   [[s.clicks_1h, "clicks 1h"], [s.clicks_24h, "clicks 24h"],
    [s.clicks_7d, "clicks 7d"], [s.total_links, "links"]].forEach(function (kv) {
-    h += '<div class="mk"><div class="v">' + fmt(kv[0]) + '</div><div class="l">' + kv[1] + "</div></div>";
+    h += '<div class="mk"><div class="v">' + fmt(kv[0]) + '</div><div class="l">' + kv[1] + "</div>"
+      + (LTSPARKS[kv[1]] || "") + "</div>";
   });
   if (s.top_country)
     h += '<div class="mk"><div class="v">' + esc(s.top_country.country)
@@ -6116,6 +6122,7 @@ function renderLinks(d) {
     return;
   }
   body.innerHTML = h;
+  if (typeof sparkReplay === "function") sparkReplay(body);
   /* The figure is rebuilt on every refresh, so it has to be drawn again
      here: chMountExpand ran once at boot, long before this HTML existed. */
   $$(".fig", body).forEach(chDraw);
@@ -7378,7 +7385,7 @@ def _videos_card(d: dict) -> str:
     )
 
 
-def _links_card() -> str:
+def _links_card(d: dict) -> str:
     """Skeleton only: the data comes client-side from the local /links.json,
     which the panel server fills by calling the locodev.dev admin API
     server-to-server. The page never sees the secret or the token."""
@@ -8226,6 +8233,12 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
         "__LOOKUPS__": embed(_row_lookups()),
         "__ACTIVITY__": embed(d.get("activity_payload") or {}),
         "__WINGMAN__": embed(d.get("wingman") or {}),
+        "__LTSPARKS__": embed({
+            label: _spark([p[k] for p in (d.get("history") or []) if k in p][-60:],
+                          f"l{i}", "var(--accent)", w=340, h=24)
+            for i, (k, label) in enumerate((
+                ("lt1", "clicks 1h"), ("lt24", "clicks 24h"),
+                ("lt7", "clicks 7d"), ("ltn", "links")))}),
         "__SRCDET__": embed(d.get("source_details") or {}),
         "__CHARTS__": embed(_chart_payload(d)),
         "__BRANDS__": embed(list(_BRAND)),
@@ -8288,7 +8301,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
                                  + _wingman_users_card(d)
                                  + _retention_card(d) + _effect_card(d)
                                  + _people_card(d))
-              + _links_card() + _sync_card(d) + _wingman_card(d)
+              + _links_card(d) + _sync_card(d) + _wingman_card(d)
               + _email_card(d))}
 <div class="grid3">
 {_stamp_views(_videos_card(d) + _sources_card(instrumentation, d) + _health_card(d))}

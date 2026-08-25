@@ -5276,9 +5276,24 @@ def _update_history(out: Path, d: dict) -> list:
              "cov": cov, "crit": d["critical"], "complete": d["complete"],
              "wm_never": _wmn("never_generated"), "wm_power": _wmn("power_free"),
              "wm_churn": _wmn("churning_premium"), "wm_new": _wmn("new_7d")}
+    # Link clicks ride along the same way, through the cached admin call
+    # the /links.json route already makes, so a build adds no new traffic
+    # beyond what a page open costs. Any failure just skips the keys.
+    try:
+        lt = fetch_link_telemetry()
+        st = (lt or {}).get("stats") or {}
+        if lt.get("ok") and st:
+            point.update(lt1=int(st.get("clicks_1h") or 0),
+                         lt24=int(st.get("clicks_24h") or 0),
+                         lt7=int(st.get("clicks_7d") or 0),
+                         ltn=int(st.get("total_links") or 0))
+    except Exception:  # noqa: BLE001 - history must never block a build
+        pass
+
     keys = ("open", "rate", "cov", "crit", "complete",
-            "wm_never", "wm_power", "wm_churn", "wm_new")
-    if hist and all(hist[-1].get(k) == point[k] for k in keys):
+            "wm_never", "wm_power", "wm_churn", "wm_new",
+            "lt1", "lt24", "lt7", "ltn")
+    if hist and all(hist[-1].get(k) == point.get(k) for k in keys):
         hist[-1]["t"] = point["t"]
     else:
         hist.append(point)
