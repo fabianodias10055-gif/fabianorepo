@@ -5291,29 +5291,65 @@ def _update_history(out: Path, d: dict) -> list:
     grow meaning with use, rather than faking a trend that was never measured.
     """
     path = out / "history.json"
+    hist = []
     try:
-        hist = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(hist, list):
-            hist = []
-    except (OSError, ValueError):
+        # utf-8-sig, not utf-8: a copy touched by an editor or a PowerShell
+        # Set-Content lands with a BOM, and plain utf-8 leaves it on the
+        # first character so json.loads fails. -sig strips it when present
+        # and is harmless when absent.
+        parsed = json.loads(path.read_text(encoding="utf-8-sig"))
+        hist = parsed if isinstance(parsed, list) else []
+    except FileNotFoundError:
+        hist = []
+    except (OSError, ValueError) as exc:
+        # The file exists but will not parse (a partial write, or a stray
+        # BOM). Resetting to [] here silently discards every trend point ever
+        # measured; that already cost a full history once. Move the bytes
+        # aside under a .corrupt name so nothing is lost and the cause can be
+        # inspected, then start fresh only for this build.
+        try:
+            bad = path.with_name(f"history.corrupt-{d['epoch']}.json")
+            path.replace(bad)
+            print(f"[history] {type(exc).__name__} reading history.json; kept "
+                  f"the unparseable copy as {bad.name} and started fresh")
+        except OSError:
+            print(f"[history] {type(exc).__name__} reading history.json and "
+                  f"could not preserve it; starting fresh")
         hist = []
 
     cov = d["written"] * 100 // d["total_facets"] if d["total_facets"] else 0
-    # The email audiences ride along so their sparklines are measured, not
-    # invented: flat on day one, a curve as the counts actually move.
-    wm = (d.get("wingman") or {}).get("segments") or {}
+    point = {"t": d["epoch"], "open": d["open_q"], "rate": d["answer_rate"],
+             "cov": cov, "crit": d["critical"], "complete": d["complete"]}
+    # The Wingman series ride along, but only on a build that actually loaded
+    # the snapshot. A build that could not read it (Supabase not collected
+    # yet, or the private file caught mid-write) must not record the counts
+    # as zero: zero is a real audience size, so a stray zero drew a cliff to
+    # the floor and back that read as churn that never happened. Absent, the
+    # keys are simply missing and every sparkline skips that point by design.
+    wmd = d.get("wingman") or {}
+    seg = wmd.get("segments") or {}
+    summ = wmd.get("summary") or {}
 
     def _wmn(key):
-        v = wm.get(key) or {}
+        v = seg.get(key) or {}
         em = v.get("emails")
         if em is None and key == "churning_premium":
             em = [u.get("email") for u in v.get("users") or []]
         return len(em) if em is not None else int(v.get("count") or 0)
 
-    point = {"t": d["epoch"], "open": d["open_q"], "rate": d["answer_rate"],
-             "cov": cov, "crit": d["critical"], "complete": d["complete"],
-             "wm_never": _wmn("never_generated"), "wm_power": _wmn("power_free"),
-             "wm_churn": _wmn("churning_premium"), "wm_new": _wmn("new_7d")}
+    if seg:
+        point.update(wm_never=_wmn("never_generated"),
+                     wm_power=_wmn("power_free"),
+                     wm_churn=_wmn("churning_premium"),
+                     wm_new=_wmn("new_7d"))
+    if summ:
+        # Account growth, so "active users increase" has a real line: total
+        # accounts, everyone who ever generated, active in 30d / 7d, paying.
+        point.update(wm_acc=int(summ.get("accounts") or 0),
+                     wm_gen=int(summ.get("generated") or 0),
+                     wm_a30=int(summ.get("active_30d") or 0),
+                     wm_a7=int(summ.get("active_7d") or 0),
+                     wm_prem=int(summ.get("premium") or 0))
     # Link clicks ride along the same way, through the cached admin call
     # the /links.json route already makes, so a build adds no new traffic
     # beyond what a page open costs. Any failure just skips the keys.
@@ -5330,6 +5366,7 @@ def _update_history(out: Path, d: dict) -> list:
 
     keys = ("open", "rate", "cov", "crit", "complete",
             "wm_never", "wm_power", "wm_churn", "wm_new",
+            "wm_acc", "wm_gen", "wm_a30", "wm_a7", "wm_prem",
             "lt1", "lt24", "lt7", "ltn")
     if hist and all(hist[-1].get(k) == point.get(k) for k in keys):
         hist[-1]["t"] = point["t"]
