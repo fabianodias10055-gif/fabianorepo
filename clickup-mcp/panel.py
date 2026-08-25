@@ -35,6 +35,10 @@ from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
 
+# The page renderer, and the single source for the Wingman email audiences.
+# No cycle: panel_ui imports only the standard library, never panel.
+import panel_ui
+
 try:
     from dotenv import load_dotenv
 except ImportError:
@@ -5554,12 +5558,10 @@ RESEND_API = "https://api.resend.com"
 # Audience keys the send endpoint accepts, with the labels the page shows.
 # One place: the UI reads these through the payload, so a segment added to
 # the collector shows up here or not at all.
-EMAIL_AUDIENCES = (
-    ("never_generated", "Never generated", "created an account, never used it"),
-    ("power_free", "Power users, still free", "heavy use on the free plan"),
-    ("churning_premium", "Premium gone quiet", "paying, but inactive"),
-    ("new_7d", "New this week", "signed up in the last 7 days"),
-)
+# The send side needs only key, label and description; they come from the one
+# registry in panel_ui so the labels reported here match the buttons rendered.
+EMAIL_AUDIENCES = tuple((s.key, s.label, s.desc)
+                        for s in panel_ui.WINGMAN_SEGMENTS)
 EMAIL_LOG = "email-log.md"
 _email_lock = threading.Lock()
 

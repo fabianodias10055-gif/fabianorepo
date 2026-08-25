@@ -16,6 +16,7 @@ literals through a thousand lines of CSS.
 """
 
 import re
+from collections import namedtuple
 from datetime import date
 from html import escape
 
@@ -27,6 +28,33 @@ CH_COLORS = {
     "patreon": "#ff424d",
     "email": "#3fd39c",
 }
+
+# The Wingman email audiences, defined once. The same four were listed in
+# three places (the send path in panel.py, the account-card buttons, and the
+# email-card tiles) with labels and descriptions that had to be kept in step
+# by hand. Each field is named so a site reads only what it needs:
+#   key       the segment key the collector writes and the send resolves
+#   label     the audience name, shown everywhere
+#   desc      the one-line explanation (send report + email-card tiles)
+#   tag       the account card's short purpose ("onboarding nudge")
+#   hist_key  the history.json series for this audience's sparkline
+#   color     the sparkline colour
+WingmanSegment = namedtuple(
+    "WingmanSegment", "key label desc tag hist_key color")
+WINGMAN_SEGMENTS = (
+    WingmanSegment("never_generated", "Never generated",
+                   "created an account, never used it", "onboarding nudge",
+                   "wm_never", "var(--warn)"),
+    WingmanSegment("power_free", "Power users, still free",
+                   "heavy use on the free plan", "upsell to premium",
+                   "wm_power", "var(--ok)"),
+    WingmanSegment("churning_premium", "Premium gone quiet",
+                   "paying, but inactive", "win them back",
+                   "wm_churn", "var(--crit)"),
+    WingmanSegment("new_7d", "New this week",
+                   "signed up in the last 7 days", "welcome",
+                   "wm_new", "var(--info)"),
+)
 
 _ICONS = {
     "home": '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/>',
@@ -7634,19 +7662,13 @@ def _wingman_users_card(d: dict) -> str:
         v = seg.get(k) or {}
         return v.get("count", 0) if isinstance(v, dict) else len(v or [])
 
-    audiences = [
-        ("never_generated", "Never generated", "onboarding nudge"),
-        ("power_free", "Power users, still free", "upsell to premium"),
-        ("churning_premium", "Premium gone quiet", "win them back"),
-        ("new_7d", "New this week", "welcome"),
-    ]
     seghtml = "".join(
-        f'<button type="button" class="wm-seg" data-seg="{k}" '
-        f'data-count="{seg_n(k)}" title="{escape(tag)}">'
-        f'<span class="wm-segn">{_fmt(seg_n(k))}</span>'
-        f'<span class="wm-segl">{escape(lab)}</span>'
-        f'<span class="wm-segt">{escape(tag)}</span></button>'
-        for k, lab, tag in audiences)
+        f'<button type="button" class="wm-seg" data-seg="{s.key}" '
+        f'data-count="{seg_n(s.key)}" title="{escape(s.tag)}">'
+        f'<span class="wm-segn">{_fmt(seg_n(s.key))}</span>'
+        f'<span class="wm-segl">{escape(s.label)}</span>'
+        f'<span class="wm-segt">{escape(s.tag)}</span></button>'
+        for s in WINGMAN_SEGMENTS)
 
     # Where signups come from, the named channels only (the untagged
     # majority says nothing worth a bar).
@@ -7711,30 +7733,20 @@ def _email_card(d: dict) -> str:
             em = [u.get("email") for u in v.get("users") or []]
         return len([e for e in (em or []) if e])
 
-    auds = (
-        ("never_generated", "Never generated",
-         "created an account, never used it", "wm_never", "var(--warn)"),
-        ("power_free", "Power users, still free", "heavy use on the free plan",
-         "wm_power", "var(--ok)"),
-        ("churning_premium", "Premium gone quiet", "paying, but inactive",
-         "wm_churn", "var(--crit)"),
-        ("new_7d", "New this week", "signed up in the last 7 days",
-         "wm_new", "var(--info)"),
-    )
     hist = d.get("history") or []
     audhtml = "".join(
-        f'<button type="button" class="em-aud" data-seg="{k}" data-count="{n(k)}" '
-        f'aria-pressed="false"><span class="wm-segn">{_fmt(n(k))}</span>'
-        f'<span class="wm-segl">{escape(lab)}</span>'
-        f'<span class="wm-segt">{escape(desc)}</span>'
+        f'<button type="button" class="em-aud" data-seg="{s.key}" data-count="{n(s.key)}" '
+        f'aria-pressed="false"><span class="wm-segn">{_fmt(n(s.key))}</span>'
+        f'<span class="wm-segl">{escape(s.label)}</span>'
+        f'<span class="wm-segt">{escape(s.desc)}</span>'
         # Only builds that measured this audience. Treating absence as
         # zero drew a flat floor with a cliff at the end, which reads as
         # growth that never happened; skipped, a young series is simply a
         # flat line at today's value until real movement accumulates.
-        + _spark([p[hk] for p in hist if hk in p][-60:], f"e{i}", color,
-                 w=340, h=30)
+        + _spark([p[s.hist_key] for p in hist if s.hist_key in p][-60:],
+                 f"e{i}", s.color, w=340, h=30)
         + '</button>'
-        for i, (k, lab, desc, hk, color) in enumerate(auds))
+        for i, s in enumerate(WINGMAN_SEGMENTS))
 
     return (
         f'<section class="card" id="email">'
