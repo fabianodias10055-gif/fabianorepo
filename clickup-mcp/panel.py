@@ -5768,7 +5768,7 @@ def _email_html(body_html: str) -> str:
         f"{_logo_header()}{body_html}\n"
         '<hr style="border:none;border-top:1px solid #ddd;margin:24px 0 12px">'
         '<p style="font-size:12px;color:#888">You are receiving this because '
-        'you created a LocoAI account at locodev.dev. Reply with '
+        'you created a LocoAI account at ai.locodev.dev. Reply with '
         '"unsubscribe" and you will not hear from us again.</p>')
 
 
