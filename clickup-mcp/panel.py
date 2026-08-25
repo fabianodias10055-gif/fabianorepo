@@ -4880,21 +4880,36 @@ def _load_wingman() -> dict:
     duplicate there would be worse than never having moved."""
     private = _wingman_private_dir() / "wingman-users.json"
     legacy = VAULT / "Panel" / "wingman-users.json"
+
+    def _read(p: Path) -> dict:
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8"))
+            return doc if isinstance(doc, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
     try:
         if legacy.is_file():
-            private.parent.mkdir(parents=True, exist_ok=True)
-            if not private.is_file() or (legacy.stat().st_mtime
-                                         > private.stat().st_mtime):
+            priv_doc = _read(private)
+            leg_doc = _read(legacy)
+            # Which one to keep is decided by the data's own generation time,
+            # not the file's mtime: a vault sync can restore or touch the old
+            # legacy copy and give it a newer mtime, which would let stale
+            # data overwrite fresh. The private copy wins ties, since that is
+            # where the collector writes now.
+            if leg_doc.get("generated_at", "") > priv_doc.get("generated_at", ""):
+                private.parent.mkdir(parents=True, exist_ok=True)
                 private.write_text(legacy.read_text(encoding="utf-8"),
                                    encoding="utf-8")
+            # The legacy copy holds customer addresses and must not linger in
+            # the vault. A failure to remove it is not swallowed: it is the
+            # one outcome here worth a line in the log.
             legacy.unlink()
-    except OSError:
-        pass
-    try:
-        doc = json.loads(private.read_text(encoding="utf-8"))
-        return doc if isinstance(doc, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    except OSError as exc:
+        print(f"[wingman] could not clear the legacy vault copy "
+              f"({type(exc).__name__}); it may still hold customer emails")
+
+    return _read(private)
 
 
 def scan() -> dict:

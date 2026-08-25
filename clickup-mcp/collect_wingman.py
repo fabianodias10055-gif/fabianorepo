@@ -25,6 +25,7 @@ The service-role key bypasses RLS and can read every account, so it stays
 in the credential store, never in the page.
 """
 import json
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -99,12 +100,24 @@ def fetch_auth_users(base: str, key: str) -> list[dict]:
     return out
 
 
-def fetch_table(base: str, key: str, table: str, select: str) -> list[dict]:
+def fetch_table(base: str, key: str, table: str, select: str,
+                order: str = "") -> list[dict]:
     """A public table over PostgREST, paged by Range so a table larger than
-    the default cap still comes back whole."""
+    the default cap still comes back whole.
+
+    Advances by how many rows actually came back, not by the requested page
+    size, and stops only on an empty page. If the project's max-rows setting
+    is below the page size, a full table returns a short page that is NOT the
+    end; treating a short page as EOF truncated the read and, downstream,
+    dropped usage rows so active accounts looked like they had never
+    generated. An explicit order makes the window stable across the requests
+    so rows are not skipped or repeated as the table shifts under paging."""
+    params = {"select": select}
+    if order:
+        params["order"] = order
     out, step, offset = [], 1000, 0
     while True:
-        url = f"{base}/rest/v1/{table}?" + parse.urlencode({"select": select})
+        url = f"{base}/rest/v1/{table}?" + parse.urlencode(params)
         req = R.Request(url, headers={**_headers(key),
                                       "Range-Unit": "items",
                                       "Range": f"{offset}-{offset + step - 1}"})
@@ -118,9 +131,7 @@ def fetch_table(base: str, key: str, table: str, select: str) -> list[dict]:
         if not rows:
             break
         out.extend(rows)
-        if len(rows) < step:
-            break
-        offset += step
+        offset += len(rows)          # what came back, never the page size
     return out
 
 
@@ -271,11 +282,14 @@ def main() -> int:
     try:
         users = fetch_auth_users(base, key)
         profiles = fetch_table(base, key, "profiles",
-                               "id,display_name,created_at,last_seen_at,signup_source,heard_from")
+                               "id,display_name,created_at,last_seen_at,signup_source,heard_from",
+                               order="id")
         usage = fetch_table(base, key, "loco_usage",
-                            "user_id,prompt_count,polish_prompt_count,last_used_at")
+                            "user_id,prompt_count,polish_prompt_count,last_used_at",
+                            order="user_id")
         licenses = fetch_table(base, key, "loco_licenses",
-                               "user_id,plan,status,created_at,current_period_end")
+                               "user_id,plan,status,created_at,current_period_end",
+                               order="user_id")
         subs = fetch_table(base, key, "subscriptions", "status,plan")
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")[:200]
@@ -288,8 +302,27 @@ def main() -> int:
         return 1
 
     doc = build(users, profiles, usage, licenses, subs)
+
+    # Never let a transient-empty read poison the only copy. If a previous
+    # snapshot held real accounts and this run came back with almost none,
+    # something upstream failed rather than everyone leaving; keep the good
+    # file and say so. A legitimate first run has no prior to compare to.
+    new_n = doc["summary"]["accounts"]
+    try:
+        prev = json.loads(OUT.read_text(encoding="utf-8"))
+        prev_n = int((prev.get("summary") or {}).get("accounts") or 0)
+    except (OSError, ValueError):
+        prev_n = 0
+    if prev_n >= 20 and new_n < prev_n // 2:
+        print(f"REFUSED: this run has {new_n} accounts against {prev_n} in the "
+              f"existing snapshot; keeping the old file. Re-run to confirm.")
+        return 1
+
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    tmp = OUT.with_suffix(".json.tmp")
+    # A unique temp name: two overlapping runs (a manual one beside the
+    # scheduled task) would otherwise fight over one .tmp and one could
+    # publish the other's half-written file.
+    tmp = OUT.with_name(f"{OUT.stem}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(doc), encoding="utf-8")
     tmp.replace(OUT)
 
