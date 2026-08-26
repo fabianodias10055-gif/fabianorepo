@@ -2455,7 +2455,12 @@ def post_youtube_reply(comment_id: str, text: str) -> tuple[bool, str]:
         return False, YT_TOKEN_MSG.get(
             terr, f"YouTube login failed ({terr}). The vault was still "
                   f"updated.")
-    body = json.dumps({"snippet": {"parentId": comment_id, "textOriginal": text}}).encode()
+    # YouTube only accepts a reply on a top-level comment. A reply's own id is
+    # "<topLevelId>.<suffix>", so answering a thread reply (which the inbox now
+    # surfaces) has to target the part before the dot, or the post is refused
+    # with a processing error. A plain top-level id has no dot and is unchanged.
+    parent = comment_id.split(".", 1)[0]
+    body = json.dumps({"snippet": {"parentId": parent, "textOriginal": text}}).encode()
     req = urlrequest.Request(
         f"{YT_API}/comments?part=snippet",
         data=body, method="POST",
