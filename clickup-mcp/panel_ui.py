@@ -648,6 +648,10 @@ h1 { font-size:var(--t-xl); margin:0; font-weight:680; letter-spacing:-.025em; }
   background:#fff; }
 .em-plain { font-size:var(--t-xs); color:var(--ink2); display:inline-flex;
   align-items:center; gap:5px; cursor:pointer; user-select:none; }
+.ans-fail { font-size:var(--t-xs); color:var(--ink2); display:inline-flex;
+  align-items:center; gap:5px; cursor:pointer; user-select:none; margin-left:14px;
+  font-weight:400; }
+.ans-fail .fc-n { color:var(--warn); font-family:var(--mono); }
 @media (max-width:720px){ .wm-cols { grid-template-columns:1fr; } }
 
 /* mobile nav, hidden on desktop */
@@ -5629,6 +5633,20 @@ $$("[data-viewall]").forEach(function (b) {
   });
 });
 
+/* Answers sent: show only the replies the platform never took, so every
+   failed one can be found and retried in one place. */
+document.addEventListener("change", function (ev) {
+  if (ev.target.id !== "ansfail") return;
+  var card = ev.target.closest(".card");
+  if (!card) return;
+  var on = ev.target.checked;
+  $$(".arow", card).forEach(function (r) {
+    r.style.display = on ? (r.dataset.sent === "no" ? "" : "none") : "";
+  });
+  var va = card.querySelector("[data-viewall]");
+  if (va) va.style.display = on ? "none" : "";
+});
+
 /* ---- clipboard ---- */
 function copyText(text, el) {
   function done() {
@@ -7137,7 +7155,8 @@ def _answers_card(d: dict) -> str:
                    if acts else "")
 
         rows.append(
-            f'<div class="arow{hid}" data-answer="{escape(a["a"], quote=True)}">'
+            f'<div class="arow{hid}" data-answer="{escape(a["a"], quote=True)}" '
+            f'data-sent="{"yes" if a["posted"] else "no"}">'
             f'<div class="hd">{code}{_avatar(a["who"], "sm")}'
             f'<b>{escape(a["who"])}</b>{_chn(a["channel"])}{posted}'
             f'<span class="w">{escape(a["when"])}</span></div>'
@@ -7152,10 +7171,19 @@ def _answers_card(d: dict) -> str:
         f'<b>No replies sent from the panel yet</b>'
         f'<p>Expand a question, type an answer and hit Send reply: it lands here, in '
         f'Inbox/02 - Answered.md, and in the searchable knowledge base.</p></div>')
+    unsent = sum(1 for a in answers if not a.get("posted"))
+    # A way to pull up exactly the replies the platform never took, so they
+    # can be retried in one place instead of scrolled for.
+    fail_toggle = (
+        f'<label class="ans-fail" title="Show only replies recorded in the vault '
+        f'but not posted to the platform"><input type="checkbox" id="ansfail"> '
+        f'Failed to send <span class="fc-n">{unsent}</span></label>'
+        if unsent else "")
     return (
         f'<section class="card" id="answers">'
         f'<h2><span class="he">✅</span>Answers sent'
-        f'<span class="cnt">{_fmt(len(answers))} logged &middot; {week} this week</span></h2>'
+        f'<span class="cnt">{_fmt(len(answers))} logged &middot; {week} this week</span>'
+        f'{fail_toggle}</h2>'
         f'{body}{more}</section>'
     )
 
