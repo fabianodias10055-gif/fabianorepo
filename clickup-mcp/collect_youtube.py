@@ -190,6 +190,7 @@ def fetch_comments(video_id: str, max_pages: int = 10) -> list[dict]:
                 "likes": sn.get("likeCount", 0),
                 "replies": [
                     {
+                        "id": r["id"],
                         "author": r["snippet"].get("authorDisplayName", "?"),
                         "text": " ".join((r["snippet"].get("textOriginal") or "").split()),
                         "date": (r["snippet"].get("publishedAt") or "")[:10],
@@ -247,6 +248,41 @@ def needs_your_answer(c: dict, channel_name: str) -> bool:
     if _norm_author(c["author"]) == _norm_author(channel_name):
         return False
     return looks_like_question(c["text"]) and not answered_by_channel(c, channel_name)
+
+
+def reply_rows(c: dict, system: str, video_id: str, video_folder: str,
+               channel_name: str) -> list[dict]:
+    """Inbox rows for a comment's viewer replies.
+
+    Praise that lands in a reply ("you're a hero, thanks for answering") and
+    questions asked deeper in a thread never reached the inbox before, because
+    only top-level comments were classified. The channel's own replies are
+    skipped: they are answers, not items to handle. A reply question counts as
+    answered when the channel also replied in the thread, otherwise it is
+    open, mirroring the top-level rules.
+    """
+    rows = []
+    for rep in c.get("replies", []):
+        if not rep.get("id"):
+            continue
+        if _norm_author(rep["author"]) == _norm_author(channel_name):
+            continue
+        cls = classify(rep["text"])
+        base = {"id": rep["id"], "author": rep["author"], "text": rep["text"],
+                "date": rep["date"], "likes": 0, "replies": [],
+                "system": system, "video_id": video_id,
+                "video_folder": video_folder}
+        if cls == qf.PRAISE:
+            rows.append({**base, "praise": True})
+        elif cls == qf.QUESTION:
+            if answered_by_channel(c, channel_name):
+                reply_txt = next(
+                    (x["text"] for x in c["replies"]
+                     if _norm_author(x["author"]) == _norm_author(channel_name)), "")
+                rows.append({**base, "answered": True, "reply": reply_txt})
+            else:
+                rows.append({**base})
+    return rows
 
 
 def safe_name(s: str) -> str:
@@ -749,6 +785,16 @@ def main() -> int:
                     **c, "system": system, "answered": True, "reply": reply,
                     "video_id": v["id"], "video_folder": folder.name,
                 })
+
+            # Viewer replies in the thread count too, not just the top comment.
+            for row in reply_rows(c, system, v["id"], folder.name, channel_name):
+                if row.get("praise"):
+                    total_praise += 1
+                elif row.get("answered"):
+                    total_answered += 1
+                else:
+                    total_unanswered += 1
+                inbox_rows.append(row)
 
     added = write_inbox(inbox_rows, args.dry_run)
     flipped = reconcile_answered(inbox_rows, args.dry_run)

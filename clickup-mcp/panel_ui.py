@@ -2169,7 +2169,7 @@ function ageOk(r) {
 function match(r) {
   if (state.ch !== "all" && r.dataset.ch !== state.ch) return false;
   if (!ageOk(r)) return false;
-  if (state.st === "open") { if (!isOpen(r)) return false; }
+  if (state.st === "open") { if (!isOpen(r) && r.dataset.st !== "praise") return false; }
   else if (state.st !== "all" && r.dataset.st !== state.st) return false;
   if (state.sys !== "all" && r.dataset.sys !== state.sys) return false;
   /* Answerability describes work still to do. Without this, "easy 90"
@@ -6869,10 +6869,12 @@ def _filters(questions: list, systems: list) -> str:
                      f'aria-pressed="false">{brand}{escape(ch)} '
                      f'<span class="fc-n">{_fmt(ch_counts[ch])}</span></span>')
     parts.append('<span class="fsep"></span>')
-    open_n = sum(1 for q in questions if q["status"] in ("no-source", "escalated"))
+    open_n = sum(1 for q in questions
+                 if q["status"] in ("no-source", "escalated", "praise"))
     parts.append(f'<span class="fchip on" data-k="st" data-v="open" aria-pressed="true" '
-                 f'title="Unanswered plus escalated: everything still waiting on you">'
-                 f'<i class="pe">📥</i>Open '
+                 f'title="The inbox: questions still waiting on you, plus the '
+                 f'praise and thank-yous people left">'
+                 f'<i class="pe">📥</i>Inbox '
                  f'<span class="fc-n">{_fmt(open_n)}</span></span>')
     parts.append('<span class="fchip" data-k="st" data-v="all" aria-pressed="false">Everything</span>')
     for st in statuses:
