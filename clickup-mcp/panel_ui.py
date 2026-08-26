@@ -1328,6 +1328,8 @@ tr.qdet.open .detwrap { animation:detIn .18s var(--ease); }
 .yourreply b { color:var(--ok); display:flex; align-items:center; gap:6px;
   font-size:var(--t-xs); text-transform:uppercase; letter-spacing:.06em;
   margin-bottom:var(--s1); }
+.praisehint { color:var(--ink3); font-size:var(--t-sm); line-height:1.5;
+  padding:var(--s2) 0; }
 .ctxout { border:1px solid var(--line); border-radius:var(--r-md);
   padding:var(--s3) var(--s4); background:var(--surface); display:none;
   max-height:340px; overflow:auto; }
@@ -2559,10 +2561,17 @@ function composerFor(qid) {
     + esc(q.code) + "</span><span>" + esc(q.channel) + '</span><span class="num">'
     + esc(q.date) + "</span>" + (q.source ? '<span class="num">' + esc(q.source) + "</span>" : "")
     + "</div>");
+  /* Praise is not a question. Drafting a knowledge-base answer for a
+     thank-you produces a tutorial nobody asked for, and on a thread the
+     channel already replied to that reads as answering the person twice. So
+     a praise row hides the answer tools; the reply box below stays for a
+     short, hand-written thanks if you want to send one. */
+  var isPraise = q.status === "praise";
   parts.push('<div class="detbtns">'
-    + '<button class="btn tiny" data-ai="search">Find existing answer</button>'
-    + '<button class="btn tiny ai" data-ai="draft">Draft with Claude</button>'
-    + refsField()
+    + (isPraise ? "" :
+        '<button class="btn tiny" data-ai="search">Find existing answer</button>'
+        + '<button class="btn tiny ai" data-ai="draft">Draft with Claude</button>'
+        + refsField())
     + '<button class="btn tiny" data-ctx>What is this about?</button>'
     + '<button class="btn tiny" data-mark="'
     + (q.status === "answered" ? "no-source" : "answered") + '">'
@@ -2570,6 +2579,9 @@ function composerFor(qid) {
     + (q.video_url ? '<button class="btn tiny" data-copy="' + esc(q.video_url)
         + '">Copy link</button>' : "")
     + "</div>");
+  if (isPraise) parts.push('<div class="praisehint">Praise, not a question, '
+    + "so there is nothing to answer here. Type a short thanks below only if "
+    + "you want to reply.</div>");
   parts.push('<div class="ctxout"></div>');
   parts.push('<div class="aiout" data-mode="search"></div>');
   parts.push('<div class="aiout" data-mode="draft"></div>');
