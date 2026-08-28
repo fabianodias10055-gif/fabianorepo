@@ -134,7 +134,7 @@ DEMAND = {
 # a number pasted here is stale the day after it is verified, which is how
 # three of these rows spent two months claiming channels were blind while
 # the collectors filled the vault twice a day.
-def source_details(questions: list, pat: dict) -> dict:
+def source_details(questions: list) -> dict:
     """What opening a source on the Admin screen shows.
 
     Everything here is computed from what the source leaves behind, at the
@@ -186,16 +186,6 @@ def source_details(questions: list, pat: dict) -> dict:
                     sum(1 for _ in (VAULT / "YouTube" / "Videos").glob("*/"))
                     if (VAULT / "YouTube" / "Videos").is_dir() else 0]],
         "if_broken": "run collect_youtube.py; the API key lives in the credential store",
-    }
-
-    out["Patreon"] = {
-        "script": "collect_patreon.py, twice a day as 'LocoDev Patreon Collector'",
-        "files": rows(panel_dir / "patreon-members.json"),
-        "counts": [["members on the campaign", pat.get("total", 0)],
-                   ["paying right now", pat.get("paying", 0)],
-                   ["with a linked Discord",
-                    sum(1 for p in (patrons_by_handle() or {}).values() if p)]],
-        "if_broken": "patreon_api.py --status says which credential is missing",
     }
 
     try:
@@ -4088,65 +4078,14 @@ def all_customer_notes() -> dict:
     return out
 
 
-_patrons_cache: tuple[float, dict] = (0.0, {})
-
-
-def patrons_by_handle() -> dict:
-    """Paying customers, keyed by the Discord handle they ask questions under.
-
-    Patreon publishes the Discord account a patron linked, and the member
-    snapshot carries the same id, so the two sides meet on a number rather
-    than on a name that happens to look similar. Anyone who never linked
-    their account simply is not here, which is the honest answer: they may
-    well be paying, and nothing in the data says so.
-    """
-    global _patrons_cache
-    pat_path = VAULT / "Panel" / "patreon-members.json"
-    disc_path = VAULT / "Panel" / "discord-members.json"
-    try:
-        stamp = pat_path.stat().st_mtime + disc_path.stat().st_mtime
-    except OSError:
-        return {}
-    if _patrons_cache[0] == stamp:
-        return _patrons_cache[1]
-    try:
-        pat = json.loads(pat_path.read_text(encoding="utf-8")).get("members", [])
-        disc = json.loads(disc_path.read_text(encoding="utf-8")).get("members", {})
-    except (OSError, ValueError):
-        return {}
-
-    handle_by_id = {v["id"]: v.get("handle", "") for v in disc.values() if v.get("id")}
-    out: dict[str, dict] = {}
-    for p in pat:
-        handle = handle_by_id.get(p.get("discord_id") or "", "")
-        if not handle:
-            continue
-        out[handle.lower()] = {
-            "name": p.get("name", ""),
-            "tiers": p.get("tiers") or [],
-            "monthly_cents": p.get("monthly_cents") or 0,
-            "lifetime_cents": p.get("lifetime_cents") or 0,
-            "since": p.get("since", ""),
-            "paying": p.get("status") == "active_patron",
-            "status": p.get("status", ""),
-        }
-    _patrons_cache = (stamp, out)
-    return out
-
-
 def derived_status(person: dict, today: datetime) -> str:
     """The status the facts already state, when nobody has set one by hand.
 
-    Ordered by what changes the next action: someone owed a reply outranks
-    someone merely paying, because the reply is the thing to do today.
+    Ordered by what changes the next action: someone owed a reply is the
+    thing to do today, otherwise how recently they turned up.
     """
     if person["open"]:
         return "Waiting for reply"
-    pat = person.get("patron") or {}
-    if pat.get("paying"):
-        return "Subscriber"
-    if pat.get("lifetime_cents"):
-        return "Purchased"
     try:
         first = datetime.strptime((person.get("first") or person["last"])[:10], "%Y-%m-%d")
         if (today - first).days <= 30:
@@ -4198,58 +4137,6 @@ def youtube_channel_stats(max_age_hours: int = 6) -> dict:
     except OSError:
         pass
     return out
-
-
-def sales_pipeline(people: list) -> list:
-    """The stages a customer actually passes through here.
-
-    Not the stages a CRM template offers. Patreon knows who follows, who
-    pays, whose card just failed and who left; the panel knows who asked
-    something without ever paying, which is a warmer lead than a silent
-    follower. Anything needing a salesperson's judgement is only here when
-    you have written it down yourself.
-    """
-    try:
-        raw = json.loads((VAULT / "Panel" / "patreon-members.json")
-                         .read_text(encoding="utf-8")).get("members", [])
-    except (OSError, ValueError):
-        raw = []
-
-    following = [m for m in raw if not m.get("status")]
-    paying = [m for m in raw if m.get("status") == "active_patron"]
-    declined = [m for m in raw if m.get("status") == "declined_patron"]
-    stopped = [m for m in raw if m.get("status") == "former_patron"]
-
-    asked_not_paying = [p for p in people
-                        if not (p.get("patron") or {}).get("paying") and p["asked"]]
-    marked = [p for p in people
-              if (p.get("note") or {}).get("status") in
-              ("Talking", "Interested", "Ready to buy")]
-
-    def money(rows, key):
-        return sum(r.get(key, 0) for r in rows) / 100
-
-    return [
-        {"stage": "Following, never paid", "n": len(following),
-         "note": "on Patreon at no cost", "value": ""},
-        {"stage": "Asked something, does not pay", "n": len(asked_not_paying),
-         "note": "they came with a question, which is warmer than a follow",
-         "value": ""},
-        {"stage": "You marked them as a lead", "n": len(marked),
-         "note": "talking, interested or ready to buy, in your own words",
-         "value": "", "names": [p["who"] for p in marked[:5]]},
-        {"stage": "Paying now", "n": len(paying), "note": "active patrons",
-         "value": f"US$ {money(paying, 'monthly_cents'):,.0f} a month"},
-        # The stage nobody sees: their card failed, they have not left yet,
-        # and every day that passes makes the win-back harder.
-        {"stage": "Payment just failed", "n": len(declined),
-         "note": "still subscribed, but the last charge did not go through",
-         "value": f"US$ {money(declined, 'lifetime_cents'):,.0f} paid before",
-         "urgent": True},
-        {"stage": "Stopped paying", "n": len(stopped),
-         "note": "gone, and they used to pay",
-         "value": f"US$ {money(stopped, 'lifetime_cents'):,.0f} earned while they stayed"},
-    ]
 
 
 def integration_health() -> list:
@@ -4353,445 +4240,6 @@ def integration_health() -> list:
     return rows
 
 
-
-
-
-def period_change(members: list[dict]) -> dict:
-    """This week, month and year against the one before, like for like.
-
-    A month half lived against a month fully lived reads as a collapse that
-    is only the calendar, so each comparison uses the same number of elapsed
-    days on both sides.
-
-    Money here is new recurring revenue: what the people who joined in the
-    period are worth per month. It moves independently of the headcount,
-    which is the point of showing both.
-    """
-    from datetime import date, timedelta
-
-    joins: dict[str, int] = {}
-    money: dict[str, int] = {}
-    for m in members:
-        day = (m.get("since") or "")[:10]
-        if len(day) == 10 and (m.get("lifetime_cents") or 0) > 0:
-            joins[day] = joins.get(day, 0) + 1
-            money[day] = money.get(day, 0) + (m.get("monthly_cents") or 0)
-    if not joins:
-        return {}
-
-    vids: dict[str, int] = {}
-    root = VAULT / "YouTube" / "Videos"
-    if root.is_dir():
-        for f in root.glob("*/00 - Overview.md"):
-            d = re.match(r"(\d{4}-\d{2}-\d{2}) ", f.parent.name)
-            if d:
-                vids[d.group(1)] = vids.get(d.group(1), 0) + 1
-
-    last = date.fromisoformat(max(joins))
-
-    def total(src: dict, start, n: int) -> int:
-        return sum(src.get((start + timedelta(days=k)).isoformat(), 0)
-                   for k in range(n))
-
-    def pair(label, now_start, prev_start, n):
-        a, b = total(joins, now_start, n), total(joins, prev_start, n)
-        ma, mb = total(money, now_start, n) / 100, total(money, prev_start, n) / 100
-        return {
-            "label": label, "days": n,
-            "now": a, "prev": b,
-            "pct": round((a - b) * 100 / b) if b else None,
-            "money_now": round(ma), "money_prev": round(mb),
-            "money_pct": round((ma - mb) * 100 / mb) if mb else None,
-            "videos_now": total(vids, now_start, n),
-            "videos_prev": total(vids, prev_start, n),
-        }
-
-    rows = [pair("this week", last - timedelta(days=6), last - timedelta(days=13), 7)]
-
-    day_of_month = last.day
-    prev_month = (date(last.year, last.month, 1) - timedelta(days=1)).replace(day=1)
-    rows.append(pair("this month so far", date(last.year, last.month, 1),
-                     prev_month, day_of_month))
-
-    day_of_year = (last - date(last.year, 1, 1)).days + 1
-    rows.append(pair("this year so far", date(last.year, 1, 1),
-                     date(last.year - 1, 1, 1), day_of_year))
-    return {"rows": rows, "through": last.isoformat()}
-
-
-def video_effect(members: list[dict], window: int = 7) -> dict:
-    """Whether publishing moves the join rate, split by kind and by topic.
-
-    Joins per day come from every member's `since`, counting only people who
-    went on to pay. Videos come from the folders, which carry the date, the
-    topic and now whether the thing was streamed or uploaded.
-
-    Two comparisons, because one of them is a trap. Over the whole history
-    lives beat uploads badly, and that is almost entirely the year: every
-    live here was streamed in 2025 and most uploads came before it, so the
-    naive split compares a bigger channel against a smaller one and calls
-    the difference format. The per-year rows are the fair reading, and 2025
-    is the only year holding enough of both.
-    """
-    from datetime import date, timedelta
-
-    paid: dict[str, int] = {}
-    for m in members:
-        day = (m.get("since") or "")[:10]
-        if len(day) == 10 and (m.get("lifetime_cents") or 0) > 0:
-            paid[day] = paid.get(day, 0) + 1
-    if not paid:
-        return {}
-    days = sorted(paid)
-    first, last = date.fromisoformat(days[0]), date.fromisoformat(days[-1])
-    span = max(1, (last - first).days + 1)
-    base = sum(paid.values()) / span * window
-
-    def in_window(start: str) -> int:
-        d0 = date.fromisoformat(start)
-        return sum(paid.get((d0 + timedelta(days=i)).isoformat(), 0)
-                   for i in range(window))
-
-    def field(text: str, key: str) -> str:
-        # [ 	]* and not \s*: \s crosses the newline even under re.M and
-        # reads the frontmatter's closing --- as the value.
-        m = re.search(rf"^{key}:[ 	]*(\S+)?[ 	]*$", text, re.M)
-        return (m.group(1) or "").strip() if m else ""
-
-    vids = []
-    root = VAULT / "YouTube" / "Videos"
-    if root.is_dir():
-        for f in root.glob("*/00 - Overview.md"):
-            d = re.match(r"(\d{4}-\d{2}-\d{2}) (.+)", f.parent.name)
-            if not d or d.group(1) < days[0]:
-                continue
-            t = f.read_text(encoding="utf-8", errors="replace")
-            vids.append({"date": d.group(1), "title": d.group(2)[:60],
-                         "live": field(t, "live"), "system": field(t, "system"),
-                         "lift": in_window(d.group(1))})
-    if not vids:
-        return {}
-
-    def med(xs):
-        xs = sorted(xs)
-        return xs[len(xs) // 2] if xs else 0
-
-    def row(label, sel, note=""):
-        lifts = [v["lift"] for v in sel]
-        m = med(lifts)
-        return {"label": label, "n": len(lifts), "median": m,
-                "ratio": round(m / base, 2) if base else 0, "note": note}
-
-    kinds = [
-        row("YouTube livestream", [v for v in vids if v["live"] == "yes"]),
-        row("YouTube upload", [v for v in vids if v["live"] == "no"]),
-    ]
-
-    years = {}
-    for v in vids:
-        years.setdefault(v["date"][:4], {}).setdefault(v["live"], []).append(v["lift"])
-    fair = []
-    for y, byk in sorted(years.items()):
-        if len(byk) < 2 or min(len(x) for x in byk.values()) < 5:
-            continue
-        ydays = [d for d in paid if d.startswith(y)]
-        ybase = (sum(paid[d] for d in ydays) / 365 * window) or 1
-        fair.append({"year": y, "baseline": round(ybase, 1), "kinds": [
-            {"label": "livestream" if k == "yes" else "upload",
-             "n": len(x), "median": med(x),
-             "ratio": round(med(x) / ybase, 2)}
-            for k, x in sorted(byk.items(), reverse=True)]})
-
-    topics: dict[str, list] = {}
-    for v in vids:
-        if v["system"] and v["system"] != "-":
-            topics.setdefault(v["system"], []).append(v["lift"])
-    names = {sl: nm for sl, nm, _f in CATALOG}
-    topic_rows = sorted(
-        (row(names.get(k, k), [{"lift": x} for x in v]) for k, v in topics.items()
-         if len(v) >= 3), key=lambda r: -r["ratio"])[:8]
-
-    # The comparison that survives scrutiny: a week holding a video against a
-    # week holding none, inside one year so channel size is held still. The
-    # ratios above use the period average as their baseline, and that average
-    # includes the video weeks, so it compares publishing against a mixture
-    # of publishing and silence. This one does not.
-    quiet = []
-    for y in sorted({v["date"][:4] for v in vids}):
-        ydays = [d for d in paid if d.startswith(y)]
-        if len(ydays) < 60:
-            continue
-        covered = set()
-        for v in vids:
-            if not v["date"].startswith(y):
-                continue
-            d0 = date.fromisoformat(v["date"])
-            for i in range(window):
-                covered.add((d0 + timedelta(days=i)).isoformat())
-        # Stop at today, not at 365. A year still running would otherwise
-        # count its future as quiet days with nobody joining, which deflates
-        # the without-video side and inflates the ratio: 2026 read 2.76x
-        # against 1.2x for the finished years purely from that.
-        start = date(int(y), 1, 1)
-        stop = min(date(int(y), 12, 31), last)
-        ndays = (stop - start).days + 1
-        if ndays < 90:
-            continue
-        allday = [(start + timedelta(days=i)).isoformat() for i in range(ndays)]
-        withv = [d for d in allday if d in covered]
-        without = [d for d in allday if d not in covered]
-        if len(withv) < 30 or len(without) < 30:
-            continue
-        a_ = sum(paid.get(d, 0) for d in withv) / len(withv)
-        b_ = sum(paid.get(d, 0) for d in without) / len(without)
-        quiet.append({"year": y, "videos": sum(1 for v in vids if v["date"].startswith(y)),
-                      "with_video": round(a_, 2), "without": round(b_, 2),
-                      "ratio": round(a_ / b_, 2) if b_ else 0,
-                      "extra_week": round((a_ - b_) * 7, 1)})
-
-    # What happened when publishing actually stopped. This is the only
-    # natural experiment here, and it disagrees with the week-level lift, so
-    # it belongs on the card beside it rather than in a drawer.
-    gaps = []
-    dates = sorted(v["date"] for v in vids)
-    for i in range(len(dates) - 1):
-        a_d = date.fromisoformat(dates[i])
-        b_d = date.fromisoformat(dates[i + 1])
-        if (b_d - a_d).days < 30:
-            continue
-        start = a_d + timedelta(days=window)
-        length = (b_d - a_d).days - window
-        if length < 21:
-            continue
-
-        def rate(d0, n):
-            return sum(paid.get((d0 + timedelta(days=k)).isoformat(), 0)
-                       for k in range(n)) / n
-
-        during = rate(start, length)
-        before = rate(a_d - timedelta(days=60), 60)
-        if not before:
-            continue
-        gaps.append({"from": dates[i], "to": dates[i + 1], "days": length,
-                     "during": round(during, 2), "before": round(before, 2),
-                     "ratio": round(during / before, 2)})
-    ratios = sorted(g["ratio"] for g in gaps)
-    silence = {
-        "n": len(gaps),
-        "median": ratios[len(ratios) // 2] if ratios else 0,
-        "below": sum(1 for r in ratios if r < 1),
-        "longest": max(gaps, key=lambda g: g["days"]) if gaps else None,
-    }
-
-    return {
-        "silence": silence,
-        "quiet": quiet,
-        "window": window, "baseline": round(base, 1), "videos": len(vids),
-        "kinds": kinds, "fair": fair, "topics": topic_rows,
-        "tagged": sum(1 for v in vids if v["system"] and v["system"] != "-"),
-        "best": [{"date": v["date"], "title": v["title"], "joined": v["lift"],
-                  "times": round(v["lift"] / base, 1) if base else 0}
-                 for v in sorted(vids, key=lambda x: -x["lift"])[:5] if v["lift"]],
-        # Named so the card can say it rather than leave a gap the reader
-        # fills with an assumption.
-        "patreon_posts": None,
-    }
-
-
-def patreon_retention(members: list[dict]) -> dict:
-    """How long the people who left had stayed, and how many are still here.
-
-    Nothing in the export says the day somebody cancelled. What it does say
-    is the day of their last charge, and that is the honest proxy: a former
-    patron's tenure is the months between joining and the last time they
-    paid. It undercounts by at most the part of a month they stayed after
-    the final charge, which no field records.
-
-    The bucket that matters is the first one. A patron whose join month and
-    last-charge month are the same paid once and left, which is what taking
-    the tier's content and cancelling looks like from here. It is not proof
-    of intent, and the card says so.
-    """
-    def months_between(a: str, b: str) -> int:
-        try:
-            ya, ma, da = int(a[:4]), int(a[5:7]), int(a[8:10])
-            yb, mb, db = int(b[:4]), int(b[5:7]), int(b[8:10])
-        except (ValueError, IndexError):
-            return -1
-        n = (yb - ya) * 12 + (mb - ma)
-        if db < da:
-            n -= 1
-        return max(0, n)
-
-    left = [m for m in members if m.get("status") == "former_patron"]
-    dated = [m for m in left if m.get("since") and m.get("last_charge")]
-    buckets: dict[int, int] = {}
-    paid_by_bucket: dict[int, int] = {}
-    for m in dated:
-        n = months_between(m["since"][:10], m["last_charge"][:10])
-        if n < 0:
-            continue
-        buckets[n] = buckets.get(n, 0) + 1
-        paid_by_bucket[n] = paid_by_bucket.get(n, 0) + int(m.get("lifetime_cents") or 0)
-
-    total = sum(buckets.values())
-    rows = []
-    for n in sorted(buckets):
-        if n >= 6:
-            break
-        rows.append({"months": n, "n": buckets[n],
-                     "pct": round(buckets[n] * 100 / total, 1) if total else 0,
-                     "cents": paid_by_bucket.get(n, 0)})
-    rest = sum(v for k, v in buckets.items() if k >= 6)
-    rest_cents = sum(v for k, v in paid_by_bucket.items() if k >= 6)
-    if rest:
-        rows.append({"months": 6, "n": rest, "over": True,
-                     "pct": round(rest * 100 / total, 1) if total else 0,
-                     "cents": rest_cents})
-
-    one_and_out = buckets.get(0, 0)
-    within_month = one_and_out + buckets.get(1, 0)
-    active = [m for m in members if m.get("status") == "active_patron"]
-    declined = [m for m in members if m.get("status") == "declined_patron"]
-
-    return {
-        "rows": rows, "measured": total, "left": len(left),
-        "undated": len(left) - len(dated),
-        "one_and_out": one_and_out,
-        "one_and_out_pct": round(one_and_out * 100 / total, 1) if total else 0,
-        "within_month": within_month,
-        "within_month_pct": round(within_month * 100 / total, 1) if total else 0,
-        # Two counts, because Patreon's own dashboard shows the second and
-        # this panel showed only the first, which is where "the number of
-        # patrons is not accurate" comes from. A declined patron has not
-        # cancelled: they are subscribed and the card failed.
-        "paying_now": len(active),
-        "subscribed_now": len(active) + len(declined),
-        "declined_now": len(declined),
-        "kept_pct": round(len(active) * 100 / (len(active) + len(left)), 1)
-                    if (len(active) + len(left)) else 0,
-    }
-
-
-def patreon_summary() -> dict:
-    """The paying side in numbers, for the home page.
-
-    Read from the whole export rather than from the handful of patrons who
-    linked their Discord: the money is true of everyone, and only the
-    joining to a conversation needs the link.
-    """
-    path = VAULT / "Panel" / "patreon-members.json"
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    members = raw.get("members", [])
-    active = [m for m in members if m.get("status") == "active_patron"]
-    month = datetime.now().strftime("%Y-%m")
-
-    # The newest supporters, by name. A count says the month went well; the
-    # names are who to welcome, and the first weeks are when a welcome
-    # still reads as one.
-    recent = sorted((m for m in active if m.get("since")),
-                    key=lambda m: m["since"], reverse=True)[:8]
-    recent_rows = [{
-        "name": m.get("name") or "(no name on the pledge)",
-        "tiers": [t for t in (m.get("tiers") or []) if t and t != "Free"],
-        "monthly_cents": m.get("monthly_cents", 0),
-        "since": m.get("since", ""),
-        "linked": bool(m.get("discord_id")),
-    } for m in recent]
-
-    # Where the money actually comes from: people per tier and what each
-    # tier brings in. Computed here once so the Business screen never does
-    # arithmetic of its own that could drift from these numbers.
-    by_tier: dict[str, dict] = {}
-    for m in active:
-        for t in (m.get("tiers") or ["(no tier)"]):
-            if t == "Free":
-                continue
-            row = by_tier.setdefault(t, {"tier": t, "count": 0, "monthly_cents": 0})
-            row["count"] += 1
-            row["monthly_cents"] += m.get("monthly_cents", 0)
-
-    declined = [m for m in members if m.get("status") == "declined_patron"]
-    stopped_rows = [m for m in members if m.get("status") == "former_patron"]
-
-    # Twelve months of arrivals, split by whether each person is still here.
-    # Computed from every member's pledge start, so the chart is "who began
-    # that month", which the data can prove, not "revenue that month", which
-    # it cannot: nothing records when a leaver left.
-    def month_shift(base: datetime, back: int) -> str:
-        y, m = base.year, base.month - back
-        while m <= 0:
-            y, m = y - 1, m + 12
-        return f"{y:04d}-{m:02d}"
-
-    now = datetime.now()
-    # Every month from the first pledge to now, not just twelve: the range
-    # control on the chart needs history to range over, and the window is
-    # chosen in the browser. month_shift stays, sales_pipeline uses it.
-    _starts = sorted(mo for mo in ((m.get("since") or "")[:7] for m in members)
-                     if mo)
-    _all_months = []
-    if _starts:
-        y, mth = int(_starts[0][:4]), int(_starts[0][5:7])
-        while f"{y:04d}-{mth:02d}" <= now.strftime("%Y-%m"):
-            _all_months.append(f"{y:04d}-{mth:02d}")
-            mth += 1
-            if mth == 13:
-                y, mth = y + 1, 1
-    joins = {mo: {"m": mo, "total": 0, "still": 0} for mo in _all_months}
-    for m in members:
-        mo = (m.get("since") or "")[:7]
-        if mo in joins:
-            joins[mo]["total"] += 1
-            if m.get("status") == "active_patron":
-                joins[mo]["still"] += 1
-
-    # When today's patrons joined: a survivors' curve, cumulative. It shows
-    # how much of the current base is old faith versus recent arrivals.
-    cohort: list[dict] = []
-    counts_by_month: dict[str, int] = {}
-    for m in active:
-        mo = (m.get("since") or "")[:7]
-        if mo:
-            counts_by_month[mo] = counts_by_month.get(mo, 0) + 1
-    if counts_by_month:
-        first = min(counts_by_month)
-        y, mth = int(first[:4]), int(first[5:7])
-        cum = 0
-        while f"{y:04d}-{mth:02d}" <= now.strftime("%Y-%m"):
-            mo = f"{y:04d}-{mth:02d}"
-            cum += counts_by_month.get(mo, 0)
-            cohort.append({"m": mo, "cum": cum})
-            mth += 1
-            if mth == 13:
-                y, mth = y + 1, 1
-
-    return {
-        "joins": list(joins.values()),
-        "cohort": cohort,
-        "recent": recent_rows,
-        "by_tier": sorted(by_tier.values(), key=lambda r: -r["monthly_cents"]),
-        "new_month_cents": sum(m.get("monthly_cents", 0) for m in active
-                               if (m.get("since") or "")[:7] == month),
-        "declined": len(declined),
-        "declined_lifetime_cents": sum(m.get("lifetime_cents", 0) for m in declined),
-        "stopped_lifetime_cents": sum(m.get("lifetime_cents", 0) for m in stopped_rows),
-        "total": len(members),
-        "paying": len(active),
-        "monthly_cents": sum(m.get("monthly_cents", 0) for m in active),
-        "lifetime_cents": sum(m.get("lifetime_cents", 0) for m in members),
-        "new_this_month": sum(1 for m in active if (m.get("since") or "")[:7] == month),
-        "stopped": sum(1 for m in members if m.get("status") == "former_patron"),
-        "retention": patreon_retention(members),
-        "video_effect": video_effect(members),
-        "period_change": period_change(members),
-        "read_at": (raw.get("read_at") or "")[:16].replace("T", " "),
-    }
-
-
 def build_people(questions: list[dict]) -> list[dict]:
     people: dict[str, dict] = {}
     for q in questions:
@@ -4824,23 +4272,17 @@ def build_people(questions: list[dict]) -> list[dict]:
             p["esc"] += 1
         if q["subscriber"] != "unknown":
             p["subscriber"] = q["subscriber"]
-    # What each of them is paying, when the two accounts have been linked,
-    # and whatever you have written about them.
-    patrons = patrons_by_handle()
+    # Whatever you have written about them, matched by handle.
     notes = all_customer_notes()
     today = datetime.now()
     for p in people.values():
         handle = (p["who"] or "").lstrip("@").split(" ")[0].lower()
-        p["patron"] = patrons.get(handle) or {}
         p["note"] = notes.get(handle) or {}
         p["status"] = p["note"].get("status") or derived_status(p, today)
 
-    # A paying customer with a question nobody answered comes first. Not
-    # because their question is better, but because they are the one person
-    # here who is owed something, and the queue never surfaced that.
+    # Someone with a question nobody answered comes first: they are the one
+    # person here who is owed something, and the queue never surfaced that.
     ordered = sorted(people.values(), key=lambda p: (
-        not (p["patron"].get("paying") and p["open"]),
-        -(p["patron"].get("lifetime_cents", 0) if p["open"] else 0),
         -p["open"], -p["asked"],
     ))
     for p in ordered:
@@ -5082,12 +4524,9 @@ def scan() -> dict:
 
     return {
         "md_files": md_files,
-        "patrons": patrons_by_handle(),
-        "patreon": (pat_summary := patreon_summary()),
-        "source_details": source_details(questions, pat_summary),
+        "source_details": source_details(questions),
         "youtube": youtube_channel_stats(),
         "health": integration_health(),
-        "pipeline": sales_pipeline(people),
         "discord_members": len((_members() or {})),
         "sync": sync_report(),
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -5402,12 +4841,11 @@ def _update_history(out: Path, d: dict) -> list:
             point[s.hist_key] = _wmn(s.key)
     if summ:
         # Account growth, so "active users increase" has a real line: total
-        # accounts, everyone who ever generated, active in 30d / 7d, paying.
+        # accounts, everyone who ever generated, active in 30d / 7d.
         point.update(wm_acc=int(summ.get("accounts") or 0),
                      wm_gen=int(summ.get("generated") or 0),
                      wm_a30=int(summ.get("active_30d") or 0),
-                     wm_a7=int(summ.get("active_7d") or 0),
-                     wm_prem=int(summ.get("premium") or 0))
+                     wm_a7=int(summ.get("active_7d") or 0))
     # Link clicks ride along the same way, through the cached admin call
     # the /links.json route already makes, so a build adds no new traffic
     # beyond what a page open costs. Any failure just skips the keys.
@@ -5424,7 +4862,7 @@ def _update_history(out: Path, d: dict) -> list:
 
     keys = (("open", "rate", "cov", "crit", "complete")
             + tuple(s.hist_key for s in panel_ui.WINGMAN_SEGMENTS)
-            + ("wm_acc", "wm_gen", "wm_a30", "wm_a7", "wm_prem",
+            + ("wm_acc", "wm_gen", "wm_a30", "wm_a7",
                "lt1", "lt24", "lt7", "ltn"))
     if hist and all(hist[-1].get(k) == point.get(k) for k in keys):
         hist[-1]["t"] = point["t"]
@@ -6296,12 +5734,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             w = _load_wingman()
             return self._send_json({
                 "ok": True,
-                "top_users": [{"name": u.get("name"), "plan": u.get("plan"),
+                "top_users": [{"name": u.get("name"),
                                "prompts": u.get("prompts", 0)}
                               for u in (w.get("top_users") or [])[:10]],
-                "premium": [{"name": p.get("name"), "plan": p.get("plan"),
-                             "days": p.get("days", 0)}
-                            for p in (w.get("premium") or [])[:12]],
             })
 
         if self.path.startswith("/links.json"):

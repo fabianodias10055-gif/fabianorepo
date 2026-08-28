@@ -1757,9 +1757,6 @@ window.fetch = function (url, opts) {
 };
 var AI_CACHE = __AI_CACHE__;
 var QDATA = __QDATA__;
-/* Only the people who linked Patreon to Discord, which is a hundred-odd
-   rows rather than the thousand in the table. */
-var PATRONS = __PATRONS__;
 var LOOKUPS = __LOOKUPS__;
 /* what each Admin source shows when opened */
 var SRCDET = __SRCDET__;
@@ -1880,7 +1877,7 @@ function setView(name) {
      then. Arriving on the screen is the moment to check it is still the
      list the server has. */
   if (name === "questions" && typeof bulkTick === "function") bulkTick();
-  if (name === "business" && typeof wmDetail === "function") wmDetail();
+  if (name === "accounts" && typeof wmDetail === "function") wmDetail();
   /* The graphs on the arriving screen fill up as it opens. Hidden ones
      would have finished animating invisibly, so it runs per arrival. */
   if (typeof sparkReplay === "function") sparkReplay(document.getElementById(name));
@@ -2374,19 +2371,6 @@ function universalSearch(term) {
     if (sys.toLowerCase().indexOf(term) !== -1) prods[sys] = (prods[sys] || 0) + 1;
     if ((q.text || "").toLowerCase().indexOf(term) !== -1) hits++;
   }
-  /* A patron may be findable by the name on their card rather than the
-     handle they type under. */
-  for (var h in PATRONS) {
-    var p = PATRONS[h];
-    if (p.name && p.name.toLowerCase().indexOf(term) !== -1) {
-      for (var id2 in QDATA) {
-        var w = (QDATA[id2].who || "");
-        if (w.replace(/^@/, "").split(" ")[0].toLowerCase() === h) {
-          people[w] = people[w] || 0;
-        }
-      }
-    }
-  }
 
   var top = function (o) {
     return Object.keys(o).sort(function (a, b) { return o[b] - o[a]; });
@@ -2396,10 +2380,8 @@ function universalSearch(term) {
   if (pk.length) {
     out += '<div class="qrgroup"><span class="clabel">People</span>';
     pk.forEach(function (w) {
-      var p = PATRONS[w.replace(/^@/, "").split(" ")[0].toLowerCase()];
       out += '<button class="qritem" data-go="person" data-key="' + esc(w) + '">'
-        + esc(w) + (p && p.name ? ' <span class="note">' + esc(p.name) + "</span>" : "")
-        + (p && p.paying ? ' <span class="tag sub">pays</span>' : "")
+        + esc(w)
         + ' <span class="note">' + people[w] + " question"
         + (people[w] === 1 ? "" : "s") + "</span></button>";
     });
@@ -3171,7 +3153,7 @@ $$("[data-editans]").forEach(function (b) {
    second copy of the same conversations: a profile is a filter over what is
    here, and duplicating it would grow the file for nothing. */
 function customerProfile(who) {
-  var mine = [], pat = PATRONS[who.replace(/^@/, "").split(" ")[0].toLowerCase()] || null;
+  var mine = [];
   for (var id in QDATA) if (QDATA[id].who === who) mine.push(QDATA[id]);
   mine.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
 
@@ -3188,16 +3170,9 @@ function customerProfile(who) {
   var head = '<div class="cprofile">';
   head += '<div class="chead">';
   if (mine[0] && mine[0].avatar) head += '<img class="cav" src="' + mine[0].avatar + '" alt="">';
-  head += '<div><b>' + esc(pat && pat.name ? pat.name : who) + '</b>';
-  if (pat && pat.name) head += ' <span class="note">' + esc(who) + "</span>";
+  head += '<div><b>' + esc(who) + '</b>';
   head += '<br><span class="note">';
   var facts = [];
-  if (pat && pat.paying) {
-    facts.push("paying US$ " + (pat.monthly / 100).toFixed(0) + "/mo"
-      + (pat.tiers.length ? " on " + esc(pat.tiers.join(", ")) : ""));
-  } else if (pat) { facts.push("used to pay"); }
-  if (pat && pat.lifetime) facts.push("US$ " + (pat.lifetime / 100).toFixed(0) + " in total");
-  if (pat && pat.since) facts.push("customer since " + esc(pat.since.slice(0, 7)));
   if (mine[0] && mine[0].joined) facts.push("in the server since " + esc(mine[0].joined));
   facts.push(mine.length + " question" + (mine.length === 1 ? "" : "s")
     + (open ? ", " + open + " still waiting" : ", all answered"));
@@ -3348,8 +3323,8 @@ function productProfile(name) {
   mine.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
   var open = mine.filter(function (q) { return q.status !== "answered"; });
 
-  /* Who is asking, and which of them pay. Tiers are not per product, so
-     this says "these customers care about it", never "these bought it". */
+  /* Who is asking about this product, and where. This says "these people
+     care about it", never "these bought it". */
   var byWho = {}, chans = {}, vids = {};
   mine.forEach(function (q) {
     (byWho[q.who] = byWho[q.who] || []).push(q);
@@ -3358,17 +3333,10 @@ function productProfile(name) {
   });
   var askers = Object.keys(byWho).sort(function (a, b) {
     return byWho[b].length - byWho[a].length; });
-  var paying = askers.filter(function (w) {
-    var p = PATRONS[w.replace(/^@/, "").split(" ")[0].toLowerCase()];
-    return p && p.paying; });
-  var money = paying.reduce(function (s, w) {
-    return s + PATRONS[w.replace(/^@/, "").split(" ")[0].toLowerCase()].monthly; }, 0);
 
   var out = '<div class="cprofile"><div class="chead"><div><b>' + esc(name) + "</b><br>"
     + '<span class="note">' + mine.length + " question" + (mine.length === 1 ? "" : "s")
     + " from " + askers.length + " people &middot; " + open.length + " still open"
-    + (paying.length ? " &middot; " + paying.length + " of them pay, US$ "
-        + (money / 100).toFixed(0) + "/mo between them" : "")
     + "</span></div></div>";
 
   var where = Object.keys(chans).sort(function (a, b) { return chans[b] - chans[a]; })
@@ -3407,7 +3375,6 @@ function productProfile(name) {
     + '<span class="note">oldest first, so the person who has waited longest is at the top</span></div>';
   out += '<div class="ctl">';
   open.slice().reverse().forEach(function (q) {
-    var p = PATRONS[q.who.replace(/^@/, "").split(" ")[0].toLowerCase()];
     /* each question here came from a different video; the thumbnail is how
        the eye tells them apart before reading a word */
     out += '<div class="cev open" data-qid="' + esc(q.id) + '">'
@@ -3415,7 +3382,7 @@ function productProfile(name) {
           + '" referrerpolicy="no-referrer" src="' + esc(q.small) + '">' : "")
       + '<div class="cbody"><span class="cdate">'
       + esc(q.date) + " &middot; "
-      + esc(q.who) + (p && p.paying ? ' <span class="tag sub">pays</span>' : "")
+      + esc(q.who)
       + genMarks(q.id)
       + "</span>"
       + '<div class="cq">' + esc(q.text.slice(0, 200)) + "</div>"
@@ -3863,27 +3830,6 @@ document.addEventListener("click", function (ev) {
    dashed stroke, a shaded range and its own legend chip, never by a colour
    of its own. That keeps the palette at the three validated series colours. */
 var CHSPEC = {
-  pledges: {
-    kind: "stack", keys: ["still", "left"], vars: ["main", "mute"],
-    names: ["still paying today", "since left"], unit: "pledges",
-    tip: function (r) {
-      return r.m + ": " + fmt(r.still + r.left) + " started, " + fmt(r.still) +
-             " still paying today";
-    },
-    why: "Bars are pledges started that month, split by who still pays. " +
-         "Not revenue, and not who left that month: nothing records the day " +
-         "a leaver left."
-  },
-  cohort: {
-    kind: "area", keys: ["cum"], vars: ["main"],
-    names: ["patrons paying today"], unit: "patrons", cumulative: true,
-    tip: function (r) {
-      return r.m + ": " + fmt(r.cum) + " of today's patrons had joined by then";
-    },
-    why: "Only the people paying right now, each placed in the month they " +
-         "joined. It cannot show how large the base was back then, because " +
-         "everyone who has since left is missing from it."
-  },
   questions: {
     kind: "stack", keys: ["answered", "waiting"], vars: ["mute", "warn"],
     names: ["answered by now", "still waiting"], unit: "questions",
@@ -5793,29 +5739,18 @@ document.addEventListener("click", function (ev) {
 
 /* ---- Wingman named tables: filled live so no name is baked into
    panel.html (which the vault carries). ---- */
-function wmPill(plan) {
-  plan = (plan || "free").toLowerCase();
-  var cls = (plan === "premium" || plan === "standard") ? "ok" : "mut";
-  return '<span class="pill st-' + cls + '">' + esc(plan) + "</span>";
-}
 function wmDetail() {
-  var top = $("#wm-top"), prem = $("#wm-prem");
-  if (!top || !prem || !LIVE) return;
+  var top = $("#wm-top");
+  if (!top || !LIVE) return;
   fetch("/wingman-detail.json", { cache: "no-store" })
     .then(function (r) { return r.json(); })
     .then(function (d) {
       if (!d || !d.ok) return;
-      var NL = "";
       top.innerHTML = (d.top_users || []).map(function (u) {
         return '<tr><td><span class="nm">' + esc(u.name || "—")
-          + "</span></td><td>" + wmPill(u.plan) + '</td><td class="num">'
+          + '</span></td><td class="num">'
           + fmt(u.prompts || 0) + "</td></tr>";
-      }).join(NL) || '<tr><td colspan="3" class="note">none</td></tr>';
-      prem.innerHTML = (d.premium || []).map(function (p) {
-        return '<tr><td><span class="nm">' + esc(p.name || "—")
-          + "</span></td><td>" + wmPill(p.plan) + '</td><td class="num">'
-          + fmt(p.days || 0) + "d</td></tr>";
-      }).join(NL) || '<tr><td colspan="3" class="note">none</td></tr>';
+      }).join("") || '<tr><td colspan="2" class="note">none</td></tr>';
     })
     .catch(function () {});
 }
@@ -6378,20 +6313,11 @@ def _bar(pct: int, tone: str = "g") -> str:
 def _needs_attention(d: dict) -> str:
     """What is owed, in the order it is owed.
 
-    Everything here is somebody waiting. Sorted by who is owed most, which
-    puts a paying customer above a queue count and a promise you made
-    above a stranger's first question.
+    Everything here is somebody waiting. A promise you wrote down or someone
+    who used your name outranks a stranger's first question.
     """
     people = d["people"]
     items = []
-
-    owed = [p for p in people if p.get("patron", {}).get("paying") and p["open"]]
-    if owed:
-        money = sum(p["patron"]["monthly_cents"] for p in owed) / 100
-        names = ", ".join(escape(p["who"]) for p in owed[:4])
-        items.append(("crit", f"{len(owed)} paying customers waiting for a reply",
-                      f"US$ {money:,.0f} a month between them &middot; {names}"
-                      + (" and more" if len(owed) > 4 else "")))
 
     promised = [p for p in people if (p.get("note") or {}).get("next")]
     if promised:
@@ -6413,14 +6339,6 @@ def _needs_attention(d: dict) -> str:
         items.append(("info", f"{_fmt(waiting)} people have an unanswered question",
                       f"the longest has been waiting since {escape(oldest)}"
                       if oldest else ""))
-
-    lost = [p for p in people
-            if p.get("patron") and not p["patron"].get("paying")
-            and p["patron"].get("lifetime_cents")]
-    if lost:
-        items.append(("info", f"{len(lost)} customers stopped paying",
-                      "they paid before and no longer do, which is a "
-                      "different conversation to have"))
 
     rows = "".join(
         f'<div class="att att-{tone}"><b>{label}</b>'
@@ -6444,7 +6362,6 @@ def _today_card(d: dict) -> str:
     answered_today = sum(1 for a in (d.get("answers") or [])
                          if (a.get("when") or "")[:10] == today)
     new_people = sum(1 for p in d["people"] if p.get("first") == today)
-    pat = d.get("patreon") or {}
 
     def line(n, label, sub=""):
         return (f'<div class="orow"><span class="olabel">{label}</span>'
@@ -6457,77 +6374,8 @@ def _today_card(d: dict) -> str:
         + line(asked_today, "questions arrived", f"{_fmt(asked_week)} in the last 7 days")
         + line(answered_today, "you answered")
         + line(new_people, "people asked for the first time")
-        + line(pat.get("new_this_month", 0), "new patrons", "this month")
         + "</section>"
     )
-
-
-def _business_card(d: dict) -> str:
-    pat = d.get("patreon") or {}
-    people = d["people"]
-    waiting = sum(1 for p in people if p["open"])
-
-    def line(label, value, sub=""):
-        return (f'<div class="orow"><span class="olabel">{label}</span>'
-                f'<span class="ovals"><b>{value}</b>'
-                + (f'<br><span class="note">{sub}</span>' if sub else "")
-                + "</span></div>")
-
-    # Everyone in `people` has written something; only some of it was a
-    # question. The label says asked, so the count means asked.
-    askers = sum(1 for p in people if p["asked"])
-    # Said without this, the number just drops by 158 one afternoon and
-    # reads as people lost rather than people recounted.
-    only_praise = sum(1 for p in people if not p["asked"] and p["praise"])
-    rows = line("people who have asked something", _fmt(askers),
-                f"{_fmt(only_praise)} more only left praise" if only_praise else "")
-    if pat:
-        rows += line("paying right now", _fmt(pat.get("paying", 0)),
-                     f"of {_fmt(pat.get('total', 0))} on Patreon")
-        rows += line("coming in monthly",
-                     f"US$ {pat.get('monthly_cents', 0) / 100:,.0f}")
-        rows += line("paid over the years",
-                     f"US$ {pat.get('lifetime_cents', 0) / 100:,.0f}")
-    # waiting is a headcount, not a question count.
-    rows += line("people with an open question", _fmt(waiting))
-    if pat.get("read_at"):
-        rows += (f'<p class="note">Patreon read {escape(pat["read_at"])}. '
-                 f'WhatsApp and website sales are not here: nothing in this '
-                 f'panel can see them yet.</p>')
-    return (f'<section class="card"><h2><span class="he">📊</span>'
-            f'The business, in short</h2>{rows}</section>')
-
-
-def _sales_card(d: dict) -> str:
-    """Where people are, between never having paid and having left."""
-    stages = d.get("pipeline") or []
-    if not stages:
-        return ""
-    top = max((s["n"] for s in stages), default=1) or 1
-    rows = []
-    for s in stages:
-        width = max(2, round(s["n"] * 100 / top))
-        tone = "r" if s.get("urgent") else ("g" if s["value"] else "a")
-        names = ""
-        if s.get("names"):
-            names = " &middot; " + ", ".join(escape(n) for n in s["names"])
-        rows.append(
-            f'<div class="orow"><span class="olabel">{escape(s["stage"])}</span>'
-            f'{_bar(width, tone)}'
-            f'<span class="ovals"><b>{_fmt(s["n"])}</b>'
-            f'<br><span class="note">{escape(s["value"]) if s["value"] else ""}</span>'
-            f'</span></div>'
-            f'<p class="note stagenote">{escape(s["note"])}{names}</p>'
-        )
-    return (
-        f'<section class="card" id="sales">'
-        f'<h2><span class="he">💳</span>Where people are</h2>'
-        f'<p class="note">Only what Patreon can prove. A sale made anywhere '
-        f'else, on the website or by hand, is not in this and would have to '
-        f'come from wherever it was recorded.</p>'
-        f'{"".join(rows)}</section>'
-    )
-
 
 
 def _chart_payload(d: dict) -> dict:
@@ -6537,8 +6385,6 @@ def _chart_payload(d: dict) -> dict:
     state today, which is the honest reading: nothing records the day an
     answer was written, so this is not "answered that month".
     """
-    pat = d.get("patreon") or {}
-    joins = pat.get("joins") or []
     qm: dict[str, dict] = {}
     for q in d.get("questions") or []:
         mo = (q.get("date") or "")[:7]
@@ -6556,9 +6402,6 @@ def _chart_payload(d: dict) -> dict:
             if mth == 13:
                 y, mth = y + 1, 1
     return {
-        "pledges": [{"m": r["m"], "still": r["still"],
-                     "left": r["total"] - r["still"]} for r in joins],
-        "cohort": pat.get("cohort") or [],
         "questions": [qm[k] for k in sorted(qm)],
     }
 
@@ -6574,133 +6417,12 @@ def _fig(name: str, title: str) -> str:
 
 
 
-def _business_screen(d: dict, below: str = "") -> str:
-    """One screen for the numbers, said as money and people.
-
-    Everything here already existed somewhere: totals on Home, movement in
-    Sales, reach in Community. What did not exist is the view an owner
-    opens before a decision, where the same numbers sit next to each other
-    and one glance answers what the business earns, from whom, and which
-    way it is moving.
-    """
-    pat = d.get("patreon") or {}
-    if not pat:
-        return ""
-    yt = d.get("youtube") or {}
-    people = d["people"]
-
-    def line(label, value, sub=""):
-        return (f'<div class="orow"><span class="olabel">{escape(label)}</span>'
-                f'<span class="ovals"><b>{value}</b>'
-                + (f'<br><span class="note">{sub}</span>' if sub else "")
-                + "</span></div>")
-
-    # Where the money comes from
-    tiers = ""
-    for r in pat.get("by_tier") or []:
-        each = r["monthly_cents"] / r["count"] / 100 if r["count"] else 0
-        tiers += line(r["tier"], f'US$ {r["monthly_cents"] / 100:,.0f}/mo',
-                      f'{_fmt(r["count"])} people at ~US$ {each:,.0f} each')
-    paying = pat.get("paying", 0)
-    avg = pat.get("monthly_cents", 0) / paying / 100 if paying else 0
-    money = (
-        f'<section class="card"><h2><span class="he">💰</span>Where the money '
-        f'comes from</h2>{tiers}'
-        + line("All together", f'US$ {pat.get("monthly_cents", 0) / 100:,.0f}/mo',
-               f'{_fmt(paying)} paying, ~US$ {avg:,.0f} each on average')
-        + line("Since the campaign began",
-               f'US$ {pat.get("lifetime_cents", 0) / 100:,.0f}')
-        + "</section>")
-
-    # Which way it is moving
-    moving = (
-        f'<section class="card"><h2><span class="he">📈</span>Which way it is '
-        f'moving</h2>'
-        + line("Joined this month", _fmt(pat.get("new_this_month", 0)),
-               f'worth US$ {pat.get("new_month_cents", 0) / 100:,.0f}/mo')
-        # Payment just failed and Stopped used to be repeated here. They are
-        # in the funnel below, where a bar puts them next to the stages they
-        # came from, which is the reading this card cannot give.
-        + _fig("pledges", "Pledges started each month")
-        + _fig("cohort", "When today\'s patrons joined")
-        + "</section>")
-
-    # Reach, and how much of it pays
-    reach = (yt.get("subscribers", 0) or 0) + (d.get("discord_members") or 0)
-    conv = (
-        f'<section class="card"><h2><span class="he">🌍</span>Reach, and how '
-        f'much of it pays</h2>'
-        + line("YouTube", _fmt(yt.get("subscribers", 0)),
-               f'{_fmt(yt.get("views", 0))} views all time')
-        + line("Discord", _fmt(d.get("discord_members") or 0))
-        + line("Patreon", _fmt(pat.get("total", 0)),
-               f'{_fmt(paying)} of them pay')
-        + line("Paying, out of everyone reached",
-               f"{(paying * 100 / reach):.1f}%" if reach else "-",
-               f'{_fmt(paying)} of roughly {_fmt(reach)}')
-        + "</section>")
-
-    # The work side, in the same breath
-    waiting = sum(1 for p in people if p["open"])
-    owed = [p for p in people if p.get("patron", {}).get("paying") and p["open"]]
-    work = (
-        f'<section class="card"><h2><span class="he">💬</span>The work behind '
-        f'it</h2>'
-        + line("People who have asked something", _fmt(len(people)))
-        + line("Waiting for an answer", _fmt(waiting))
-        + line("Paying customers among them", _fmt(len(owed)),
-               "they come first in Customers")
-        + line("You have answered", f'{d["answer_rate"]}%',
-               "of everything ever asked")
-        + _fig("questions", "Questions per month, and what is still waiting")
-        + "</section>")
-
-    return (
-        f'<section id="business"><div class="grid2">'
-        f'{money}{moving}{conv}{work}</div>'
-        f'<p class="note">Patreon read {escape(pat.get("read_at") or "?")}. '
-        f'WhatsApp and website sales are not here: nothing in this panel can '
-        f'see them yet, so every money figure on this screen is Patreon only.</p>'
-        f'{below}'
-        f'</section>')
-
-
-def _new_patrons_card(d: dict) -> str:
-    """The people who just started paying, by name.
-
-    The Today tile already counts them; a count says the month went well and
-    leaves nothing to act on. These are the people a welcome still lands
-    for, and whether each one linked their Discord decides whether they show
-    up in Customers as themselves or as a stranger.
-    """
-    rows = []
-    for m in (d.get("patreon") or {}).get("recent") or []:
-        tier = ", ".join(m["tiers"]) or "no tier yet"
-        money = (f'US$ {m["monthly_cents"] / 100:,.0f}/mo'
-                 if m.get("monthly_cents") else "free")
-        linked = ('' if m.get("linked") else
-                  ' <span class="tag miss" title="No Discord linked: their '
-                  'questions in the server cannot be matched to this pledge">'
-                  'no Discord</span>')
-        rows.append(
-            f'<div class="orow2"><span class="nm">{escape(m["name"])}</span>'
-            f'{linked}<br><span class="note">{escape(tier)} &middot; {money}'
-            f' &middot; since {escape(m["since"])}</span></div>'
-        )
-    if not rows:
-        return ""
-    return (f'<section class="card"><h2><span class="he">🎉</span>'
-            f'New patrons</h2>{"".join(rows)}</section>')
-
-
 def _community_card(d: dict) -> str:
     """How many people each channel actually reaches.
 
-    Sizes rather than health scores: a number someone can repeat out loud,
-    with the one comparison that matters underneath it, which is how much of
-    that audience ever pays.
+    Sizes rather than health scores: a number someone can repeat out loud
+    for each place the audience gathers.
     """
-    pat = d.get("patreon") or {}
     yt = d.get("youtube") or {}
     disc = d.get("discord_members") or 0
     rows = []
@@ -6717,22 +6439,10 @@ def _community_card(d: dict) -> str:
                          f'{_fmt(yt.get("videos", 0))} videos'))
     if disc:
         rows.append(line("Discord", _fmt(disc), "people in the server"))
-    if pat.get("total"):
-        share = (pat.get("paying", 0) * 100 / pat["total"]) if pat["total"] else 0
-        rows.append(line("Patreon", _fmt(pat["total"]),
-                         f'{_fmt(pat.get("paying", 0))} of them pay, {share:.0f}%'))
     if not rows:
         return ""
-    # The one number that ties the three together, and the honest gap.
-    reach = (yt.get("subscribers", 0) or 0) + disc
-    paying = pat.get("paying", 0)
-    rows.append(line("Paying, out of all that",
-                     f"{(paying * 100 / reach):.1f}%" if reach else "-",
-                     f'{_fmt(paying)} people out of roughly {_fmt(reach)} reached'))
     return (f'<section class="card"><h2><span class="he">🌍</span>Community</h2>'
-            f'{"".join(rows)}'
-            f'<p class="note">Email subscribers and Wingman users are not here: '
-            f'nothing in this panel can count them yet.</p></section>')
+            f'{"".join(rows)}</section>')
 
 
 def _overview_cards(d: dict) -> str:
@@ -6807,14 +6517,12 @@ def _overview_cards(d: dict) -> str:
         return (f'<section class="card"><h2><span class="he">{emoji}</span>'
                 f'{title}</h2>{body}</section>')
 
-    # Attention first, then what happened today, then the shape of the
-    # business. Everything below that is context rather than a call to act.
+    # Attention first, then what happened today. Everything below that is
+    # context rather than a call to act.
     return (
         _needs_attention(d)
         + '<div class="grid2">'
         + _today_card(d)
-        + _business_card(d)
-        + _new_patrons_card(d)
         + _community_card(d)
         + card("Where they ask", "📣", "".join(where))
         + card("Under the most pressure", "🔥", "".join(pressure))
@@ -7265,93 +6973,6 @@ def _system_pressure_card(d: dict, facets: list) -> str:
     )
 
 
-def _people_card(d: dict) -> str:
-    rows = []
-    for i, p in enumerate(d["people"]):
-        hid = "" if i < 8 else " xtra hide"
-        tags = ""
-        if p.get("esc"):
-            tags += ' <span class="tag esc">asked for you</span>'
-        if p.get("lead"):
-            tags += ' <span class="tag lead">lead</span>'
-        if p["subscriber"] == "yes":
-            tags += ' <span class="tag sub">sub</span>'
-        # Where they turn up, in order of how often. Someone who asks in
-        # Discord is in the community; someone who only comments on a video
-        # is an audience, and the two are worth telling apart at a glance.
-        seen = p.get("channels") or ({p["channel"]: p["asked"]} if p.get("channel") else {})
-        marks = "".join(
-            f'<span class="chmark" title="{n} on {escape(ch, quote=True)}">'
-            f'{_brand_icon(ch, 13) or ""}</span>'
-            for ch, n in sorted(seen.items(), key=lambda kv: -kv[1])
-            if ch in _BRAND
-        )
-        rows.append(
-            f'<tr class="crow {hid.strip()}" tabindex="0" '
-            f'data-who="{escape(p["who"], quote=True)}" '
-            f'title="Open this customer"><td><span class="uc">{_avatar(p["who"], "sm")}'
-            f'<span class="n">{escape(p["who"])}{tags}</span>{marks}</span>'
-            f'{_patron_line(p)}</td>'
-            f'<td>{_pays(p)}</td>'
-            f'<td class="num">{p["asked"]}</td><td class="num">{p["open"]}</td>'
-            f'<td class="num">{p["last"]}</td></tr>'
-        )
-    more = (f'<button class="linkbtn" data-viewall>View all {len(d["people"])} people</button>'
-            if len(d["people"]) > 8 else "")
-    body = "".join(rows) if rows else (
-        '<tr><td colspan="5"><div class="empty">Nobody logged yet.</div></td></tr>')
-
-    paying = [p for p in d["people"] if p.get("patron", {}).get("paying")]
-    monthly = sum(p["patron"]["monthly_cents"] for p in paying)
-    owed = [p for p in paying if p["open"]]
-    head = f'{_fmt(len(d["people"]))} people'
-    if paying:
-        head += (f' &middot; {len(paying)} paying, US$ {monthly / 100:,.0f}/mo'
-                 f'{f" &middot; {len(owed)} waiting on you" if owed else ""}')
-    return (
-        f'<section class="card" id="people">'
-        f'<h2><span class="he">👥</span>Customers'
-        f'<span class="cnt">{head}</span></h2>'
-        f'<p class="note">Paying customers with an unanswered question come '
-        f'first. Money shows only where someone linked their Patreon to their '
-        f'Discord; everyone else may well be paying and nothing here says so.</p>'
-        f'<div class="scroll"><table aria-label="Customers"><thead><tr>'
-        f'<th scope="col">Person</th><th scope="col">Paying</th>'
-        f'<th scope="col">Asked</th><th scope="col">Waiting</th>'
-        f'<th scope="col">Last seen</th></tr></thead>'
-        f'<tbody>{body}</tbody></table></div>{more}</section>'
-    )
-
-
-def _patron_line(p: dict) -> str:
-    """The customer's real name and how long they have been paying."""
-    pat = p.get("patron") or {}
-    if not pat:
-        return ""
-    bits = []
-    if pat.get("name"):
-        bits.append(escape(pat["name"]))
-    if pat.get("since"):
-        bits.append(f'customer since {escape(pat["since"][:7])}')
-    if pat.get("lifetime_cents"):
-        bits.append(f'US$ {pat["lifetime_cents"] / 100:,.0f} in total')
-    return f'<br><span class="note">{" &middot; ".join(bits)}</span>' if bits else ""
-
-
-def _pays(p: dict) -> str:
-    pat = p.get("patron") or {}
-    if not pat:
-        return '<span class="note">-</span>'
-    if not pat.get("paying"):
-        # Someone who used to pay is a different person to talk to than
-        # someone who never did, so the difference is on the row.
-        return '<span class="pill st-no-source">was paying</span>'
-    tier = ", ".join(t for t in pat.get("tiers", []) if t and t != "Free")
-    money = f'US$ {pat["monthly_cents"] / 100:,.0f}/mo' if pat.get("monthly_cents") else "free tier"
-    return (f'<span class="pill st-ok">{escape(tier or "patron")}</span>'
-            f'<br><span class="note">{money}</span>')
-
-
 def _videos_card(d: dict) -> str:
     """Videos ordered by how much work each one is still holding.
 
@@ -7713,8 +7334,8 @@ def _wingman_card(d: dict) -> str:
 
 
 def _wingman_users_card(d: dict) -> str:
-    """LocoAI/Wingman accounts: who signed up, who activated, who pays, and
-    the email audiences that fall out of that. Reads the Supabase rollup
+    """LocoAI/Wingman accounts: who signed up, who activated, and the email
+    audiences that fall out of that. Reads the Supabase rollup
     collect_wingman.py writes to the private folder (%LOCALAPPDATA%/
     locodev-panel), never the vault; empty and self-explaining until it
     exists."""
@@ -7722,23 +7343,20 @@ def _wingman_users_card(d: dict) -> str:
     s = w.get("summary") or {}
     if not s:
         return (
-            '<section class="card" data-view="business" id="wingman-users">'
+            '<section class="card" data-view="accounts" id="accounts">'
             '<h2><span class="he">🪄</span>Wingman accounts</h2>'
             '<p class="note">No account data yet. This reads a Supabase '
             'rollup written by <code>collect_wingman.py</code>. Add '
             'SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY, run it once, and the '
-            'accounts, activation, premium and email audiences show here.</p>'
+            'accounts, activation and email audiences show here.</p>'
             '</section>')
 
     acc = s.get("accounts", 0) or 0
     gen = s.get("generated", 0) or 0
     never = max(0, acc - gen)
     act = round(gen * 100 / acc) if acc else 0
-    prem = s.get("premium", 0) or 0
-    conv = round(prem * 100 / acc, 1) if acc else 0
 
-    # The last two carry no trend key: a spark of Cakto subs or emailable
-    # count says nothing worth the ink. The first four are the growth story.
+    # emailable carries no trend key; the first three are the growth story.
     tiles = [
         ("Accounts", _fmt(acc), f'{_fmt(s.get("new_30d", 0))} new in 30 days',
          "wm_acc", "var(--accent)"),
@@ -7746,10 +7364,6 @@ def _wingman_users_card(d: dict) -> str:
          "wm_gen", "var(--ok)"),
         ("Active in 30d", _fmt(s.get("active_30d", 0)),
          f'{_fmt(s.get("active_7d", 0))} in the last 7', "wm_a30", "var(--info)"),
-        ("Premium", _fmt(prem), f'{conv}% of accounts pay',
-         "wm_prem", "var(--warn)"),
-        ("Cakto subs", _fmt(s.get("cakto_active", 0)), "courses and packs",
-         "", ""),
         ("Can email", _fmt(s.get("emailable", 0)), "confirmed address", "", ""),
     ]
     hist = d.get("history") or []
@@ -7801,13 +7415,13 @@ def _wingman_users_card(d: dict) -> str:
     # The named tables are not rendered here: customer names would land in
     # panel.html, which the vault carries. They fill at runtime from the
     # token-gated /wingman-detail.json instead, so this card stays aggregate.
-    loading = '<tr><td colspan="3" class="note">loading…</td></tr>'
+    loading = '<tr><td colspan="2" class="note">loading…</td></tr>'
     built = w.get("generated_at", "")
     return (
-        f'<section class="card" data-view="business" id="wingman-users">'
+        f'<section class="card" data-view="accounts" id="accounts">'
         f'<h2><span class="he">🪄</span>Wingman accounts'
-        f'<span class="cnt">{_fmt(acc)} accounts &middot; {act}% activated '
-        f'&middot; {prem} paying</span></h2>'
+        f'<span class="cnt">{_fmt(acc)} accounts &middot; {act}% activated'
+        f'</span></h2>'
         f'<div class="wm-tiles">{tilehtml}</div>'
         f'{gap}'
         f'<h3 class="wm-h">Email audiences</h3>'
@@ -7815,16 +7429,10 @@ def _wingman_users_card(d: dict) -> str:
         f'audience counts; pick one and send it through Resend from the Email '
         f'screen below.</p>'
         f'<div class="wm-segs">{seghtml}</div>'
-        f'<div class="wm-cols">'
         f'<div class="wm-col"><h3 class="wm-h">Most active</h3>'
-        f'<div class="scroll"><table><thead><tr><th>User</th><th>Plan</th>'
+        f'<div class="scroll"><table><thead><tr><th>User</th>'
         f'<th class="num">Generations</th></tr></thead>'
         f'<tbody id="wm-top">{loading}</tbody></table></div></div>'
-        f'<div class="wm-col"><h3 class="wm-h">Premium, by tenure</h3>'
-        f'<div class="scroll"><table><thead><tr><th>User</th><th>Plan</th>'
-        f'<th class="num">For</th></tr></thead>'
-        f'<tbody id="wm-prem">{loading}</tbody></table></div></div>'
-        f'</div>'
         + (f'<h3 class="wm-h">Where they come from</h3><div class="wm-src">{srchtml}</div>'
            if src else "")
         + (f'<p class="note wm-built">{_wm_stamp(w)}</p>'
@@ -7942,12 +7550,12 @@ _NAV = [
     # from the panel's log, not the 900-odd vault-wide answered questions
     # the Home tile counts, and calling both "answered" read as a bug.
     ("answers", "check", "Answers sent", "answers"),
-    ("business", "grid", "Business", ""),
     ("systems", "flame", "Products", ""),
     ("videos", "video", "Videos", ""),
     ("links", "link", "Links", ""),
     ("sync", "refresh", "Knowledge", "silent"),
     ("wingman", "sparkle", "Writing", ""),
+    ("accounts", "grid", "Wingman", ""),
     ("email", "mail", "Email", ""),
     ("sources", "database", "Admin", ""),
 ]
@@ -7955,244 +7563,6 @@ _NAV = [
 
 
 
-
-
-def _retention_card(d: dict) -> str:
-    """Who stayed, who left, and how fast they left.
-
-    Built because "how many patrons" had one answer on this panel and a
-    different one on Patreon's own dashboard, and because the shape of the
-    leaving matters more than the count: most of the people who ever paid
-    paid once.
-    """
-    pat = d.get("patreon") or {}
-    r = pat.get("retention") or {}
-    if not r.get("measured"):
-        return ""
-    rows = r["rows"]
-    top = max((x["n"] for x in rows), default=1) or 1
-
-    bars = []
-    for x in rows:
-        label = ("6 months or more" if x.get("over")
-                 else "paid once, same month" if x["months"] == 0
-                 else f'{x["months"]} month' + ("s" if x["months"] > 1 else ""))
-        width = max(2, round(x["n"] * 100 / top))
-        bars.append(
-            f'<div class="bar" title="{escape(label, quote=True)}: '
-            f'{_fmt(x["n"])} people, US$ {x["cents"] / 100:,.0f} paid">'
-            f'<span class="bl">{escape(label)}</span>'
-            f'<span class="bt"><i style="width:{width}%"></i></span>'
-            f'<span class="bv">{_fmt(x["n"])} &middot; '
-            f'US$ {x["cents"] / 100:,.0f}</span></div>')
-
-    def cell(k, v, sub="", warn=False):
-        return (f'<div><span class="k">{escape(k)}</span>'
-                f'<span class="v{" warn" if warn else ""}">{v}</span>'
-                + (f'<span class="k">{escape(sub)}</span>' if sub else "")
-                + "</div>")
-
-    return (
-        '<section class="card" id="retention">'
-        '<h2><span class="he">🧮</span>Who stayed, and how fast the rest '
-        'left</h2>'
-        '<div class="figstat" style="border-top:0;padding-top:0">'
-        + cell("paying right now", _fmt(r["paying_now"]), "the card went through")
-        + cell("subscribed right now", _fmt(r["subscribed_now"]),
-               f'includes {_fmt(r["declined_now"])} whose card failed')
-        + cell("of everyone who ever paid, still here",
-               f'{r["kept_pct"]}%', "", r["kept_pct"] < 20)
-        + cell("paid once and left", _fmt(r["one_and_out"]),
-               f'{r["one_and_out_pct"]}% of those who left', True)
-        + "</div>"
-        '<p class="figwhy">Two counts, because they answer different '
-        "questions and this panel used to show only the first. Patreon's own "
-        'dashboard counts the second: a declined patron has not cancelled, '
-        'their card failed and they are still subscribed.</p>'
-        '<p class="lsub">How long the people who left had stayed</p>'
-        '<div class="bars">' + "".join(bars) + "</div>"
-        f'<p class="figwhy">Measured on {_fmt(r["measured"])} of the '
-        f'{_fmt(r["left"])} who left'
-        + (f', the other {_fmt(r["undated"])} having no charge on record'
-           if r.get("undated") else "")
-        + '. Nothing in the export says the day somebody cancelled, so this '
-        'is the months between joining and their last charge, which '
-        'undercounts by whatever part of a month they stayed after paying '
-        'for the last time. The first bar is people whose joining month and '
-        'last charge month are the same: they paid once. That is what taking '
-        "a tier's content and leaving looks like from here, though it is "
-        'not proof of why.</p>'
-        "</section>")
-
-
-
-def _period_card(d: dict) -> str:
-    """This week, month and year against the one before."""
-    pat = d.get("patreon") or {}
-    pc = pat.get("period_change") or {}
-    rows = pc.get("rows") or []
-    if not rows:
-        return ""
-
-    def pct(v):
-        if v is None:
-            return '<span class="v">-</span>'
-        return f'<span class="v{" warn" if v < 0 else ""}">{v:+d}%</span>'
-
-    body = "".join(
-        f'<div class="prow2"><span class="olabel">{escape(r["label"])}'
-        f'<span class="note"> &middot; {r["days"]} days</span></span>'
-        f'<span class="pcell"><span class="k">people who started paying</span>'
-        f'{pct(r["pct"])}<span class="k">{_fmt(r["now"])} against '
-        f'{_fmt(r["prev"])}</span></span>'
-        f'<span class="pcell"><span class="k">new monthly revenue</span>'
-        f'{pct(r["money_pct"])}<span class="k">US$ {_fmt(r["money_now"])} '
-        f'against US$ {_fmt(r["money_prev"])}</span></span>'
-        f'<span class="pcell"><span class="k">videos published</span>'
-        f'<span class="v">{r["videos_now"]}</span>'
-        f'<span class="k">against {r["videos_prev"]}</span></span></div>'
-        for r in rows)
-
-    year = next((r for r in rows if r["label"].startswith("this year")), None)
-    note = ""
-    if year and year["videos_prev"] and year["pct"] is not None:
-        drop = round((year["videos_prev"] - year["videos_now"]) * 100
-                     / year["videos_prev"])
-        note = (f'<p class="figwhy">The year is the row worth sitting with. '
-                f'{drop}% fewer videos went out than by this day last year, '
-                f'and {abs(year["pct"])}% fewer people started paying'
-                + (f', while the money those people bring each month is '
-                   f'{year["money_pct"]:+d}%' if year["money_pct"] is not None
-                   else "")
-                + '. Publishing far less cost far less than the effort '
-                  'suggests, and who joined mattered more than how many.</p>')
-
-    return (
-        '<section class="card" id="periods">'
-        '<h2><span class="he">📆</span>Against the period before</h2>'
-        f'{body}{note}'
-        f'<p class="figwhy">Each side counts the same number of elapsed days, '
-        f'so a month half lived is compared with the same half of the month '
-        f'before rather than with a whole one. Through '
-        f'{escape(pc.get("through") or "?")}. New monthly revenue is what the '
-        f'people who joined in that period pay per month.</p>'
-        "</section>")
-
-
-def _effect_years(v: dict) -> str:
-    """The comparison that survives: a week with a video against one without.
-
-    Put first because the ratios further down measure against the period
-    average, and that average contains the video weeks, so they compare
-    publishing with a mixture of publishing and silence. This compares it
-    with silence.
-    """
-    rows = [q for q in (v.get("quiet") or []) if q["videos"] >= 10]
-    if not rows:
-        return ""
-    top = max(q["ratio"] for q in rows) or 1
-    bars = "".join(
-        f'<div class="bar" title="{q["year"]}: {q["with_video"]} a day in a '
-        f'week holding a video, {q["without"]} in one holding none, from '
-        f'{q["videos"]} videos">'
-        f'<span class="bl">{q["year"]} &middot; {q["videos"]} videos</span>'
-        f'<span class="bt"><i style="width:'
-        f'{max(2, round(q["ratio"] * 100 / top))}%"></i></span>'
-        f'<span class="bv">{q["ratio"]}x '
-        f'<small>+{q["extra_week"]}/week</small></span></div>'
-        for q in rows)
-    yrs = ", ".join(q["year"] for q in rows)
-    return (
-        '<p class="lsub">A week with a video, against a week without</p>'
-        f'<div class="bars">{bars}</div>'
-        f'<p class="figwhy">Each year on its own, so channel size is held '
-        f'still. {escape(yrs)} agree on about a fifth more people starting to '
-        f'pay in a week that carried a video, across years holding very '
-        f'different numbers of them. That agreement is what makes this the '
-        f'number to trust, and the ones below the ones to read carefully.</p>')
-
-
-def _effect_card(d: dict) -> str:
-    """Does publishing bring patrons, as bars against the ordinary week."""
-    pat = d.get("patreon") or {}
-    v = pat.get("video_effect") or {}
-    if not v.get("kinds"):
-        return ""
-    base = v["baseline"] or 1
-
-    def bars(rows, thin=5):
-        top = max([r["ratio"] for r in rows] + [1.0])
-        out = []
-        for r in rows:
-            w = max(2, round(r["ratio"] * 100 / top))
-            weak = r["n"] < thin
-            out.append(
-                f'<div class="bar" title="{escape(r["label"], quote=True)}: '
-                f'{r["median"]} in the week, {r["ratio"]}x the usual '
-                f'{v["baseline"]}, from {r["n"]} videos">'
-                f'<span class="bl">{escape(r["label"])}</span>'
-                f'<span class="bt"><i style="width:{w}%;'
-                f'{"opacity:.45" if weak else ""}"></i>'
-                f'<b class="bbase" style="left:{min(99, round(100 / top))}%"></b>'
-                f'</span>'
-                f'<span class="bv">{r["ratio"]}x '
-                f'<small>n={r["n"]}{" ?" if weak else ""}</small></span></div>')
-        return '<div class="bars">' + "".join(out) + "</div>"
-
-    legend = (
-        '<div class="chlegend">'
-        '<span><i style="background:var(--ch-main)"></i>joins in the week after, '
-        'against the ordinary week</span>'
-        '<span><i class="basetick"></i>where an ordinary week sits</span>'
-        '<span><i style="background:var(--ch-main);opacity:.45"></i>'
-        'fewer than five videos, read as a hint not a number</span></div>')
-
-    fair = ""
-    for y in v.get("fair") or []:
-        inner = "".join(
-            f'<div class="bar"><span class="bl">{escape(k["label"])}</span>'
-            f'<span class="bt"><i style="width:'
-            f'{max(2, round(k["ratio"] * 60))}%"></i></span>'
-            f'<span class="bv">{k["ratio"]}x <small>n={k["n"]}</small></span></div>'
-            for k in y["kinds"])
-        fair += (f'<p class="lsub">Inside {escape(y["year"])} alone, where both '
-                 f'exist</p><div class="bars">{inner}</div>')
-
-    topics = ""
-    if v.get("topics"):
-        topics = ('<p class="lsub">By topic</p>' + bars(v["topics"], thin=5)
-                  + f'<p class="figwhy">Only {_fmt(v["tagged"])} of '
-                    f'{_fmt(v["videos"])} videos carry a topic, and only one has '
-                    f'more than a handful, so every bar but Ledge System is a '
-                    f'hint. Tagging more of them in the vault is what would '
-                    f'make this readable.</p>')
-
-    return (
-        '<section class="card" id="effect">'
-        '<h2><span class="he">🎬</span>Does publishing bring patrons</h2>'
-        + _effect_years(v)
-        + legend
-        + '<p class="lsub">By what was published</p>'
-        + bars(v["kinds"])
-        + '<div class="bars"><div class="bar">'
-          '<span class="bl">Patreon post</span>'
-          '<span class="bt"><i style="width:0"></i></span>'
-          '<span class="bv"><small>no data</small></span></div></div>'
-        + '<p class="figwhy">Counted on people who went on to pay, in the '
-          + str(v["window"]) + ' days after each of ' + _fmt(v["videos"])
-        + ' videos, against the ' + str(v["baseline"]) + ' an ordinary week '
-          'brings. Patreon posts have no bar because the collector reads '
-          'members and not posts: that row is missing data, not a zero.</p>'
-        + fair
-        + '<p class="figwhy">The two readings disagree, and the second is the '
-          'honest one. Across the whole history livestreams look far better '
-          'than uploads, but every livestream here was streamed in 2025 and '
-          'most uploads came before it, so that comparison is a bigger '
-          'channel against a smaller one wearing the label of format. Inside '
-          '2025 the two are level. What the data supports is that publishing '
-          'lifts joins; it does not support choosing live over upload.</p>'
-        + topics
-        + "</section>")
 
 
 def _stamp_views(html: str) -> str:
@@ -8330,11 +7700,6 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
                        "derived": p.get("status", "")}
             for p in d["people"]
             if (p.get("note") or p.get("status"))}),
-        "__PATRONS__": embed({
-            h: {"name": p["name"], "tiers": p["tiers"],
-                "monthly": p["monthly_cents"], "lifetime": p["lifetime_cents"],
-                "since": p["since"], "paying": p["paying"]}
-            for h, p in (d.get("patrons") or {}).items()}),
     }
     # One pass over the template, not a chain of .replace() calls. Each later
     # replace in the chain rescanned everything the earlier ones had already
@@ -8376,10 +7741,7 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
 <div class="cols2">
 {_stamp_views(_answers_card(d) + _system_pressure_card(d, facets))}
 </div>
-{_stamp_views(_business_screen(d, _period_card(d) + _sales_card(d)
-                                 + _wingman_users_card(d)
-                                 + _retention_card(d) + _effect_card(d)
-                                 + _people_card(d))
+{_stamp_views(_wingman_users_card(d)
               + _links_card(d) + _sync_card(d) + _wingman_card(d)
               + _email_card(d))}
 <div class="grid3">
