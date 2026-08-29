@@ -320,7 +320,8 @@ def reply_rows(c: dict, system: str, video_id: str, video_folder: str,
     open, mirroring the top-level rules.
     """
     rows = []
-    for rep in c.get("replies", []):
+    replies = c.get("replies", [])
+    for idx, rep in enumerate(replies):
         if not rep.get("id"):
             continue
         if _norm_author(rep["author"]) == _norm_author(channel_name):
@@ -336,11 +337,16 @@ def reply_rows(c: dict, system: str, video_id: str, video_folder: str,
         if cls == qf.PRAISE:
             rows.append({**base, "praise": True})
         elif cls == qf.QUESTION:
-            if answered_by_channel(c, channel_name):
-                reply_txt = next(
-                    (x["text"] for x in c["replies"]
-                     if _norm_author(x["author"]) == _norm_author(channel_name)), "")
-                rows.append({**base, "answered": True, "reply": reply_txt})
+            # Answered only when the channel replied AFTER this one in the
+            # thread (replies are oldest first). A thread-wide check marked a
+            # fresh follow-up answered just because we answered the top-level
+            # or an earlier reply, which hid a real question once the whole
+            # thread was read instead of the short preview.
+            later = next(
+                (x["text"] for x in replies[idx + 1:]
+                 if _norm_author(x["author"]) == _norm_author(channel_name)), None)
+            if later is not None:
+                rows.append({**base, "answered": True, "reply": later})
             else:
                 rows.append({**base})
     return rows
@@ -879,13 +885,25 @@ def main() -> int:
                 })
             elif (_norm_author(c["author"]) != _norm_author(channel_name)
                   and classify(c["text"]) == qf.PRAISE):
-                # Not work and never counted as open. Kept because it is the
-                # only record of which video actually landed.
-                total_praise += 1
-                inbox_rows.append({
-                    **c, "system": system, "praise": True,
-                    "video_id": v["id"], "video_folder": folder.name,
-                })
+                if answered_by_channel(c, channel_name):
+                    # Praise you already thanked is a closed loop, not an open
+                    # item: record it answered, with your reply, so it is not
+                    # surfaced to be thanked a second time.
+                    reply = next((r["text"] for r in c["replies"]
+                                  if _norm_author(r["author"]) == _norm_author(channel_name)), "")
+                    total_answered += 1
+                    inbox_rows.append({
+                        **c, "system": system, "answered": True, "reply": reply,
+                        "video_id": v["id"], "video_folder": folder.name,
+                    })
+                else:
+                    # Not work and never counted as open. Kept because it is the
+                    # only record of which video actually landed.
+                    total_praise += 1
+                    inbox_rows.append({
+                        **c, "system": system, "praise": True,
+                        "video_id": v["id"], "video_folder": folder.name,
+                    })
             elif (_norm_author(c["author"]) != _norm_author(channel_name)
                   and looks_like_question(c["text"])
                   and answered_by_channel(c, channel_name)):

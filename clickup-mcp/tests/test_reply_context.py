@@ -61,6 +61,11 @@ def test_addressed_reply_does_not_double_mention():
     assert panel._addressed_reply(q, "@x already here") == "@x already here"
 
 
+def test_addressed_reply_does_not_double_mention_case_insensitively():
+    q = {"channel": "youtube", "source": "yt:TOP.REPLY", "who": "@wafflewafflewaffle"}
+    assert panel._addressed_reply(q, "@WaffleWaffleWaffle hi") == "@WaffleWaffleWaffle hi"
+
+
 def test_addressed_reply_leaves_discord_alone():
     q = {"channel": "discord", "source": "d:1.2", "who": "@x"}
     assert panel._addressed_reply(q, "hi") == "hi"

@@ -50,6 +50,23 @@ def test_reply_question_is_answered_when_channel_replied_in_thread():
     assert q.get("answered") is True and "Wants to aim" in q["reply"]
 
 
+def test_a_fresh_follow_up_after_a_channel_reply_stays_open():
+    # The channel answered an EARLIER reply; a later, different follow-up must
+    # not be marked answered just because the channel replied somewhere above.
+    c = {"id": "top", "author": "@a", "text": "q?", "replies": [
+        {"id": "r1", "author": "@b", "text": "how do I center the crosshair?",
+         "date": "2026-01-01"},
+        {"id": "r2", "author": "@LocoDev", "text": "set the aim variable",
+         "date": "2026-01-02"},
+        {"id": "r3", "author": "@c", "text": "how about this different question?",
+         "date": "2026-06-01"}]}
+    rows = cy.reply_rows(c, "sys", "vid", "folder", "@LocoDev")
+    r1 = [r for r in rows if r["id"] == "r1"][0]
+    r3 = [r for r in rows if r["id"] == "r3"][0]
+    assert r1.get("answered") is True        # channel replied after r1
+    assert not r3.get("answered")            # nothing from the channel after r3
+
+
 def test_reply_without_id_is_ignored():
     c = _comment([{"author": "@nope", "text": "thanks a lot, great work",
                    "date": "2026-08-25"}])   # no id -> cannot make a stable row

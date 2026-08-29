@@ -3201,7 +3201,8 @@ def _addressed_reply(question: dict, answer: str) -> str:
     src = question.get("source", "")
     who = (question.get("who") or "").strip()
     if (src.startswith("yt:") and "." in src[len("yt:"):]
-            and who.startswith("@") and not answer.lstrip().startswith(who)):
+            and who.startswith("@")
+            and not answer.lstrip().lower().startswith(who.lower())):
         return f"{who} {answer}"
     return answer
 
