@@ -2173,6 +2173,7 @@ function match(r) {
   if (state.ch !== "all" && r.dataset.ch !== state.ch) return false;
   if (!ageOk(r)) return false;
   if (state.st === "open") { if (!isOpen(r) && r.dataset.st !== "praise") return false; }
+  else if (state.st === "questions") { if (!isOpen(r)) return false; }
   else if (state.st !== "all" && r.dataset.st !== state.st) return false;
   if (state.sys !== "all" && r.dataset.sys !== state.sys) return false;
   /* Answerability describes work still to do. Without this, "easy 90"
@@ -6614,6 +6615,13 @@ def _filters(questions: list, systems: list) -> str:
                  f'praise and thank-yous people left">'
                  f'<i class="pe">📥</i>Inbox '
                  f'<span class="fc-n">{_fmt(open_n)}</span></span>')
+    # Split of the inbox for people who want to work one kind at a time: only
+    # the real questions to answer, or only the praise to acknowledge.
+    q_n = sum(1 for q in questions if q["status"] in ("no-source", "escalated"))
+    parts.append(f'<span class="fchip" data-k="st" data-v="questions" aria-pressed="false" '
+                 f'title="Only questions waiting on you, no praise or thank-yous">'
+                 f'<i class="pe">❓</i>Questions '
+                 f'<span class="fc-n">{_fmt(q_n)}</span></span>')
     parts.append('<span class="fchip" data-k="st" data-v="all" aria-pressed="false">Everything</span>')
     for st in statuses:
         parts.append(f'<span class="fchip" data-k="st" data-v="{escape(st, quote=True)}" '
