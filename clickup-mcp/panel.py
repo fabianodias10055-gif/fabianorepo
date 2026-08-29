@@ -183,7 +183,7 @@ def source_details(questions: list) -> dict:
         "counts": [["comments collected", len(yt)],
                    ["still open", sum(1 for q in yt if q["status"] != "answered")],
                    ["videos in the vault",
-                    sum(1 for _ in (VAULT / "YouTube" / "Videos").glob("*/"))
+                    sum(1 for _ in (VAULT / "YouTube" / "Videos").rglob("00 - Overview.md"))
                     if (VAULT / "YouTube" / "Videos").is_dir() else 0]],
         "if_broken": "run collect_youtube.py; the API key lives in the credential store",
     }
@@ -473,7 +473,8 @@ def _video_systems() -> dict:
     vmap = {}
     root = VAULT / "YouTube" / "Videos"
     try:
-        folders = [p for p in root.iterdir() if p.is_dir()]
+        # A video folder is any folder holding an Overview note, at any depth.
+        folders = [n.parent for n in root.rglob("00 - Overview.md")]
     except OSError:
         folders = []
     for folder in folders:
@@ -767,7 +768,7 @@ def video_index() -> dict[str, str]:
     root = VAULT / "YouTube" / "Videos"
     if not root.is_dir():
         return out
-    for note in root.glob("*/00 - Overview.md"):
+    for note in root.rglob("00 - Overview.md"):
         m = re.search(r"^video_id:\s*(\S+)",
                       note.read_text(encoding="utf-8", errors="replace"), re.M)
         if m:
@@ -1715,7 +1716,31 @@ _ai_lock = threading.Lock()
 # question text so an edited question never shows a stale draft.
 AI_CACHE_NAME = "ai-drafts.json"
 AI_CACHE_MAX = 400
+# Bump when a change should force every cached draft to be re-read from the
+# vault (for example a vault reorganisation). The "v2" bump retired drafts
+# generated against the old flat YouTube/Videos/<title> layout.
+AI_CACHE_SCHEMA = "v2"
 _ai_cache_lock = threading.Lock()
+
+
+def _vault_rev() -> str:
+    """A signature of the vault's FOLDER LAYOUT, not its contents.
+
+    A cached AI draft cites sources by path. Renaming or moving a folder (the
+    videos moved under category folders, a system was renamed) relocates those
+    sources, so a draft read against the old layout is stale even though the
+    question text is unchanged. This changes then, invalidating the cache,
+    while an ordinary note edit (same folders) leaves it intact, so an
+    expensive re-draft is only paid when where things live actually moved.
+    """
+    dirs: list[str] = []
+    for base in ("Systems", "YouTube/Videos", "Reference"):
+        p = VAULT / base
+        if p.is_dir():
+            dirs.extend(sorted(d.relative_to(VAULT).as_posix()
+                               for d in p.rglob("*") if d.is_dir()))
+    sig = AI_CACHE_SCHEMA + "\x1f" + "\n".join(dirs)
+    return hashlib.sha1(sig.encode("utf-8", "replace")).hexdigest()[:12]
 
 
 def _ai_cache_path() -> Path:
@@ -1744,6 +1769,7 @@ def save_ai_result(question: dict, mode: str, result: dict) -> None:
         cache[_cache_key(question, mode)] = {
             **result,
             "qhash": _qhash(question),
+            "rev": _vault_rev(),
             "at": int(time.time()),
         }
         if len(cache) > AI_CACHE_MAX:
@@ -1759,36 +1785,45 @@ def save_ai_result(question: dict, mode: str, result: dict) -> None:
 
 def cached_ai_result(question: dict, mode: str) -> dict | None:
     entry = load_ai_cache().get(_cache_key(question, mode))
-    if not entry or entry.get("qhash") != _qhash(question):
+    if (not entry or entry.get("qhash") != _qhash(question)
+            or entry.get("rev") != _vault_rev()):
         return None
     return entry
 
 
 def valid_ai_cache(questions: list[dict]) -> dict:
-    """Cache entries whose question still exists and still reads the same,
-    for embedding in the page so a reload restores what was generated."""
+    """Cache entries whose question still exists, still reads the same, and
+    was drafted against the current vault layout, for embedding in the page
+    so a reload restores what was generated. A draft from before a rename is
+    dropped so the page never offers sources that have since moved."""
     by_id = {q["id"]: q for q in questions}
+    rev = _vault_rev()
     out = {}
     for key, entry in load_ai_cache().items():
         mode, _, qid = key.partition(":")
         q = by_id.get(qid)
-        if q and entry.get("qhash") == _qhash(q):
+        if q and entry.get("qhash") == _qhash(q) and entry.get("rev") == rev:
             out[key] = entry
     return out
 
 
 def _vault_map() -> str:
     return """- Systems/<slug>/ has one folder per system: 00 Overview, 01 How it works,
-  02 Setup, 03 Common issues, 04 Blueprints.
-- Systems/<slug>/05 - Answered questions.md holds real replies already given
-  to customers, each stamped with who asked and when. Systems/_general/
-  holds licensing, tier and compatibility answers that apply to every system.
-- YouTube/Videos/<date title>/ holds each video's 00 - Overview (with the
-  chapter list), 01 - Description, 03 - Comments, and 02 - Transcript.md,
-  the spoken transcript with a clickable timestamp on every paragraph. When
-  the answer is demonstrated on screen rather than written down, that
-  transcript is where it lives, and citing the timestamp is more useful to
-  the person than describing the steps.
+  02 Setup, 03 Common issues, 04 Blueprints. Do not assume a fixed depth;
+  Glob Systems/**/00 - Overview.md to find a system's folder.
+- Systems/<slug>/05 - Answered questions - <Tier>.md holds real replies already
+  given to customers (one file per tier: Basic, Standard, Premium, Community,
+  Tutorial), each stamped with who asked and when; match them with the glob
+  05 - Answered questions*.md, not a bare name. Systems/_general/ holds
+  licensing, tier and compatibility answers that apply to every system.
+- YouTube/Videos/ holds one folder per video, nested under a category
+  (YouTube/Videos/<category>/<date title>/), so never assume a fixed depth:
+  Glob YouTube/Videos/**/00 - Overview.md to locate a video, then read its
+  sibling 01 - Description, 03 - Comments, and 02 - Transcript.md, the spoken
+  transcript with a clickable timestamp on every paragraph. When the answer is
+  demonstrated on screen rather than written down, that transcript is where it
+  lives, and citing the timestamp is more useful to the person than describing
+  the steps.
 - Inbox/ holds every question ever logged and is worth searching directly:
   01 - From YouTube.md and 03 - From Discord.md carry the raw threads, with
   a reply: line on the ones already answered, and 02 - Answered.md is the
@@ -1807,6 +1842,12 @@ def _ai_context(question: dict) -> str:
         ctx.append("system: not tagged (could be any system, or catalog wide)")
     if question.get("video"):
         ctx.append(f"video it was asked under: {question['video']}")
+        # The exact resolved folder, so the model reads the right notes even
+        # if it would otherwise guess a path that the category nesting broke.
+        vf = _video_folder(question["video"])
+        if vf:
+            ctx.append("that video's notes (Overview, Description, Transcript, "
+                       f"Comments) are in: {vf.relative_to(VAULT).as_posix()}/")
     return "\n".join("- " + c for c in ctx)
 
 
@@ -1988,12 +2029,16 @@ Context (from the vault, trustworthy):
 
 Your job: search this vault (the current directory) and draft the reply.
 - Systems/<slug>/ has one folder per system: 00 Overview, 01 How it works,
-  02 Setup, 03 Common issues, 04 Blueprints.
-- Systems/<slug>/05 - Answered questions.md holds real replies already given
-  to customers. Systems/_general/ holds licensing, tier and compatibility
+  02 Setup, 03 Common issues, 04 Blueprints. Do not assume a fixed depth;
+  Glob Systems/**/00 - Overview.md to find a system's folder.
+- Systems/<slug>/05 - Answered questions - <Tier>.md holds real replies already
+  given to customers (one file per tier); match with 05 - Answered questions*.md,
+  not a bare name. Systems/_general/ holds licensing, tier and compatibility
   answers that apply to every system.
-- YouTube/Videos/<date title>/ holds each video's description and comments.
-  Its 00 - Overview.md carries `video_id:`. Building
+- YouTube/Videos/ holds one folder per video, nested under a category
+  (YouTube/Videos/<category>/<date title>/); never assume a fixed depth, Glob
+  YouTube/Videos/**/00 - Overview.md to find one. It holds the video's
+  description and comments, and its 00 - Overview.md carries `video_id:`. Building
   https://www.youtube.com/watch?v=<video_id>&t=<seconds>s from that id is
   reading, not guessing, so a video you cite must always arrive as a link,
   never as a bare title. Convert the timestamp you cite into seconds for
@@ -2475,8 +2520,25 @@ def post_youtube_reply(comment_id: str, text: str) -> tuple[bool, str]:
 # --------------------------------------------------------------------------
 
 def _video_folder(name: str) -> Path | None:
-    folder = VAULT / "YouTube" / "Videos" / name
-    return folder if folder.is_dir() else None
+    """The folder for one video, found wherever it lives under YouTube/Videos.
+
+    The vault used to keep every video directly under YouTube/Videos/<title>;
+    it now nests them a level deeper under a category (YouTube/Videos/<YT
+    Tutorials>/<title> and so on). Resolve by the leaf name at any depth so
+    the reorganisation, and any future one, does not have to be encoded here.
+    The old flat spot is tried first (it is the common case and cheapest),
+    then the Overview marker locates the nested folder. Matched by exact name
+    rather than a glob because titles carry '#', '[' and ']'.
+    """
+    root = VAULT / "YouTube" / "Videos"
+    flat = root / name
+    if flat.is_dir():
+        return flat
+    if root.is_dir():
+        for note in root.rglob("00 - Overview.md"):
+            if note.parent.name == name:
+                return note.parent
+    return None
 
 
 def _video_note(name: str, facet: str) -> Path | None:
@@ -2596,12 +2658,15 @@ def generate_video_description(name: str) -> dict:
     the description. Costs are checked against and booked to the same daily
     ceiling as every other AI call."""
     import subprocess
-    if not _video_folder(name):
+    folder = _video_folder(name)
+    if not folder:
         return {"ok": False, "error": "No folder for this video in the vault."}
     ok, msg = _spend_room()
     if not ok:
         return {"ok": False, "error": msg}
-    folder_rel = f"YouTube/Videos/{name}"
+    # The resolved folder, not a fixed YouTube/Videos/<name>, so the prompt
+    # points at where the video actually lives under its category.
+    folder_rel = folder.relative_to(VAULT).as_posix()
     prompt = f"""You write the YouTube description for one LocoDev video.
 
 The vault is the current directory. Read, in this order:
@@ -3923,9 +3988,9 @@ def question_context(question: dict, span: int = 12) -> dict:
     # A YouTube question already carries its video; the useful context is
     # what that video actually covers.
     if question.get("video"):
-        folder = VAULT / "YouTube" / "Videos" / question["video"]
-        note = folder / "00 - Overview.md"
-        if note.is_file():
+        folder = _video_folder(question["video"])
+        note = folder / "00 - Overview.md" if folder else None
+        if note and note.is_file():
             body = strip_scaffold(note.read_text(encoding="utf-8", errors="replace"))
             chapters = [l.strip("- ").strip() for l in body.splitlines()
                         if l.strip().startswith("- **[")]
@@ -4461,8 +4526,13 @@ def scan() -> dict:
     videos = []
     vroot = VAULT / "YouTube" / "Videos"
     if vroot.is_dir():
-        # Newest first: the folder names start with the publish date.
-        for folder in sorted(vroot.iterdir(), reverse=True):
+        # Newest first. Folder names end with " - YYYY-MM-DD" (older ones start
+        # with the date), so sort on whichever date the name actually carries.
+        def _pubkey(p: Path) -> str:
+            m = re.search(r"(\d{4}-\d{2}-\d{2})\s*$", p.name) or re.match(r"^(\d{4}-\d{2}-\d{2})", p.name)
+            return m.group(1) if m else ""
+        for folder in sorted((n.parent for n in vroot.rglob("00 - Overview.md")),
+                             key=_pubkey, reverse=True):
             if not folder.is_dir():
                 continue
             has = {}
