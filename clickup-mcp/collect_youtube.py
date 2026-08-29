@@ -171,6 +171,42 @@ def video_stats(ids: list[str]) -> dict[str, dict]:
     return out
 
 
+def _fmt_reply(r: dict) -> dict:
+    sn = r.get("snippet", {})
+    return {
+        "id": r["id"],
+        "author": sn.get("authorDisplayName", "?"),
+        "text": " ".join((sn.get("textOriginal") or "").split()),
+        "date": (sn.get("publishedAt") or "")[:10],
+    }
+
+
+def fetch_all_replies(parent_id: str, max_pages: int = 5) -> list[dict]:
+    """Every reply under a top-level comment, oldest first.
+
+    The commentThreads preview embeds only a handful of a thread's replies, so
+    on a busy thread our own answer can be missing from it, which made a
+    long-answered comment look unanswered and get served again, and left a
+    reply's context without the prior answers. comments.list returns the whole
+    set. Capped at max_pages so one enormous thread cannot run the quota away.
+    """
+    out, token, pages = [], None, 0
+    while pages < max_pages:
+        params = {"part": "snippet", "parentId": parent_id,
+                  "maxResults": 100, "textFormat": "plainText"}
+        if token:
+            params["pageToken"] = token
+        data = api_get("comments", params)
+        if data.get("_disabled"):
+            break
+        out.extend(_fmt_reply(r) for r in data.get("items", []))
+        token = data.get("nextPageToken")
+        pages += 1
+        if not token:
+            break
+    return out
+
+
 def fetch_comments(video_id: str, max_pages: int = 10) -> list[dict]:
     """Top level comments plus their replies, newest first."""
     out, token, pages = [], None, 0
@@ -185,21 +221,22 @@ def fetch_comments(video_id: str, max_pages: int = 10) -> list[dict]:
         for th in data.get("items", []):
             top = th["snippet"]["topLevelComment"]
             sn = top["snippet"]
+            preview = [_fmt_reply(r)
+                       for r in (th.get("replies", {}).get("comments") or [])]
+            total = th["snippet"].get("totalReplyCount", 0) or 0
+            # The preview holds only a few replies; fetch the rest when the
+            # thread has more, so an answer of ours deeper in it is seen. A
+            # missing one re-served a long-answered comment and cost the
+            # prior-answer context for a reply.
+            replies = (fetch_all_replies(top["id"])
+                       if total > len(preview) else preview)
             out.append({
                 "id": top["id"],
                 "author": sn.get("authorDisplayName", "?"),
                 "text": " ".join((sn.get("textOriginal") or "").split()),
                 "date": (sn.get("publishedAt") or "")[:10],
                 "likes": sn.get("likeCount", 0),
-                "replies": [
-                    {
-                        "id": r["id"],
-                        "author": r["snippet"].get("authorDisplayName", "?"),
-                        "text": " ".join((r["snippet"].get("textOriginal") or "").split()),
-                        "date": (r["snippet"].get("publishedAt") or "")[:10],
-                    }
-                    for r in (th.get("replies", {}).get("comments") or [])
-                ],
+                "replies": replies,
             })
         token = data.get("nextPageToken")
         pages += 1
