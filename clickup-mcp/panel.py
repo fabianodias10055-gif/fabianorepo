@@ -3185,6 +3185,27 @@ def _sent_state(res: dict) -> tuple[str, str]:
     return "filed", res.get("platform_message", "recorded in the vault only")
 
 
+def _addressed_reply(question: dict, answer: str) -> str:
+    """Prepend the handle of the person actually being answered, for a reply
+    that lands on a top-level comment.
+
+    YouTube only accepts a reply on a top-level comment, so answering a reply
+    (source "yt:<topId>.<replyId>") posts under that top-level author and,
+    without a mention, reads as answering them instead of the person who asked.
+    Mentioning the reply's own author, exactly as the YouTube UI does when you
+    reply to a reply, keeps it addressed down the thread hierarchy and notifies
+    the right person. A direct top-level answer (no dot) attaches correctly on
+    its own and is left alone; a mention already present is not doubled."""
+    if question.get("channel") != "youtube":
+        return answer
+    src = question.get("source", "")
+    who = (question.get("who") or "").strip()
+    if (src.startswith("yt:") and "." in src[len("yt:"):]
+            and who.startswith("@") and not answer.lstrip().startswith(who)):
+        return f"{who} {answer}"
+    return answer
+
+
 def deliver_reply(qid: str, answer: str, force: bool = False,
                   offer: dict | None = None) -> dict:
     """Post one answer and record it. The single path for every sender.
@@ -3224,6 +3245,9 @@ def deliver_reply(qid: str, answer: str, force: bool = False,
         # posters' except clauses. Caught here rather than left to unwind:
         # the platform may already have accepted the reply, and the vault
         # write below is what stops it being sent a second time.
+        # Address the person actually being answered before both the post and
+        # the log, so the two never disagree about what was sent.
+        answer = _addressed_reply(question, answer)
         posted, platform_msg = post_to_platform(question, answer)
 
         # The status write is what stops this question being served again.

@@ -46,6 +46,31 @@ def test_ensure_reply_context_fetches_the_parent_for_a_reply(monkeypatch):
     assert q["context"] == "@a: the parent problem"
 
 
+def test_reply_to_a_reply_is_addressed_to_the_asker():
+    q = {"channel": "youtube", "source": "yt:TOP.REPLY", "who": "@wafflewafflewaffle"}
+    assert panel._addressed_reply(q, "Hi thanks :)") == "@wafflewafflewaffle Hi thanks :)"
+
+
+def test_top_level_answer_is_not_prefixed():
+    q = {"channel": "youtube", "source": "yt:TOPONLY", "who": "@raun"}
+    assert panel._addressed_reply(q, "Hi thanks") == "Hi thanks"
+
+
+def test_addressed_reply_does_not_double_mention():
+    q = {"channel": "youtube", "source": "yt:TOP.REPLY", "who": "@x"}
+    assert panel._addressed_reply(q, "@x already here") == "@x already here"
+
+
+def test_addressed_reply_leaves_discord_alone():
+    q = {"channel": "discord", "source": "d:1.2", "who": "@x"}
+    assert panel._addressed_reply(q, "hi") == "hi"
+
+
+def test_addressed_reply_skips_a_non_handle_author():
+    q = {"channel": "youtube", "source": "yt:TOP.REPLY", "who": "someone"}
+    assert panel._addressed_reply(q, "hi") == "hi"
+
+
 def test_ensure_reply_context_skips_when_present_or_not_a_reply(monkeypatch):
     monkeypatch.setattr(panel, "_parent_comment_text", lambda t: "SHOULD NOT BE USED")
     q1 = {"channel": "youtube", "source": "yt:TOP.REPLY", "context": "already here"}
