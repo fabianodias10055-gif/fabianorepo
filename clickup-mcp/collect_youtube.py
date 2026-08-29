@@ -159,11 +159,14 @@ def video_stats(ids: list[str]) -> dict[str, dict]:
         # per call whatever parts are asked for, and whether a video was
         # streamed or uploaded is the difference between "publishing brings
         # patrons" and knowing which kind of publishing does.
-        data = api_get("videos", {"part": "statistics,liveStreamingDetails",
+        data = api_get("videos", {"part": "statistics,liveStreamingDetails,contentDetails",
                                   "id": ",".join(ids[i:i + 50])})
         for it in data.get("items", []):
             st = dict(it.get("statistics", {}))
             st["_live"] = "yes" if it.get("liveStreamingDetails") else "no"
+            # Length rides along on the same one-unit call, so a Short can be
+            # told from a full tutorial when a new video is filed.
+            st["_seconds"] = _iso_seconds((it.get("contentDetails") or {}).get("duration", ""))
             out[it["id"]] = st
     return out
 
@@ -295,13 +298,59 @@ def safe_name(s: str) -> str:
     return s[:70].strip(" .")
 
 
+_ISO_DUR = re.compile(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?")
+
+
+def _iso_seconds(iso: str) -> int:
+    """A video's length in seconds from YouTube's ISO-8601 form (PT1M30S).
+    Zero when absent or unparseable, so it never falsely reads as a Short."""
+    m = _ISO_DUR.fullmatch(iso or "")
+    if not m:
+        return 0
+    h, mn, s = (int(x) if x else 0 for x in m.groups())
+    return h * 3600 + mn * 60 + s
+
+
+def _video_category(v: dict, st: dict) -> tuple[str, str]:
+    """(category folder, name tag) for a video, so a newly published one is
+    filed beside its own kind instead of flat at the top of Videos/.
+
+    Decided from what YouTube reports: the Learn Blueprints series is shelved
+    together as a Course (still tagged Tutorial in the name, like the rest of
+    the teaching videos); a streamed video is a Livestream; a clip a minute or
+    under (or tagged #shorts) is a Short; everything else is a Tutorial. The
+    guess is best-effort and a wrong one is a one-folder move by hand, which is
+    still cheaper than every new video landing loose at the top.
+    """
+    tl = (v.get("title") or "").lower()
+    blob = tl + " " + (v.get("description") or "").lower()
+    secs = int(st.get("_seconds", 0) or 0)
+    if "learn blueprints" in tl:
+        return "YT Course", "Tutorial"
+    if st.get("_live") == "yes":
+        return "YT Livestreams", "Live"
+    if (0 < secs <= 60) or "#shorts" in blob:
+        return "YT Shorts", "Shorts"
+    return "YT Tutorials", "Tutorial"
+
+
+def _video_folder_name(v: dict, tag: str) -> str:
+    """A new video's folder name in the vault's convention: the title, then a
+    ` - YT <tag> - <date>` suffix. Only the title is shortened, so the tag and
+    date that mark the folder always survive the length cap."""
+    title = re.sub(r'[\\/:*?"<>|]', "-", v.get("title") or "")
+    title = re.sub(r"\s+", " ", title).strip(" .")[:58].strip(" .")
+    return f"{title} - YT {tag} - {v.get('published', '')}".strip(" .")
+
+
 def existing_folders() -> dict[str, Path]:
     """Map video_id -> folder, so a renamed video keeps its folder."""
     found = {}
     root = VAULT / "YouTube" / "Videos"
     if not root.is_dir():
         return found
-    for note in root.glob("*/00 - Overview.md"):
+    # Videos may sit in category subfolders (YT Tutorials/ etc), so recurse.
+    for note in root.rglob("00 - Overview.md"):
         m = re.search(r"^video_id:\s*(\S+)", note.read_text(encoding="utf-8", errors="replace"), re.M)
         if m:
             found[m.group(1)] = note.parent
@@ -540,7 +589,7 @@ def backfill_provenance(dry: bool) -> int:
     API, so it costs nothing and can run any time.
     """
     index: dict[str, list[tuple[str, str, set]]] = {}
-    for note in (VAULT / "YouTube" / "Videos").glob("*/03 - Comments.md"):
+    for note in (VAULT / "YouTube" / "Videos").rglob("03 - Comments.md"):
         raw = note.read_text(encoding="utf-8", errors="replace")
         vid = re.search(r"^video_id:\s*(\S+)", raw, re.M)
         if not vid:
@@ -734,11 +783,15 @@ def main() -> int:
     total_comments = total_unanswered = total_answered = total_praise = 0
 
     for v in videos:
+        st = stats.get(v["id"], {})
         folder = known.get(v["id"])
         if folder is None:
-            folder = VAULT / "YouTube" / "Videos" / safe_name(f"{v['published']} {v['title']}")
+            # New video: file it under its category folder in the vault's
+            # naming convention, not loose at the top of Videos/.
+            category, tag = _video_category(v, st)
+            folder = (VAULT / "YouTube" / "Videos" / category
+                      / _video_folder_name(v, tag))
             created += 1
-        st = stats.get(v["id"], {})
         remote_count = int(st.get("commentCount", 0) or 0)
         local_count = int(read_frontmatter(folder / "03 - Comments.md").get("total", -1) or -1)
 
