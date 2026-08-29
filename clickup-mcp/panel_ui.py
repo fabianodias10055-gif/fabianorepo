@@ -2497,19 +2497,15 @@ document.addEventListener("click", function (ev) {
   var key = b.dataset.key;
   $("#qres").classList.add("hide");
   if (b.dataset.go === "person") {
-    /* Customers lives on Business now, so the jump has to open that screen
-       and then bring the card into view: it sits below the money and the
-       funnel, off screen on arrival. */
-    goView("business");
-    setTimeout(function () {
-      var tr = document.querySelector('#people tr.crow[data-who="' + key.replace(/"/g, '\\"') + '"]');
-      if (tr && !tr.classList.contains("copen")) toggleCustomer(tr);
-      /* Scroll last. Opening the row inserts a detail row and moves
-         everything below it, so a scroll measured before that lands in the
-         wrong place, and Customers now sits 2,300px down the Business
-         screen where wrong means off screen entirely. */
-      revealRow(tr);
-    }, 30);
+    /* The Customers screen went with the Business tab, so a person jump now
+       filters the inbox to their questions, which is what the click was
+       really after: everything this one person is waiting on. */
+    goView("questions");
+    $("#q").value = key;
+    state.q = key.trim().toLowerCase();
+    page = 0;
+    apply();
+    syncUrl();
   } else if (b.dataset.go === "product") {
     goView("systems");
     setTimeout(function () {
@@ -7858,14 +7854,10 @@ def render_html(d: dict, live: bool, facets: list, instrumentation: list,
         "__CHARTS__": embed(_chart_payload(d)),
         "__BRANDS__": embed(list(_BRAND)),
         "__MANUAL_STATUS__": embed(list(manual_status)),
-        "__CRM__": embed({
-            p["who"]: {"status": (p.get("note") or {}).get("status", ""),
-                       "next": (p.get("note") or {}).get("next", ""),
-                       "tags": (p.get("note") or {}).get("tags", []),
-                       "notes": (p.get("note") or {}).get("notes", ""),
-                       "derived": p.get("status", "")}
-            for p in d["people"]
-            if (p.get("note") or p.get("status"))}),
+        # The Customers screen that read these hand-written notes went with
+        # the Business tab, and this page lands in the synced vault, so the
+        # private per-person notes are no longer embedded at all.
+        "__CRM__": "{}",
     }
     # One pass over the template, not a chain of .replace() calls. Each later
     # replace in the chain rescanned everything the earlier ones had already
