@@ -40,7 +40,7 @@ def words_in(path: Path) -> int:
 
 def series_folders(match: str) -> list[Path]:
     base = VAULT / "YouTube" / "Videos"
-    return sorted(p for p in base.iterdir() if p.is_dir() and match in p.name)
+    return sorted(n.parent for n in base.rglob("00 - Overview.md") if match in n.parent.name)
 
 
 # "2025-03-20 Learn Blueprints #4- Timelines" -> ("4", "Timelines")

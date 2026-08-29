@@ -163,7 +163,8 @@ def existing_videos() -> list[tuple[str, Path]]:
     root = VAULT / "YouTube" / "Videos"
     if not root.is_dir():
         return out
-    for note in sorted(root.glob("*/00 - Overview.md"), reverse=True):
+    # Videos may sit in category subfolders (YT Tutorials/ etc), so recurse.
+    for note in sorted(root.rglob("00 - Overview.md"), reverse=True):
         text = note.read_text(encoding="utf-8", errors="replace")
         m = re.search(r"^video_id:\s*(\S+)", text, re.M)
         if m:

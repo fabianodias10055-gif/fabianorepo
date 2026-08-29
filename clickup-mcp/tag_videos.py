@@ -106,7 +106,7 @@ def tag_overviews(dry: bool) -> dict[str, str]:
     mapping: dict[str, str] = {}
     tagged = skipped = ambiguous = 0
     root = VAULT / "YouTube" / "Videos"
-    for note in sorted(root.glob("*/00 - Overview.md")):
+    for note in sorted(root.rglob("00 - Overview.md")):
         text = note.read_text(encoding="utf-8", errors="replace")
         vid = re.search(r"^video_id:\s*(\S+)", text, re.M)
         if not vid:
