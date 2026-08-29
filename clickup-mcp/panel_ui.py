@@ -2105,7 +2105,7 @@ var state = {
   /* A backfill drops years of archaeology in beside this week's work.
      Both belong in the queue; only one of them is worth a morning. */
   age: params.get("age") || "all",
-  sort: params.get("sort") || "triage",
+  sort: params.get("sort") || "date",
   dir: params.get("dir") || "desc"
 };
 var size = parseInt(ssGet("lp-size") || PAGE, 10) || PAGE;
@@ -2118,7 +2118,7 @@ function syncUrl() {
   if (state.df !== "all") p.set("df", state.df);
   if (state.age !== "all") p.set("age", state.age);
   if (state.q) p.set("q", state.q);
-  if (state.sort !== "triage" || state.dir !== "desc") { p.set("sort", state.sort); p.set("dir", state.dir); }
+  if (!(state.sort === "date" && state.dir === "desc")) { p.set("sort", state.sort); p.set("dir", state.dir); }
   var qs = p.toString();
   try { history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash); } catch (e) {}
 }
@@ -2524,7 +2524,7 @@ document.addEventListener("click", function (ev) {
 function clearFilters() {
   setGroup("ch", "all");
   setGroup("st", "open");   /* back to the working queue, not the archive */
-  setSort("triage");
+  setSort("new");
   setGroup("df", "all");
   setGroup("age", "all");
   state.sys = "all";
@@ -6755,10 +6755,7 @@ def _filters(questions: list, systems: list) -> str:
                  'title="Every question in the vault, answered or not">All</span></div>')
 
     parts.append('<div class="fbar-r"><div class="fseg fseg-sm" role="group" aria-label="Sort order">'
-                 '<span class="fchip on" data-k="sort" data-v="triage" aria-pressed="true" '
-                 'title="Escalated first, then what the vault can already answer, then oldest">'
-                 'Triage</span>'
-                 '<span class="fchip" data-k="sort" data-v="new" aria-pressed="false" '
+                 '<span class="fchip on" data-k="sort" data-v="new" aria-pressed="true" '
                  'title="Newest first">Newest</span>'
                  '<span class="fchip" data-k="sort" data-v="old" aria-pressed="false" '
                  'title="Oldest first, the longest anyone has waited">Oldest</span></div>'
