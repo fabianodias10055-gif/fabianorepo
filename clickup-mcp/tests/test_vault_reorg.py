@@ -10,6 +10,31 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import panel  # noqa: E402
+import panel_ui  # noqa: E402
+
+
+def test_video_title_strips_the_new_naming_suffix():
+    assert panel_ui._video_title(
+        "Cool Thing - YT Tutorial - 2025-01-01") == "Cool Thing"
+    assert panel_ui._video_title(
+        "Learn Blueprints #20- Nodes - YT Tutorial - 2025-07-22"
+    ) == "Learn Blueprints #20- Nodes"
+    assert panel_ui._video_title(
+        "Advanced Ledge System - YT Live - 2025-08-26") == "Advanced Ledge System"
+
+
+def test_video_title_still_strips_the_old_date_prefix():
+    assert panel_ui._video_title(
+        "2022-12-01 Enemy and Weather Test") == "Enemy and Weather Test"
+
+
+def test_video_title_leaves_a_nonconforming_name_alone():
+    assert panel_ui._video_title("Some Odd Name") == "Some Odd Name"
+
+
+def test_name_date_finds_the_date_in_either_layout():
+    assert panel._name_date("Cool Thing - YT Live - 2025-08-26") == "2025-08-26"
+    assert panel._name_date("2022-12-01 Enemy Test") == "2022-12-01"
 
 
 def _video(root, *parts, video_id="abc123"):

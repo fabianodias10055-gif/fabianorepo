@@ -6973,6 +6973,24 @@ def _system_pressure_card(d: dict, facets: list) -> str:
     )
 
 
+def _video_title(name: str) -> str:
+    """A clean display title from a video folder name, for either layout:
+    the current '<title> - YT <tag> - <date>' or the old '<date> <title>'.
+
+    The screen used to strip a fixed 11 characters to drop the old leading
+    date; after the vault renamed videos to put the date last, that cut the
+    real title mid-word ('Learn Bluep' off 'Learn Blueprints'), so the name
+    is parsed instead of sliced.
+    """
+    m = re.match(r"^(.*) - YT \w+ - \d{4}-\d{2}-\d{2}$", name)
+    if m:
+        return m.group(1)
+    m = re.match(r"^\d{4}-\d{2}-\d{2} (.+)$", name)
+    if m:
+        return m.group(1)
+    return name
+
+
 def _videos_card(d: dict) -> str:
     """Videos ordered by how much work each one is still holding.
 
@@ -7007,7 +7025,7 @@ def _videos_card(d: dict) -> str:
     rows = []
     for i, v in enumerate(videos):
         hid = "" if i < 6 else " xtra hide"
-        title = escape(v["name"][11:] if len(v["name"]) > 11 else v["name"])
+        title = escape(_video_title(v["name"]))
         vurl = _safe_url(v.get("url", ""))
         if vurl:
             title = (f'<a href="{escape(vurl, quote=True)}" target="_blank" '

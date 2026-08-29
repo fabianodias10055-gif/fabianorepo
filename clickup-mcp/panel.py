@@ -2519,6 +2519,14 @@ def post_youtube_reply(comment_id: str, text: str) -> tuple[bool, str]:
 # before the live one changes, so an update is never a one-way door.
 # --------------------------------------------------------------------------
 
+def _name_date(name: str) -> str:
+    """The publish date from a video folder name, wherever it sits: the current
+    layout ends with it (<title> - YT <tag> - <date>), the old one led with it.
+    A fallback only, for a folder whose Overview has no published: field."""
+    m = re.search(r"\d{4}-\d{2}-\d{2}", name)
+    return m.group(0) if m else name[:10]
+
+
 def _video_folder(name: str) -> Path | None:
     """The folder for one video, found wherever it lives under YouTube/Videos.
 
@@ -4561,7 +4569,7 @@ def scan() -> dict:
                 "name": folder.name,
                 "video_id": meta.get("video_id", ""),
                 "url": meta.get("url", ""),
-                "published": meta.get("published", folder.name[:10]),
+                "published": meta.get("published") or _name_date(folder.name),
                 "system": meta.get("system", ""),
                 "views": meta.get("views", ""),
                 "transcript": has.get("transcript", False),
