@@ -253,6 +253,24 @@ def needs_your_answer(c: dict, channel_name: str) -> bool:
     return looks_like_question(c["text"]) and not answered_by_channel(c, channel_name)
 
 
+def _thread_lead(c: dict, rep: dict) -> str:
+    """The conversation a reply hangs off: the top-level comment, then the
+    replies posted before this one, oldest first, each as 'author: text'.
+
+    Without it a reply like 'Same, did you figure out why?' is unanswerable,
+    because the thing it says 'same' to lives in the comment above, which the
+    reply's own text does not carry. Flattened to one line and capped so it
+    fits a single frontmatter field; it is public strangers' text, so it stays
+    untrusted downstream (the draft prompt fences it)."""
+    parts = [f"{c.get('author', '')}: {c.get('text', '')}"]
+    for x in c.get("replies", []):
+        if x.get("id") == rep.get("id"):
+            break
+        parts.append(f"{x.get('author', '')}: {x.get('text', '')}")
+    line = " | ".join(" ".join(p.split()) for p in parts if p.strip(" :"))
+    return line[:800]
+
+
 def reply_rows(c: dict, system: str, video_id: str, video_folder: str,
                channel_name: str) -> list[dict]:
     """Inbox rows for a comment's viewer replies.
@@ -274,7 +292,10 @@ def reply_rows(c: dict, system: str, video_id: str, video_folder: str,
         base = {"id": rep["id"], "author": rep["author"], "text": rep["text"],
                 "date": rep["date"], "likes": 0, "replies": [],
                 "system": system, "video_id": video_id,
-                "video_folder": video_folder}
+                "video_folder": video_folder,
+                # The thread this reply answers, so the draft can read what it
+                # is replying to instead of guessing what "same" means.
+                "context": _thread_lead(c, rep)}
         if cls == qf.PRAISE:
             rows.append({**base, "praise": True})
         elif cls == qf.QUESTION:
@@ -687,6 +708,9 @@ def write_inbox(rows: list[dict], dry: bool) -> int:
         reply_line = ""
         if r.get("reply"):
             reply_line = f"reply: {' '.join(r['reply'].split())[:800]}\n"
+        context_line = ""
+        if r.get("context"):
+            context_line = f"context: {' '.join(r['context'].split())[:800]}\n"
         blocks.append(
             f"\n### {r['date']} {r['author']}\n"
             f"channel: youtube\n"
@@ -697,7 +721,8 @@ def write_inbox(rows: list[dict], dry: bool) -> int:
             f"video_id: {r['video_id']}\n"
             f"video: {r['video_folder']}\n"
             f"video_url: {watch_url}\n"
-            f"{reply_line}\n"
+            f"{reply_line}"
+            f"{context_line}\n"
             f"{r['text'][:400]}\n"
         )
 
