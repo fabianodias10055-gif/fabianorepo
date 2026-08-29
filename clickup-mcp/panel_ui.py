@@ -1122,8 +1122,8 @@ tr.lkdet > td { background:var(--surface2); padding:var(--s3) var(--s4); }
 .pgsize select { padding:4px 26px 4px 9px; font-size:var(--t-xs); }
 
 /* ================= filters ================= */
-.filters { display:flex; flex-wrap:wrap; gap:var(--s2); align-items:center;
-  margin-bottom:var(--s3); }
+.filters { display:flex; flex-direction:column; align-items:stretch; gap:var(--s3);
+  margin-bottom:var(--s4); }
 .fchip { display:inline-flex; gap:var(--s2); align-items:center; border:1px solid var(--line);
   background:var(--surface); color:var(--ink2); border-radius:var(--r-full);
   padding:5px 12px; font-family:var(--ui); font-size:var(--t-sm); font-weight:600;
@@ -1155,6 +1155,75 @@ select.fchip { appearance:none; max-width:200px; padding-right:28px;
 .filters.flash { animation:flash 1.1s var(--ease); }
 @keyframes flash { 0%,55% { box-shadow:0 0 0 3px var(--accent); border-radius:var(--r-md); }
   100% { box-shadow:0 0 0 0 transparent; } }
+
+/* ---- redesigned filter: channel tabs, one bar, a fold, applied pills ---- */
+.chtabs { display:flex; flex-wrap:wrap; gap:var(--s2); }
+.fchip.chtab { border-radius:var(--r-md); padding:0 13px; height:38px;
+  background:var(--surface2); font-weight:500; }
+.fchip.chtab:hover { background:var(--surface3); border-color:var(--line); }
+.fchip.chtab.on { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+.fchip.chtab.on .fc-n { color:color-mix(in srgb, var(--accent-ink) 52%, transparent); }
+.fchip.chtab .cd { width:8px; height:8px; }
+.fchip.chtab .cg { width:15px; height:15px; flex:none; opacity:.85; }
+
+.fbar { display:flex; align-items:center; gap:var(--s3); flex-wrap:wrap; }
+.fbar-r { display:flex; align-items:center; gap:var(--s2); margin-left:auto; flex-wrap:wrap; }
+.fseg { display:inline-flex; background:var(--surface2); border:1px solid var(--line);
+  border-radius:var(--r-md); padding:3px; gap:2px; max-width:100%; overflow-x:auto;
+  scrollbar-width:none; }
+.fseg::-webkit-scrollbar { display:none; }
+.fseg .fchip { border:0; background:transparent; border-radius:6px; padding:7px 12px;
+  font-weight:500; white-space:nowrap; }
+.fseg .fchip:hover { background:var(--surface3); color:var(--ink); }
+.fseg .fchip.on { background:var(--accent-bg); color:var(--ink); }
+.fseg .fchip.on .fc-n { color:var(--ink2); }
+.fseg-sm .fchip { font-size:var(--t-xs); padding:7px 10px; }
+
+.fbtn { display:inline-flex; align-items:center; gap:7px; height:38px; padding:0 13px;
+  background:var(--surface2); border:1px solid var(--line); border-radius:var(--r-md);
+  color:var(--ink2); font-family:var(--ui); font-size:var(--t-sm); font-weight:500;
+  cursor:pointer; transition:background var(--dur) var(--ease), color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease); }
+.fbtn:hover { background:var(--surface3); color:var(--ink); }
+.fbtn svg { width:15px; height:15px; }
+.fbtn[aria-expanded="true"] { border-color:var(--accent-line); color:var(--ink);
+  background:var(--surface3); }
+.fbadge { min-width:18px; height:18px; padding:0 5px; display:inline-flex; align-items:center;
+  justify-content:center; background:var(--accent); color:var(--accent-ink);
+  border-radius:var(--r-full); font-family:var(--mono); font-size:var(--t-2xs); font-weight:500; }
+
+.morefold { display:grid; grid-template-rows:0fr;
+  transition:grid-template-rows var(--dur) var(--ease); }
+.morefold.open { grid-template-rows:1fr; }
+.foldin { min-height:0; overflow:hidden; }
+.foldgrid { display:flex; flex-wrap:wrap; gap:var(--s6); align-items:flex-start;
+  padding:var(--s4); border:1px solid var(--line); border-radius:var(--r-lg);
+  background:var(--surface2); }
+.fgroup { display:flex; flex-direction:column; gap:var(--s2); }
+.flab { font-size:var(--t-2xs); text-transform:uppercase; letter-spacing:.09em;
+  color:var(--ink3); font-weight:600; }
+.fseg2 { display:flex; gap:var(--s1); flex-wrap:wrap; }
+.fseg2 .fchip { padding:6px 12px; font-weight:500; }
+.fseg2 .fchip.on { background:var(--accent-bg); border-color:var(--accent-line); color:var(--ink); }
+.fsel { appearance:none; height:32px; max-width:240px; padding:0 30px 0 12px;
+  background:var(--surface); border:1px solid var(--line); border-radius:var(--r-full);
+  color:var(--ink); font-family:var(--ui); font-size:var(--t-sm); cursor:pointer;
+  background-image:linear-gradient(45deg,transparent 50%,var(--ink3) 50%),
+    linear-gradient(135deg,var(--ink3) 50%,transparent 50%);
+  background-position:calc(100% - 15px) 51%,calc(100% - 11px) 51%;
+  background-size:4px 4px,4px 4px; background-repeat:no-repeat; }
+.fsel:focus { outline:none; border-color:var(--accent-line); }
+
+.fapplied { display:flex; align-items:center; gap:var(--s2); flex-wrap:wrap; }
+.fapplied #appliedfilters { display:flex; gap:var(--s2); flex-wrap:wrap; }
+.apill { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 3px 0 11px;
+  background:var(--surface2); border:1px solid var(--accent-line); border-radius:var(--r-full);
+  font-size:var(--t-sm); color:var(--ink); }
+.apill .ak { color:var(--ink3); }
+.apx { width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center;
+  border:0; background:transparent; color:var(--ink3); cursor:pointer; border-radius:var(--r-full);
+  font-size:15px; line-height:1; }
+.apx:hover { background:var(--surface3); color:var(--ink); }
 
 /* ================= tables ================= */
 .scroll { overflow-x:auto; margin:0 calc(var(--s5) * -1); padding:0 var(--s5); }
@@ -2312,6 +2381,7 @@ function apply() {
   /* only when filters hid existing rows; an empty vault has its own message */
   $("#qempty").classList.toggle("hide", total !== 0 || PAIRS.length === 0);
   ss("lp-size", String(size));
+  if (typeof syncFilterChrome === "function") syncFilterChrome();
 }
 function goPage(n) {
   page = n;
@@ -2468,6 +2538,54 @@ function clearFilters() {
 }
 $("#fclear").addEventListener("click", clearFilters);
 $("#qemptyclear").addEventListener("click", clearFilters);
+
+/* ---- redesigned filter chrome ----
+   The secondary filters (difficulty, waiting time, system) live in a fold,
+   and each one that is set shows as a removable pill, so the bar stays calm
+   and the applied state stays legible. The chips keep their data-k/data-v, so
+   match() and setGroup are untouched: this only adds the fold and the pills. */
+var FILTER_SEC = [
+  { k: "df", label: "Difficulty", def: "all" },
+  { k: "age", label: "Waiting", def: "all" },
+  { k: "sys", label: "System", def: "all" }
+];
+function secLabel(s) {
+  if (s.k === "sys") {
+    var o = $("#sysSel");
+    return o ? ((o.options[o.selectedIndex] || {}).text || state.sys) : state.sys;
+  }
+  var c = document.querySelector('.fchip[data-k="' + s.k + '"][data-v="' + state[s.k] + '"]');
+  if (!c) return state[s.k];
+  return (c.firstChild ? c.firstChild.textContent : c.textContent).trim();
+}
+function syncFilterChrome() {
+  var act = FILTER_SEC.filter(function (s) { return state[s.k] !== s.def; });
+  var badge = $("#fbadge");
+  if (badge) { badge.textContent = act.length; badge.hidden = act.length === 0; }
+  var wrap = $("#fappliedwrap"), box = $("#appliedfilters");
+  if (!wrap || !box) return;
+  wrap.classList.toggle("hide", act.length === 0);
+  box.innerHTML = act.map(function (s) {
+    return '<span class="apill"><span class="ak">' + s.label + '</span>' + esc(secLabel(s))
+      + '<button class="apx" data-clear="' + s.k + '" aria-label="Remove ' + s.label
+      + ' filter" title="Remove">×</button></span>';
+  }).join("");
+}
+(function () {
+  var fold = $("#morefold"), moreBtn = $("#morefilters");
+  if (moreBtn && fold) moreBtn.addEventListener("click", function () {
+    var open = fold.classList.toggle("open");
+    moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  var box = $("#appliedfilters");
+  if (box) box.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-clear]");
+    if (!b) return;
+    if (b.dataset.clear === "sys") { state.sys = "all"; $("#sysSel").value = "all"; }
+    else setGroup(b.dataset.clear, "all");
+    page = 0; apply(); syncUrl();
+  });
+})();
 $("#pgprev").addEventListener("click", function () { goPage(page - 1); });
 $("#pgnext").addEventListener("click", function () { goPage(page + 1); });
 $("#pgsize").addEventListener("change", function () {
@@ -5000,7 +5118,7 @@ function bulkRender(st) {
           + (send ? " &middot; " + fmt(send) + " ready to send" : ""))
       + "</span>"
       + '<button class="btn tiny" id="bulkreview">'
-      + (busy ? "Watch it run" : "Review and send") + "</button></div>";
+      + (busy ? "Watch it run" : "Review") + "</button></div>";
     return;
   }
 
@@ -6574,9 +6692,6 @@ def _filters(questions: list, systems: list) -> str:
     for q in questions:
         ch_counts[q["channel"]] = ch_counts.get(q["channel"], 0) + 1
         st_counts[q["status"]] = st_counts.get(q["status"], 0) + 1
-    statuses = [s for s in ("no-source", "escalated", "answered", "praise",
-                            "out-of-scope", "unknown")
-                if s in st_counts]
 
     sys_counts: dict[str, int] = {}
     sys_names: dict[str, str] = {}
@@ -6597,48 +6712,89 @@ def _filters(questions: list, systems: list) -> str:
             sys_names.setdefault(sy["slug"], sy.get("name") or sy["slug"])
 
     total = len(questions)
-    parts = ['<div class="filters" id="filters" role="group" aria-label="Question filters">',
-             f'<span class="fchip on" data-k="ch" data-v="all" aria-pressed="true">All channels '
-             f'<span class="fc-n">{_fmt(total)}</span></span>']
-    for ch in sorted(ch_counts):
-        brand = _brand_icon(ch, 13)
-        if not brand and ch in CH_COLORS:
-            brand = f'<span class="cd" style="background:{CH_COLORS[ch]}"></span>'
-        parts.append(f'<span class="fchip" data-k="ch" data-v="{escape(ch, quote=True)}" '
-                     f'aria-pressed="false">{brand}{escape(ch)} '
-                     f'<span class="fc-n">{_fmt(ch_counts[ch])}</span></span>')
-    parts.append('<span class="fsep"></span>')
+    today = date.today()
     open_n = sum(1 for q in questions
                  if q["status"] in ("no-source", "escalated", "praise"))
-    parts.append(f'<span class="fchip on" data-k="st" data-v="open" aria-pressed="true" '
-                 f'title="The inbox: questions still waiting on you, plus the '
-                 f'praise and thank-yous people left">'
-                 f'<i class="pe">📥</i>Inbox '
-                 f'<span class="fc-n">{_fmt(open_n)}</span></span>')
     # Split of the inbox for people who want to work one kind at a time: only
     # the real questions to answer, or only the praise to acknowledge.
     q_n = sum(1 for q in questions if q["status"] in ("no-source", "escalated"))
-    parts.append(f'<span class="fchip" data-k="st" data-v="questions" aria-pressed="false" '
+
+    parts = ['<div class="filters" id="filters" role="group" aria-label="Question filters">']
+
+    # ---- channel: the primary axis, kept as tabs ----
+    parts.append('<div class="chtabs">'
+                 '<span class="fchip chtab on" data-k="ch" data-v="all" aria-pressed="true">'
+                 '<svg class="cg" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                 'stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="9"/>'
+                 '<path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18"/></svg>'
+                 f'All channels <span class="fc-n">{_fmt(total)}</span></span>')
+    for ch in sorted(ch_counts):
+        brand = _brand_icon(ch, 14)
+        if not brand and ch in CH_COLORS:
+            brand = f'<span class="cd" style="background:{CH_COLORS[ch]}"></span>'
+        parts.append(f'<span class="fchip chtab" data-k="ch" data-v="{escape(ch, quote=True)}" '
+                     f'aria-pressed="false">{brand}{escape(ch)} '
+                     f'<span class="fc-n">{_fmt(ch_counts[ch])}</span></span>')
+    parts.append('</div>')
+
+    # ---- the one bar: status on the left, sort + the fold toggle on the right ----
+    parts.append('<div class="fbar"><div class="fseg fseg-st" role="group" aria-label="Status">'
+                 f'<span class="fchip on" data-k="st" data-v="open" aria-pressed="true" '
+                 f'title="The inbox: questions still waiting on you, plus the praise people left">'
+                 f'<i class="pe">📥</i>Inbox <span class="fc-n">{_fmt(open_n)}</span></span>'
+                 f'<span class="fchip" data-k="st" data-v="questions" aria-pressed="false" '
                  f'title="Only questions waiting on you, no praise or thank-yous">'
-                 f'<i class="pe">❓</i>Questions '
-                 f'<span class="fc-n">{_fmt(q_n)}</span></span>')
-    parts.append('<span class="fchip" data-k="st" data-v="all" aria-pressed="false">Everything</span>')
-    for st in statuses:
-        parts.append(f'<span class="fchip" data-k="st" data-v="{escape(st, quote=True)}" '
-                     f'aria-pressed="false" title="{escape(_STATUS_TITLE.get(st, st), quote=True)}">'
-                     f'{escape(_STATUS_LABEL.get(st, st))} '
-                     f'<span class="fc-n">{_fmt(st_counts[st])}</span></span>')
-    parts.append('<span class="fsep"></span>')
-    parts.append('<span class="fchip on" data-k="sort" data-v="triage" aria-pressed="true" '
-                 'title="Escalated first, then what the vault can already answer, '
-                 'then oldest">Triage</span>')
-    parts.append('<span class="fchip" data-k="sort" data-v="new" aria-pressed="false" '
-                 'title="Newest question first">Newest</span>')
-    parts.append('<span class="fchip" data-k="sort" data-v="old" aria-pressed="false" '
-                 'title="Oldest question first, the longest anyone has waited">'
-                 'Oldest</span>')
-    parts.append('<span class="fsep"></span>')
-    parts.append('<span class="fchip on" data-k="df" data-v="all" aria-pressed="true">Any difficulty</span>')
+                 f'<i class="pe">❓</i>Questions <span class="fc-n">{_fmt(q_n)}</span></span>'
+                 f'<span class="fchip" data-k="st" data-v="answered" aria-pressed="false" '
+                 f'title="Questions already answered">Answered '
+                 f'<span class="fc-n">{_fmt(st_counts.get("answered", 0))}</span></span>'
+                 f'<span class="fchip" data-k="st" data-v="praise" aria-pressed="false" '
+                 f'title="Thank-yous and praise, nothing to answer">Praise '
+                 f'<span class="fc-n">{_fmt(st_counts.get("praise", 0))}</span></span>'
+                 '<span class="fchip" data-k="st" data-v="all" aria-pressed="false" '
+                 'title="Every question in the vault, answered or not">All</span></div>')
+
+    parts.append('<div class="fbar-r"><div class="fseg fseg-sm" role="group" aria-label="Sort order">'
+                 '<span class="fchip on" data-k="sort" data-v="triage" aria-pressed="true" '
+                 'title="Escalated first, then what the vault can already answer, then oldest">'
+                 'Triage</span>'
+                 '<span class="fchip" data-k="sort" data-v="new" aria-pressed="false" '
+                 'title="Newest first">Newest</span>'
+                 '<span class="fchip" data-k="sort" data-v="old" aria-pressed="false" '
+                 'title="Oldest first, the longest anyone has waited">Oldest</span></div>'
+                 '<button class="fbtn" id="morefilters" type="button" aria-expanded="false" '
+                 'aria-controls="morefold" title="Difficulty, waiting time and system">'
+                 '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '
+                 'aria-hidden="true"><path d="M3 5h18M6 12h12M10 19h4"/></svg>Filters'
+                 '<span class="fbadge" id="fbadge" hidden>0</span></button>')
+    # Export lives with the filters because it exports what they describe.
+    parts.append(
+        '<button class="fexport" id="expbtn" aria-expanded="false"><svg width="13" height="13" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>'
+        '<polyline points="7 10 12 15 17 10"/>'
+        '<line x1="12" y1="15" x2="12" y2="3"/></svg>Export</button>'
+        '<div id="expbox" class="expbox hide" role="group" aria-label="Export">'
+        '<label>From<select id="expch"><option value="all">everywhere</option>'
+        '<option value="youtube">YouTube</option>'
+        '<option value="discord">Discord</option></select></label>'
+        '<label>Status<select id="expst"><option value="all">with and without answer</option>'
+        '<option value="open">still waiting</option>'
+        '<option value="answered">answered</option></select></label>'
+        '<label>Product<select id="expsys"></select></label>'
+        '<label>As<select id="expfmt"><option value="csv">CSV (Excel)</option>'
+        '<option value="md">Markdown</option>'
+        '<option value="json">JSON</option></select></label>'
+        '<button class="btn primary tiny" id="exprun">Download</button>'
+        '<span class="note" id="expmsg"></span></div>')
+    parts.append('</div></div>')   # fbar-r, fbar
+
+    # ---- secondary filters, folded away until asked for ----
+    parts.append('<div class="morefold" id="morefold"><div class="foldin"><div class="foldgrid">')
+    parts.append('<div class="fgroup"><span class="flab">Difficulty</span>'
+                 '<div class="fseg2"><span class="fchip on" data-k="df" data-v="all" '
+                 'aria-pressed="true">Any</span>')
     for df in ("easy", "medium", "hard"):
         cnt = sum(1 for q in questions
                   if q.get("difficulty") == df and q["status"] != "answered")
@@ -6646,13 +6802,12 @@ def _filters(questions: list, systems: list) -> str:
             continue
         parts.append(f'<span class="fchip" data-k="df" data-v="{df}" aria-pressed="false">'
                      f'{df} <span class="fc-n">{_fmt(cnt)}</span></span>')
-    # The counts are of open questions, not of everything in the window:
-    # the reason to cut by date is to see how much of the queue is this
-    # month's work rather than a backfill's archaeology.
-    parts.append('<span class="fsep"></span>')
-    parts.append('<span class="fchip on" data-k="age" data-v="all" aria-pressed="true" '
-                 'title="Every question, however old">Any time</span>')
-    today = date.today()
+    parts.append('</div></div>')
+    # The counts are of open questions, not everything in the window: the
+    # reason to cut by date is to see how much is this month's work.
+    parts.append('<div class="fgroup"><span class="flab">Waiting for</span>'
+                 '<div class="fseg2"><span class="fchip on" data-k="age" data-v="all" '
+                 'aria-pressed="true">Any time</span>')
     for key, days, label in (("30d", 30, "30 days"), ("90d", 90, "90 days"),
                              ("12m", 365, "12 months")):
         cnt = sum(1 for q in questions
@@ -6668,35 +6823,23 @@ def _filters(questions: list, systems: list) -> str:
                 and _age_days(q.get("date", ""), today) > 365)
     if older:
         parts.append('<span class="fchip" data-k="age" data-v="old" aria-pressed="false" '
-                     'title="Open for more than a year. Mostly people who have '
-                     'long since moved on, kept reachable rather than hidden">'
+                     'title="Open for more than a year, kept reachable rather than hidden">'
                      f'over a year <span class="fc-n">{_fmt(older)}</span></span>')
-    parts.append('<span class="fsep"></span>')
-    parts.append('<select id="sysSel" class="fchip" aria-label="Filter by system">'
+    parts.append('</div></div>')
+    parts.append('<div class="fgroup"><span class="flab">System</span>'
+                 '<select id="sysSel" class="fsel" aria-label="Filter by system">'
                  '<option value="all">All systems</option>'
                  '<option value="-">catalog wide</option>')
     for slug in sorted(sys_counts,
                        key=lambda s: (-sys_counts[s], sys_names[s].lower())):
         parts.append(f'<option value="{escape(slug, quote=True)}">'
                      f'{escape(sys_names[slug])} ({sys_counts[slug]})</option>')
-    parts.append('</select>')
-    parts.append('<button class="fclear" id="fclear">clear filters</button>')
-    # Export lives with the filters because it exports what they describe.
-    parts.append(
-        '<button class="fexport" id="expbtn" aria-expanded="false">''<svg width="13" height="13" viewBox="0 0 24 24" fill="none" ''stroke="currentColor" stroke-width="2" stroke-linecap="round" ''stroke-linejoin="round" aria-hidden="true">''<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>''<polyline points="7 10 12 15 17 10"/>''<line x1="12" y1="15" x2="12" y2="3"/></svg>Export</button>'
-        '<div id="expbox" class="expbox hide" role="group" aria-label="Export">'
-        '<label>From<select id="expch"><option value="all">everywhere</option>'
-        '<option value="youtube">YouTube</option>'
-        '<option value="discord">Discord</option></select></label>'
-        '<label>Status<select id="expst"><option value="all">with and without answer</option>'
-        '<option value="open">still waiting</option>'
-        '<option value="answered">answered</option></select></label>'
-        '<label>Product<select id="expsys"></select></label>'
-        '<label>As<select id="expfmt"><option value="csv">CSV (Excel)</option>'
-        '<option value="md">Markdown</option>'
-        '<option value="json">JSON</option></select></label>'
-        '<button class="btn primary tiny" id="exprun">Download</button>'
-        '<span class="note" id="expmsg"></span></div>')
+    parts.append('</select></div>')
+    parts.append('</div></div></div>')   # foldgrid, foldin, morefold
+
+    # ---- what is applied, always legible: a pill per active fold filter ----
+    parts.append('<div class="fapplied hide" id="fappliedwrap"><div id="appliedfilters"></div>'
+                 '<button class="fclear" id="fclear">Clear all</button></div>')
     parts.append('</div>')
     return "".join(parts)
 
