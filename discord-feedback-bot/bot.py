@@ -6001,6 +6001,17 @@ _KB_STOPWORDS = {
     "any", "you", "your", "we", "they", "their", "there", "just", "im",
     "i'm", "its", "it's", "get", "got", "so", "up", "out", "about",
     "also", "some", "all", "no", "need", "want", "like", "more",
+    # Conversational filler. "Does anyone know how to get these animations"
+    # once matched a FAQ entry on {does, anyone, know} alone — three words that
+    # say nothing about the topic — and the bot answered about traces.
+    "does", "did", "doing", "done", "anyone", "anybody", "someone", "somebody",
+    "know", "knows", "knew", "these", "those", "them", "guys", "guy",
+    "please", "pls", "hey", "hello", "here", "bro", "dude", "man",
+    "gonna", "wanna", "tell", "told", "ask", "asking", "asked",
+    "way", "ways", "thing", "things", "stuff", "one", "ones",
+    "then", "than", "too", "now", "yet", "ever", "even", "sure",
+    "okay", "yes", "yeah", "still", "much", "many", "very", "really",
+    "maybe", "something", "anything", "everything", "let", "lets",
 }
 _KB_QUESTION_STARTERS = {
     "how", "what", "why", "where", "when", "can", "could", "does", "do",
@@ -6047,26 +6058,67 @@ def _looks_like_question(text: str) -> bool:
     words = t.split()
     return bool(words) and words[0] in _KB_QUESTION_STARTERS and len(words) >= 4
 
+# A token carried by this share of the KB says nothing about which entry a
+# question means — it is just what this community talks about constantly.
+# Deliberately conservative: it only engages on a KB big enough for a ratio to
+# mean something, and a token must also clear an absolute floor. On a small KB
+# a 25% ratio marks a word common after two entries, which would throw away
+# real topic words like "climbing" and suppress good matches.
+_KB_COMMON_DF_RATIO = 0.25
+_KB_COMMON_MIN_ENTRIES = 20
+_KB_COMMON_MIN_DF = 5
+
+
+def _kb_tokens(text: str) -> set[str]:
+    """Meaningful tokens from a question.
+
+    Punctuation is stripped BEFORE the stopword and length tests, and both
+    sides of a comparison go through this same function. Previously the query
+    was stripped and the stored question was not, so a KB entry ending in
+    "animations." could never match a query saying "animations", and a stored
+    "the," was never recognised as a stopword.
+    """
+    out: set[str] = set()
+    for raw in (text or "").lower().split():
+        w = raw.strip(".,!?;:\"'()[]{}<>*`~…")
+        if len(w) > 2 and w not in _KB_STOPWORDS:
+            out.add(w)
+    return out
+
+
+def _kb_common_tokens(entries: list[dict]) -> set[str]:
+    """Tokens so widespread in the KB that sharing one carries no signal."""
+    if len(entries) < _KB_COMMON_MIN_ENTRIES:
+        return set()
+    df: dict[str, int] = {}
+    for e in entries:
+        for w in _kb_tokens(e.get("question", "")):
+            df[w] = df.get(w, 0) + 1
+    cutoff = max(_KB_COMMON_MIN_DF, int(len(entries) * _KB_COMMON_DF_RATIO))
+    return {w for w, n in df.items() if n >= cutoff}
+
+
 def _kb_search_scored(query: str, top_n: int = 3, min_score: int = 1,
                       curated_only: bool = False) -> list[tuple[int, dict]]:
-    """Like _kb_search but filters stopwords, returns (score, entry) pairs, min_score enforced.
+    """Like _kb_search but scores on DISTINCTIVE shared words only.
 
-    curated_only skips the answers synced from the vault. Those were written
-    as replies to one person on YouTube or Discord, not as FAQ copy, so they
+    A match is counted from words that are neither stopwords nor common across
+    the KB, so an entry can no longer win on filler the two questions merely
+    happen to share. curated_only skips the answers synced from the vault:
+    those were written as replies to one person, not as FAQ copy, so they
     inform the AI but are not fit to be posted word for word.
     """
     entries = _kb_load()
     if curated_only:
         entries = [e for e in entries if e.get("origin") != _KB_VAULT_ORIGIN]
-    query_words = {w.strip("?.,!") for w in query.lower().split()
-                   if w not in _KB_STOPWORDS and len(w) > 2}
+    query_words = _kb_tokens(query)
     if not query_words:
         return []
+    common = _kb_common_tokens(entries)
     scored = []
     for e in entries:
-        q_words = {w for w in e["question"].lower().split()
-                   if w not in _KB_STOPWORDS and len(w) > 2}
-        score = len(query_words & q_words)
+        shared = query_words & _kb_tokens(e.get("question", ""))
+        score = len(shared - common)
         if score >= min_score:
             scored.append((score, e))
     scored.sort(key=lambda x: x[0], reverse=True)
