@@ -64,6 +64,11 @@ LINK_MANAGEMENT_CHANNEL_ID = int(os.getenv("LINK_MANAGEMENT_CHANNEL_ID", "149037
 MIRROR_SOURCE_CHANNEL_ID = int(os.getenv("MIRROR_SOURCE_CHANNEL_ID", "1160715880787869729"))
 MIRROR_DEST_CHANNEL_ID = int(os.getenv("MIRROR_DEST_CHANNEL_ID", "1499029543078465696"))
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
+# Post a stored FAQ answer, word for word, when a question matches one. Off:
+# a wrong match reads as the bot talking nonsense at a member, and the answers
+# want curating before it speaks on its own again. KB_FAQ_AUTO_REPLY=1 to
+# re-enable, no deploy needed.
+KB_FAQ_AUTO_REPLY = os.getenv("KB_FAQ_AUTO_REPLY", "0") == "1"
 # Proactive KB auto-reply thresholds
 KB_AUTO_MIN_SCORE = int(os.getenv("KB_AUTO_MIN_SCORE", "3"))   # min non-stopword word overlap
 KB_AUTO_COOLDOWN = int(os.getenv("KB_AUTO_COOLDOWN", "120"))   # seconds between KB replies per user per channel
@@ -4544,6 +4549,14 @@ class FeedbackBot(discord.Client):
 
         Returns True if a reply was sent so the caller can short-circuit.
         """
+        # Off by default. A stored answer is posted word for word, so a wrong
+        # match reads as the bot talking nonsense at a member: "how do I get
+        # these animations" was answered with a note about traces, because the
+        # two questions shared "does anyone know". Matching is stricter now,
+        # but the answers themselves are still worth curating before this
+        # speaks again. Set KB_FAQ_AUTO_REPLY=1 to turn it back on.
+        if not KB_FAQ_AUTO_REPLY:
+            return False
         import time as _t
         text = message.content.strip()
         # Skip very short messages and ones that are obviously not questions
